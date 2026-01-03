@@ -56,9 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(11),
                     Constraint::Length(5),
                     Constraint::Length(3),
+                    Constraint::Length(11),
                 ])
                 .split(size);
             let time_start = Instant::now();
@@ -93,10 +93,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let input_widget =
                 Paragraph::new(input).block(Block::default().borders(Borders::ALL).title("输入"));
 
-            frame.render_widget(candidate_widget, chunks[0]);
-            frame.render_widget(sentence_widget, chunks[1]);
-            frame.render_widget(input_widget, chunks[2]);
-            frame.set_cursor_position((chunks[2].x + input_len + 1, chunks[2].y + 1));
+            frame.render_widget(sentence_widget, chunks[0]);
+            frame.render_widget(input_widget, chunks[1]);
+            frame.render_widget(candidate_widget, chunks[2]);
+            frame.set_cursor_position((chunks[1].x + input_len + 1, chunks[1].y + 1));
         })?;
         // 事件处理
         // if event::poll(Duration::from_millis(100))? {
