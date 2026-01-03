@@ -70,7 +70,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .enumerate()
                     .map(|(i, c)| {
-                        format!("{}[{}]: {}  {}", (i + 1), selection_keys[i], c.text, c.code,)
+                        format!(
+                            "{}[{}]: {}  {}",
+                            (i + 1),
+                            selection_keys[i],
+                            c.text.iter().collect::<String>(),
+                            c.code.iter().collect::<String>(),
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
@@ -82,13 +88,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .borders(Borders::ALL)
                     .title(format!("成句 ({:?})", time_end.duration_since(time_start))),
             );
-
-            let input_widget = Paragraph::new(format!("> {}", input))
-                .block(Block::default().borders(Borders::ALL).title("输入"));
+            let input = format!("> {}", input);
+            let input_len = input.chars().count() as u16;
+            let input_widget =
+                Paragraph::new(input).block(Block::default().borders(Borders::ALL).title("输入"));
 
             frame.render_widget(candidate_widget, chunks[0]);
             frame.render_widget(sentence_widget, chunks[1]);
             frame.render_widget(input_widget, chunks[2]);
+            frame.set_cursor_position((chunks[2].x + input_len + 1, chunks[2].y + 1));
         })?;
         // 事件处理
         // if event::poll(Duration::from_millis(100))? {

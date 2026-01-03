@@ -73,7 +73,12 @@ impl InputAnalyzer {
                         let text = if candidates.is_empty() {
                             "".to_string()
                         } else {
-                            candidates.get(seg.0).unwrap_or(&candidates[0]).text.clone()
+                            candidates
+                                .get(seg.0)
+                                .unwrap_or(&candidates[0])
+                                .text
+                                .iter()
+                                .collect::<String>()
                         };
                         (
                             text,
@@ -110,34 +115,24 @@ pub struct AnalysisResult {
 mod tests {
     use super::*;
 
-    fn create_candidate() -> Vec<(&'static str, &'static str, i32)> {
-        vec![
-            ("ahb", "来", 1),
-            ("ahc", "麦克", 1),
-            ("ahcg", "疲惫不堪", 1),
-            ("c", "不", 1),
-            ("c", "不是", 1),
-            ("cu", "还", 1),
-            ("cb", "层", 1),
-            ("cb", "不", 1),
-            ("z", "可", 1),
-            ("z", "可以", 1),
-            ("zk", "可能", 1),
-            ("zkc", "射", 1),
-        ]
+    fn gen_table() -> String {
+        let raw = r#"ahb 来 1
+ahc 麦克 1
+ahcg 疲惫不堪 1
+c 不 10
+c 不是 1
+cu 还 1
+cb 层 1
+cb 不 1
+z 可 1
+z 可以 1
+zk 可能 1
+zkc 射 1"#;
+        raw.replace(" ", "\t")
     }
-
     #[test]
     fn test_analyzer() {
-        let mut trie = Trie::new();
-        let candidates = create_candidate();
-        for (code, text, weight) in candidates {
-            trie.insert(
-                code.chars().collect::<Vec<_>>().as_slice(),
-                text.to_string(),
-                weight,
-            );
-        }
+        let trie = Trie::from_str(gen_table());
         let analyzer = InputAnalyzer::new(trie);
         let input = "a cIzk";
         let result = analyzer.analyze(input.chars());
@@ -147,6 +142,6 @@ mod tests {
         assert_eq!(result.sentence, vec!["来", "不是", "可能"]);
         let input = "zk cuahcI";
         let result = analyzer.analyze(input.chars());
-        assert_eq!(result.sentence, vec!["来", "不是", "可能"]);
+        assert_eq!(result.sentence, vec!["可能", "还", "疲惫不堪"]);
     }
 }
