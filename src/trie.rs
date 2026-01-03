@@ -1,10 +1,11 @@
+use bincode::{Decode, Encode, config};
 use std::{
     fs::File,
-    io::{self, Error, Read},
+    io::{self, BufReader, Error, Read, Write},
     path::PathBuf,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct Candidate {
     pub code: Vec<char>,
     pub text: Vec<char>,
@@ -79,7 +80,7 @@ impl Candidate {
 }
 
 // Trie 节点结构
-#[derive(Debug)]
+#[derive(Debug, Decode, Encode)]
 struct TrieNode {
     children: [Option<Box<TrieNode>>; 26],
     indices: Vec<usize>,
@@ -148,7 +149,7 @@ impl TrieNode {
 }
 
 // Trie 结构
-#[derive(Debug)]
+#[derive(Debug, Decode, Encode)]
 pub struct Trie {
     root: TrieNode,
     candidates: Vec<Candidate>,
@@ -159,11 +160,25 @@ impl Trie {
     where
         P: Into<PathBuf>,
     {
-        let mut file = File::open(path.into()).expect("无法读取码表文件");
-        let mut content = String::new();
-        file.read_to_string(&mut content)
-            .expect("无法从码表中读取内容");
-        Self::from_str(content)
+        match File::open("./test/trie.bin") {
+            Ok(mut file) => {
+                let reader = BufReader::new(&mut file);
+                let trie: Trie = bincode::decode_from_reader(reader, config::standard()).unwrap();
+                // println!("Loaded trie from file: {}", trie.count());
+                trie
+            }
+            Err(_) => {
+                let mut file = File::open(path.into()).expect("无法读取码表文件");
+                let mut content = String::new();
+                file.read_to_string(&mut content)
+                    .expect("无法从码表中读取内容");
+                let trie = Self::from_str(content);
+                let encoded = bincode::encode_to_vec(&trie, config::standard()).unwrap();
+                let mut trie_bin = File::create("./test/trie.bin").unwrap();
+                trie_bin.write_all(&encoded).unwrap();
+                trie
+            }
+        }
     }
 
     pub fn from_str(raw: String) -> Self {
