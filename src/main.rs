@@ -12,9 +12,9 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::input_alanyzer::InputAnalyzer;
+use crate::input_analyzer::InputAnalyzer;
 use crate::trie::Dict;
-mod input_alanyzer;
+mod input_analyzer;
 mod trie;
 
 #[derive(Parser, Debug)]
