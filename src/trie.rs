@@ -7,8 +7,8 @@ use std::{
 
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct Candidate {
-    pub code: Vec<char>,
-    pub text: Vec<char>,
+    pub code: String,
+    pub text: String,
     pub weight: i32,
 }
 
@@ -53,7 +53,7 @@ impl Candidate {
                 format!("无效行: {raw}"),
             ))
         } else {
-            let code = split[0].trim().chars().collect::<Vec<_>>();
+            let code = split[0].trim().to_string();
             let text = split[1].trim().chars().collect::<Vec<_>>();
             if text.len() == 1 {
                 if is_extended_cjk(text[0]) {
@@ -74,7 +74,11 @@ impl Candidate {
             } else {
                 0
             };
-            Ok(Self { code, text, weight })
+            Ok(Self {
+                code,
+                text: text.into_iter().collect(),
+                weight,
+            })
         }
     }
 }
@@ -196,7 +200,7 @@ impl Trie {
         }
         candidates.sort();
         candidates.iter().enumerate().for_each(|(i, c)| {
-            trie.insert(&c.code, i);
+            trie.insert(c.code.chars().collect::<Vec<_>>().as_ref(), i);
         });
         trie.candidates = candidates;
         trie

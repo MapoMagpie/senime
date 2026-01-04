@@ -73,12 +73,7 @@ impl InputAnalyzer {
                         let text = if candidates.is_empty() {
                             "".to_string()
                         } else {
-                            candidates
-                                .get(seg.0)
-                                .unwrap_or(&candidates[0])
-                                .text
-                                .iter()
-                                .collect::<String>()
+                            candidates.get(seg.0).unwrap_or(&candidates[0]).text.clone()
                         };
                         (
                             text,

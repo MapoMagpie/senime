@@ -70,13 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .enumerate()
                     .map(|(i, c)| {
-                        format!(
-                            "{}[{}]: {}  {}",
-                            (i + 1),
-                            selection_keys[i],
-                            c.text.iter().collect::<String>(),
-                            c.code.iter().collect::<String>(),
-                        )
+                        format!("{}[{}]: {}  {}", (i + 1), selection_keys[i], c.text, c.code)
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
