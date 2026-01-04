@@ -47,13 +47,11 @@ impl Candidate {
         } else {
             let code = split[0].trim().to_string();
             let text = split[1].trim().chars().collect::<Vec<_>>();
-            if text.len() == 1 {
-                if is_extended_cjk(text[0]) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("拓展字符: {raw}"),
-                    ));
-                }
+            if text.len() == 1 && is_extended_cjk(text[0]) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("拓展字符: {raw}"),
+                ));
             }
             if code.is_empty() {
                 return Err(io::Error::new(
@@ -183,20 +181,20 @@ impl Dict {
 // https://github.com/rime/librime/blob/47033202f986f4dced82eceb90440285fcb9501e/src/rime/gear/charset_filter.cc#L18
 fn is_extended_cjk(c: char) -> bool {
     let c = c as u32;
-    c >= 0x3400  && c <= 0x4DBF  ||  // CJK Unified Ideographs Extension A
-    c >= 0x20000 && c <= 0x2A6DF ||  // CJK Unified Ideographs Extension B
-    c >= 0x2A700 && c <= 0x2B73F ||  // CJK Unified Ideographs Extension C
-    c >= 0x2B740 && c <= 0x2B81F ||  // CJK Unified Ideographs Extension D
-    c >= 0x2B820 && c <= 0x2CEAF ||  // CJK Unified Ideographs Extension E
-    c >= 0x2CEB0 && c <= 0x2EBEF ||  // CJK Unified Ideographs Extension F
-    c >= 0x30000 && c <= 0x3134F ||  // CJK Unified Ideographs Extension G
-    c >= 0x31350 && c <= 0x323AF ||  // CJK Unified Ideographs Extension H
-    c >= 0x2EBF0 && c <= 0x2EE5F ||  // CJK Unified Ideographs Extension I
-    c >= 0x323B0 && c <= 0x3347F ||  // CJK Unified Ideographs Extension J
-    c >= 0x3300  && c <= 0x33FF  ||  // CJK Compatibility
-    c >= 0xFE30  && c <= 0xFE4F  ||  // CJK Compatibility Forms
-    c >= 0xF900  && c <= 0xFAFF  ||  // CJK Compatibility Ideographs
-    c >= 0x2F800 && c <= 0x2FA1F // CJK Compatibility Ideographs Supplement
+    (0x3400..=0x4DBF).contains(&c)   ||  // CJK Unified Ideographs Extension A
+    (0x20000..=0x2A6DF).contains(&c) ||  // CJK Unified Ideographs Extension B
+    (0x2A700..=0x2B73F).contains(&c) ||  // CJK Unified Ideographs Extension C
+    (0x2B740..=0x2B81F).contains(&c) ||  // CJK Unified Ideographs Extension D
+    (0x2B820..=0x2CEAF).contains(&c) ||  // CJK Unified Ideographs Extension E
+    (0x2CEB0..=0x2EBEF).contains(&c) ||  // CJK Unified Ideographs Extension F
+    (0x30000..=0x3134F).contains(&c) ||  // CJK Unified Ideographs Extension G
+    (0x31350..=0x323AF).contains(&c) ||  // CJK Unified Ideographs Extension H
+    (0x2EBF0..=0x2EE5F).contains(&c) ||  // CJK Unified Ideographs Extension I
+    (0x323B0..=0x3347F).contains(&c) ||  // CJK Unified Ideographs Extension J
+    (0x3300..=0x33FF).contains(&c)   ||  // CJK Compatibility
+    (0xFE30..=0xFE4F).contains(&c)   ||  // CJK Compatibility Forms
+    (0xF900..=0xFAFF).contains(&c)   ||  // CJK Compatibility Ideographs
+    (0x2F800..=0x2FA1F).contains(&c) // CJK Compatibility Ideographs Supplement
 }
 
 #[cfg(test)]

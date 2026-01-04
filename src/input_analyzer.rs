@@ -116,10 +116,10 @@ impl InputAnalyzer {
         let mut last_tag = None;
         for c in input.into_iter().chain(std::iter::once('\n')) {
             codes.push(c);
-            let is_code = c >= 'a' && c <= 'z';
+            let is_code = c.is_ascii_lowercase();
             let reachable = self.dict.reachable(&codes);
             // 仍是有效code
-            if reachable && is_code && c != '+' {
+            if reachable && is_code {
                 last_tag = None;
                 continue;
             }
@@ -137,10 +137,9 @@ impl InputAnalyzer {
             match self.key_map.get(&c).unwrap_or(&InputType::Unknown) {
                 InputType::Selection(index) => {
                     // 如果上一个字符也是Selection，直接抛弃当前
-                    if !matches!(last_tag, Some(Tag::Selection(_))) {
-                        if codes.len() > 1 {
-                            segments.push((codes.clone(), Tag::Selection(*index)));
-                        }
+                    // TODO: 当selection_keys连续重复出现时，后面的selection_keys作为原始输入
+                    if !matches!(last_tag, Some(Tag::Selection(_))) && codes.len() > 1 {
+                        segments.push((codes.clone(), Tag::Selection(*index)));
                     }
                     last_tag = Some(Tag::Selection(*index));
                     codes.clear();
