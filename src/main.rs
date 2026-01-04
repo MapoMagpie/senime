@@ -13,7 +13,7 @@ use ratatui::prelude::CrosstermBackend;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::input_alanyzer::InputAnalyzer;
-use crate::trie::Trie;
+use crate::trie::Dict;
 mod input_alanyzer;
 mod trie;
 
@@ -31,16 +31,8 @@ pub struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    // let start = Instant::now();
-    let trie = Trie::load(args.table);
-    // let load_table_time = Instant::now().duration_since(start);
-    // println!(
-    //     "读取码表成功，加载[{}]个条目, 耗时[{:?}]",
-    //     trie.count, load_table_time
-    // );
+    let trie = Dict::load(args.table);
     let an = InputAnalyzer::new(trie);
-    // let result = an.analyze("kislo fj ppd kylku lylxbbI".chars());
-    // println!("{}", result.join(""));
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -97,6 +89,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                    break;
+                }
+                KeyCode::Esc => {
                     break;
                 }
                 KeyCode::Char(c) => input.push(c),

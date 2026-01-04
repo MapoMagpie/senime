@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
-use crate::trie::{Candidate, Trie};
+use crate::trie::{Candidate, Dict};
 
 pub struct InputAnalyzer {
-    trie: Trie,
+    dict: Dict,
     selection_keys: HashMap<char, usize>,
 }
 
 impl InputAnalyzer {
-    pub fn new(trie: Trie) -> Self {
+    pub fn new(trie: Dict) -> Self {
         let mut selection_keys = HashMap::new();
         selection_keys.insert('U', 0);
         selection_keys.insert('I', 1);
@@ -20,7 +20,7 @@ impl InputAnalyzer {
         selection_keys.insert('N', 7);
         selection_keys.insert('M', 8);
         Self {
-            trie,
+            dict: trie,
             selection_keys,
         }
     }
@@ -38,7 +38,7 @@ impl InputAnalyzer {
             if is_code {
                 codes.push(c);
             }
-            let reachable = self.trie.reachable(&codes);
+            let reachable = self.dict.reachable(&codes);
             // 继续构建codes，可允许的条件为：
             //   1. 目前的codes有效
             //   2. 当前的char的小写字母，表示当前操作并非选词
@@ -51,10 +51,9 @@ impl InputAnalyzer {
             if is_code && c != '+' {
                 codes.pop();
             }
-            let code = codes.clone();
             if codes.len() > 0 {
                 let select_index = self.selection_keys.get(&c).map_or(0, |&i| i);
-                segments.push((select_index, code));
+                segments.push((select_index, codes.clone()));
                 codes.clear();
             }
             if is_code {
@@ -67,7 +66,7 @@ impl InputAnalyzer {
             .into_iter()
             .enumerate()
             .map(|(i, seg)| {
-                self.trie
+                self.dict
                     .search(&seg.1)
                     .map_or(("".to_string(), vec![]), |candidates| {
                         let text = if candidates.is_empty() {
@@ -127,7 +126,7 @@ zkc 射 1"#;
     }
     #[test]
     fn test_analyzer() {
-        let trie = Trie::from_str(gen_table());
+        let trie = Dict::from_str(gen_table());
         let analyzer = InputAnalyzer::new(trie);
         let input = "a cIzk";
         let result = analyzer.analyze(input.chars());

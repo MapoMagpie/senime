@@ -1,5 +1,6 @@
 use bincode::{Decode, Encode, config};
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::{self, BufReader, Error, Read, Write},
     path::PathBuf,
@@ -22,8 +23,8 @@ impl Eq for Candidate {}
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match other.weight.cmp(&self.weight) {
-            std::cmp::Ordering::Equal => self.code.cmp(&other.text),
+        match self.code.cmp(&other.code) {
+            std::cmp::Ordering::Equal => other.weight.cmp(&self.weight),
             ord => ord,
         }
     }
@@ -36,15 +37,6 @@ impl PartialOrd for Candidate {
 }
 
 impl Candidate {
-    #[allow(dead_code)]
-    pub fn new(code: String, text: String, weight: i32) -> Self {
-        Candidate {
-            code: code.chars().collect(),
-            text: text.chars().collect(),
-            weight,
-        }
-    }
-
     fn parse(raw: &str) -> Result<Self, Error> {
         let split = raw.split("\t").collect::<Vec<_>>();
         if split.len() < 2 {
@@ -85,108 +77,74 @@ impl Candidate {
 
 // Trie 节点结构
 #[derive(Debug, Decode, Encode)]
-struct TrieNode {
-    children: [Option<Box<TrieNode>>; 26],
-    indices: Vec<usize>,
+struct Prism {
+    keys: Vec<Vec<char>>,
+    indices: Vec<(usize, usize)>,
 }
 
-impl TrieNode {
-    fn new() -> Self {
-        TrieNode {
-            children: [const { None }; 26],
-            indices: Vec::new(),
-        }
-    }
-
-    fn insert(&mut self, chars: &[char], i_cand: usize) {
-        if chars.len() > 0 {
-            let index = (chars[0] as usize) - 0x61;
-            if let Some(child) = self.children[index].as_mut() {
-                child.insert(&chars[1..], i_cand);
-            } else {
-                let mut new_child = TrieNode::new();
-                new_child.insert(&chars[1..], i_cand);
-                self.children[index] = Some(Box::new(new_child));
-            }
-        } else {
-            self.indices.push(i_cand);
-        }
-    }
-
-    fn all_candidates(&self) -> Vec<usize> {
-        let max_count = 9;
-        let mut result = vec![];
-        result.extend(&self.indices);
-        if result.len() < max_count {
-            let mut children = self
-                .children
-                .iter()
-                .filter_map(|o| o.as_ref())
-                .collect::<Vec<_>>();
-            'outer: while children.len() > 0 {
-                let mut new_children = Vec::new();
-                for child in children.iter() {
-                    if result.len() >= max_count {
-                        break 'outer;
-                    }
-                    result.extend(&child.indices);
-                    new_children.extend(child.children.iter().filter_map(|o| o.as_ref()));
-                }
-                children = new_children;
+impl Prism {
+    fn new(candidates: &[Candidate]) -> Self {
+        let mut map: BTreeMap<Vec<char>, (usize, usize)> = BTreeMap::new();
+        for (i, cand) in candidates.iter().enumerate() {
+            let code = cand.code.chars().collect::<Vec<_>>();
+            for len in 1..code.len() + 1 {
+                let prefix = &code[..len];
+                map.entry(prefix.to_vec())
+                    .and_modify(|r| r.1 = i + 1)
+                    .or_insert((i, i + 1));
             }
         }
-        result
+        let (keys, indices) = map.into_iter().unzip();
+        Self { keys, indices }
     }
 
-    fn search(&self, chars: &[char]) -> Option<&TrieNode> {
-        if chars.len() > 0 {
-            let index = (chars[0] as usize) - 0x61;
-            if let Some(child) = self.children[index].as_ref() {
-                child.search(&chars[1..])
-            } else {
-                None
-            }
-        } else {
-            Some(self)
-        }
+    fn lookup(&self, code: &[char]) -> Option<&(usize, usize)> {
+        self.indices.get(
+            self.keys
+                .binary_search_by(|k| k.as_slice().cmp(code))
+                .ok()?,
+        )
     }
 }
 
 // Trie 结构
 #[derive(Debug, Decode, Encode)]
-pub struct Trie {
-    root: TrieNode,
+pub struct Dict {
+    prism: Prism,
     candidates: Vec<Candidate>,
 }
 
-impl Trie {
+impl Dict {
     pub fn load<P>(path: P) -> Self
     where
         P: Into<PathBuf>,
     {
-        match File::open("./test/trie.bin") {
+        let path = path.into();
+        let filename = path.file_name().unwrap().to_str().unwrap();
+        let file_dir = path.parent().unwrap().to_str().unwrap();
+        let bin_path = format!("{}/{}.bin", file_dir, filename);
+        match File::open(&bin_path) {
             Ok(mut file) => {
                 let reader = BufReader::new(&mut file);
-                let trie: Trie = bincode::decode_from_reader(reader, config::standard()).unwrap();
+                let trie: Dict = bincode::decode_from_reader(reader, config::standard()).unwrap();
                 // println!("Loaded trie from file: {}", trie.count());
                 trie
             }
-            Err(_) => {
-                let mut file = File::open(path.into()).expect("无法读取码表文件");
+            _ => {
+                let mut file = File::open(path).expect("无法读取码表文件");
                 let mut content = String::new();
                 file.read_to_string(&mut content)
                     .expect("无法从码表中读取内容");
-                let trie = Self::from_str(content);
-                let encoded = bincode::encode_to_vec(&trie, config::standard()).unwrap();
-                let mut trie_bin = File::create("./test/trie.bin").unwrap();
-                trie_bin.write_all(&encoded).unwrap();
-                trie
+                let dict = Self::from_str(content);
+                let encoded = bincode::encode_to_vec(&dict, config::standard()).unwrap();
+                let mut dict_bin = File::create(bin_path).unwrap();
+                dict_bin.write_all(&encoded).unwrap();
+                dict
             }
         }
     }
 
     pub fn from_str(raw: String) -> Self {
-        let mut trie = Trie::new();
         let mut candidates = Vec::new();
         for line in raw.lines() {
             match Candidate::parse(line) {
@@ -199,39 +157,17 @@ impl Trie {
             }
         }
         candidates.sort();
-        candidates.iter().enumerate().for_each(|(i, c)| {
-            trie.insert(c.code.chars().collect::<Vec<_>>().as_ref(), i);
-        });
-        trie.candidates = candidates;
-        trie
-    }
-
-    pub fn new() -> Self {
-        Trie {
-            root: TrieNode::new(),
-            candidates: Vec::new(),
-        }
-    }
-
-    pub fn insert(&mut self, chars: &[char], index: usize) {
-        if chars.len() > 0 {
-            self.root.insert(chars, index);
-        }
+        let prism = Prism::new(&candidates);
+        Self { candidates, prism }
     }
 
     pub fn reachable(&self, chars: &[char]) -> bool {
-        self.root.search(chars).is_some()
+        self.prism.lookup(chars).is_some()
     }
 
-    pub fn search(&self, chars: &[char]) -> Option<Vec<&Candidate>> {
-        let node = self.root.search(chars);
-        if let Some(node) = node {
-            let candidates = node
-                .all_candidates()
-                .iter()
-                .map(|i| &self.candidates[*i])
-                .collect::<Vec<_>>();
-            Some(candidates)
+    pub fn search(&self, chars: &[char]) -> Option<&[Candidate]> {
+        if let Some(range) = self.prism.lookup(chars) {
+            Some(&self.candidates[range.0..range.1.min(range.0 + 9)])
         } else {
             None
         }
@@ -286,17 +222,17 @@ zkc 射 1"#;
 
     #[test]
     fn test_trie() {
-        let trie = Trie::from_str(gen_table());
+        let trie = Dict::from_str(gen_table());
         println!("trie loaded: {}", trie.count());
-        let result = trie.search("ah".chars().collect::<Vec<char>>().as_slice());
+        let result = trie.search("ah".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(3, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("ahb".chars().collect::<Vec<char>>().as_slice());
+        let result = trie.search("ahb".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(1, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("aha".chars().collect::<Vec<char>>().as_slice());
+        let result = trie.search("aha".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(0, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("c".chars().collect::<Vec<char>>().as_slice());
+        let result = trie.search("c".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(5, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("cb".chars().collect::<Vec<char>>().as_slice());
+        let result = trie.search("cb".chars().collect::<Vec<_>>().as_slice());
         // println!("result: {:?}", result);
         assert_eq!(2, result.map_or(0, |candidates| candidates.len()));
     }
@@ -318,14 +254,26 @@ zkc 射 1"#;
     // searched: 12
     // trie loaded time: 301.187025ms
     // search time: 21.641µs
+
+    // 最大候选1000，无--release参数
+    // loaded 162982 from ./test/虎码码表.txt
+    // searched: 1000
+    // trie loaded time: 460.254761ms
+    // search time: 481.759µs
+    //
+    // 最大候选1000，无--release参数，使用prism
+    // loaded 162982 from ./test/虎码码表.txt
+    // searched: 1000
+    // trie loaded time: 1.128577844s
+    // search time: 11.27µs
     #[test]
     fn test_load() {
         let path = "./test/虎码码表.txt";
         let time_start = Instant::now();
-        let trie = Trie::load(path);
+        let dict = Dict::load(path);
         let time_trie_loaded = Instant::now();
-        println!("loaded {} from {}", trie.count(), path);
-        let candidates = trie.search("i".chars().collect::<Vec<_>>().as_slice());
+        println!("loaded {} from {}", dict.count(), path);
+        let candidates = dict.search("i".chars().collect::<Vec<_>>().as_slice());
         let time_searched = Instant::now();
         println!(
             "searched: {}",
@@ -358,4 +306,27 @@ zkc 射 1"#;
     //         println!("unicode: U+{:X}", c as u32);
     //     });
     // }
+
+    #[test]
+    fn test_dict_by_output() {
+        let path = "./test/虎码码表.txt";
+        let dict = Dict::load(path);
+        let candidates = dict
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!("{}\t{}\t{}\t{}", i, c.code, c.text, c.weight))
+            .collect::<Vec<String>>()
+            .join("\n");
+        let prims = dict
+            .prism
+            .keys
+            .iter()
+            .zip(dict.prism.indices)
+            .map(|(k, r)| format!("{}\t{}\t{}", k.iter().collect::<String>(), r.0, r.1));
+        let can_path = "./test/candidates.txt";
+        let prim_path = "./test/prism.txt";
+        std::fs::write(can_path, candidates).unwrap();
+        std::fs::write(prim_path, prims.collect::<Vec<String>>().join("\n")).unwrap();
+    }
 }
