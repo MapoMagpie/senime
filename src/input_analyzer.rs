@@ -44,10 +44,7 @@ enum Tag {
 }
 
 impl InputAnalyzer {
-    pub fn analyze<I>(&self, input: I) -> AnalysisResult
-    where
-        I: IntoIterator<Item = char>,
-    {
+    pub fn analyze(&self, input: &[char]) -> AnalysisResult {
         let segments = self.segments(input);
         let segment_len = segments.len();
         let mut reduce_space = false;
@@ -106,16 +103,13 @@ impl InputAnalyzer {
         })
     }
 
-    fn segments<I>(&self, input: I) -> Vec<(Vec<char>, Tag)>
-    where
-        I: IntoIterator<Item = char>,
-    {
+    fn segments(&self, input: &[char]) -> Vec<(Vec<char>, Tag)> {
         // (候选位置，要显示的字符<可以是正常被选的text，可以是标点，也可以是原始的输入字符>)
         let mut segments: Vec<(Vec<char>, Tag)> = vec![];
         let mut codes = vec![];
         let mut last_tag = None;
-        for c in input.into_iter().chain(std::iter::once('\n')) {
-            codes.push(c);
+        for c in input.iter().chain(std::iter::once(&'\n')) {
+            codes.push(*c);
             let is_code = c.is_ascii_lowercase();
             let reachable = self.dict.reachable(&codes);
             // 仍是有效code
@@ -130,7 +124,7 @@ impl InputAnalyzer {
                     let before = codes[0..codes.len() - 1].to_vec();
                     segments.push((before, Tag::Normal));
                 }
-                codes = vec![c];
+                codes = vec![*c];
                 last_tag = None;
                 continue;
             }
@@ -147,14 +141,14 @@ impl InputAnalyzer {
                 InputType::Punctuation(_) => {
                     if matches!(last_tag, Some(Tag::Punctuation)) {
                         if let Some(last_segment) = segments.last_mut() {
-                            last_segment.0.push(c);
+                            last_segment.0.push(*c);
                         }
                     } else {
                         if codes.len() > 1 {
                             let before = codes[0..codes.len() - 1].to_vec();
                             segments.push((before, Tag::Normal));
                         }
-                        segments.push((vec![c], Tag::Punctuation));
+                        segments.push((vec![*c], Tag::Punctuation));
                     }
                     codes.clear();
                     last_tag = Some(Tag::Punctuation);
@@ -164,8 +158,8 @@ impl InputAnalyzer {
                         let before = codes[0..codes.len() - 1].to_vec();
                         segments.push((before, Tag::Normal));
                     }
-                    if c != '\n' {
-                        segments.push((vec![c], Tag::Unknown));
+                    if *c != '\n' {
+                        segments.push((vec![*c], Tag::Unknown));
                         codes.clear();
                     }
                     last_tag = Some(Tag::Unknown);
@@ -246,16 +240,16 @@ zkc 射 1"#;
         let trie = Dict::from_str(gen_table());
         let analyzer = InputAnalyzer::new(trie);
         let input = "a cIzk";
-        let result = analyzer.analyze(input.chars());
+        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
         assert_eq!(result.sentence, vec!["来", "", "不是", "可能"]);
         let input = "acIzk";
-        let result = analyzer.analyze(input.chars());
+        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
         assert_eq!(result.sentence, vec!["来", "不是", "可能"]);
         let input = "zk  cuahcI";
-        let result = analyzer.analyze(input.chars());
+        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
         assert_eq!(result.sentence, vec!["可能", "", " ", "还", "疲惫不堪"]);
         let input = "zk  c,cua.hcI";
-        let result = analyzer.analyze(input.chars());
+        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
         assert_eq!(
             result.sentence,
             vec!["可能", "", " ", "不", "，", "还", "来", "。", "h", "不是",]
@@ -282,7 +276,7 @@ zkc 射 1"#;
             ),
         ];
         for (input, expected) in samples {
-            let segments = analyzer.segments(input.chars());
+            let segments = analyzer.segments(input.chars().collect::<Vec<_>>().as_slice());
             println!("Segments: {:?}", segments);
             let segments = segments
                 .into_iter()

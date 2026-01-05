@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write};
 use std::time::Instant;
 
 use clap::Parser;
@@ -12,7 +12,9 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::input_analyzer::InputAnalyzer;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::input_analyzer::{AnalysisResult, InputAnalyzer};
 use crate::trie::Dict;
 mod input_analyzer;
 mod trie;
@@ -39,7 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut input = String::new();
+    let mut input: Vec<char> = vec![];
+    let mut sentence_ret = vec![];
 
     let selection_keys = vec!["U", "I", "O", "H", "J", "K", "B", "N", "M"];
     loop {
@@ -54,12 +57,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ])
                 .split(size);
             let time_start = Instant::now();
-            let an_result = an.analyze(input.chars());
+            let AnalysisResult {
+                candidates,
+                sentence,
+            } = an.analyze(&input);
             let time_end = Instant::now();
             let candidate_widget = Paragraph::new(
-                an_result
-                    .candidates
-                    .iter()
+                candidates
+                    .into_iter()
                     .enumerate()
                     .map(|(i, c)| {
                         format!("{}[{}]: {}  {}", (i + 1), selection_keys[i], c.text, c.code)
@@ -69,26 +74,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .block(Block::default().borders(Borders::ALL).title("候选"));
 
-            let sentence_widget = Paragraph::new(an_result.sentence.join("")).block(
+            let (lines, _, height) = sentence.iter().fold::<(String, u16, u16), _>(
+                (String::new(), 0, 1),
+                |(mut lines, mut width, mut height), word| {
+                    let word_width = word.width_cjk() as u16;
+                    if width + word_width > size.width - 2 {
+                        lines.push_str("\n");
+                        width = 0;
+                        height += 1;
+                    }
+                    lines.push_str(word);
+                    (lines, width + word_width, height)
+                },
+            );
+            sentence_ret = sentence;
+
+            let sentence_widget = Paragraph::new(lines).scroll((height.max(3) - 3, 0)).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!("成句 ({:?})", time_end.duration_since(time_start))),
+                    .title(format!("成句 [{:?}]", time_end.duration_since(time_start))),
             );
-            let input = format!("> {}", input);
-            let input_len = input.chars().count() as u16;
-            let input_widget =
-                Paragraph::new(input).block(Block::default().borders(Borders::ALL).title("输入"));
 
+            let (input_width, mut new_input) = input.iter().rfold::<(u16, Vec<char>), _>(
+                (0, vec![]),
+                |(mut width, mut chars), word| {
+                    if width + 5 < size.width {
+                        let word_width = word.width_cjk().unwrap_or(0) as u16;
+                        if width + 5 + word_width < size.width {
+                            chars.push(*word);
+                            width += word_width;
+                        }
+                    }
+                    (width, chars)
+                },
+            );
+            new_input.reverse();
+
+            let input_widget =
+                Paragraph::new(format!("> {}", new_input.iter().collect::<String>()))
+                    .block(Block::default().borders(Borders::ALL).title("输入"));
             frame.render_widget(sentence_widget, chunks[0]);
             frame.render_widget(input_widget, chunks[1]);
             frame.render_widget(candidate_widget, chunks[2]);
-            frame.set_cursor_position((chunks[1].x + input_len + 1, chunks[1].y + 1));
+            frame.set_cursor_position((input_width + 3, chunks[1].y + 1));
         })?;
         // 事件处理
         // if event::poll(Duration::from_millis(100))? {
         if let Event::Key(key) = event::read()? {
             match key.code {
-                KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                     break;
                 }
                 KeyCode::Esc => {
@@ -98,19 +132,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 KeyCode::Backspace => {
                     input.pop();
                 }
-                // KeyCode::Enter => {
-                //     input.clear();
-                // }
                 _ => {}
             }
         }
-        // }
     }
 
-    // 恢复终端
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
+    {
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        terminal.show_cursor()?;
+    }
+    let bs = sentence_ret
+        .into_iter()
+        .map(String::into_bytes)
+        .flatten()
+        .collect::<Vec<u8>>();
+    io::stdout().write(&bs)?;
+    io::stdout().write_all(b"\n")?;
     Ok(())
 }
