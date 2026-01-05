@@ -12,12 +12,8 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use tim::{AnalysisResult, Dict, InputAnalyzer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-use crate::input_analyzer::{AnalysisResult, InputAnalyzer};
-use crate::trie::Dict;
-mod input_analyzer;
-mod trie;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -33,8 +29,8 @@ pub struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let trie = Dict::load(args.table);
-    let an = InputAnalyzer::new(trie);
+    let dict = Dict::load(args.table);
+    let an = InputAnalyzer::new(dict);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
