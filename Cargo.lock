@@ -1482,6 +1482,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
+name = "senime"
+version = "0.0.1"
+dependencies = [
+ "bincode",
+ "clap",
+ "crossterm",
+ "dashmap 6.1.0",
+ "log",
+ "ratatui",
+ "ropey",
+ "serde_json",
+ "simple-logging",
+ "tokio",
+ "tower-lsp",
+ "unicode-width",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1796,23 +1814,6 @@ dependencies = [
  "libc",
  "redox_syscall 0.1.57",
  "winapi",
-]
-
-[[package]]
-name = "tim"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "clap",
- "crossterm",
- "dashmap 6.1.0",
- "log",
- "ratatui",
- "ropey",
- "simple-logging",
- "tokio",
- "tower-lsp",
- "unicode-width",
 ]
 
 [[package]]
