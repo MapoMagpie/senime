@@ -1,5 +1,5 @@
 {
-  description = "Nix Flake for word-segment";
+  description = "Nix Flake for senime";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -71,7 +71,7 @@
           builder = "naersk";
         in
         {
-          wordseg =
+          senime =
             let
               version = props.package.version + "+date=" + (mkDate (self.lastModifiedDate or "19700101")) + "_" + (self.shortRev or "dirty");
             in
@@ -90,7 +90,7 @@
         in
         (self.overlays.default pkgs pkgs)
         // {
-          default = self.packages.${system}.wordseg;
+          default = self.packages.${system}.senime;
         }
       );
 
@@ -100,12 +100,12 @@
           pkgs = pkgsFor system;
         in
         rec {
-          wordseg = {
+          senime = {
             type = "app";
-            program = "${pkgs.wordseg}/bin/wordseg";
+            program = "${pkgs.senime}/bin/senime";
           };
 
-          default = wordseg;
+          default = senime;
         }
       );
 
