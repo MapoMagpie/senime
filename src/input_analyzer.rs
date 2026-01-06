@@ -2,12 +2,14 @@ use std::collections::HashMap;
 
 use crate::trie::{Candidate, Dict};
 
+#[derive(Debug)]
 enum InputType {
     Selection(usize),
     Punctuation(Vec<char>),
     Unknown,
 }
 
+#[derive(Debug)]
 pub struct InputAnalyzer {
     dict: Dict,
     key_map: HashMap<char, InputType>,
@@ -24,6 +26,8 @@ impl InputAnalyzer {
             (';', vec!['：', ';']),
             ('[', vec!['「', '“', '[']),
             (']', vec!['」', '”', ']']),
+            ('\\', vec!['、', '\\']),
+            ('|', vec!['·', '|']),
         ];
         let mut key_map = HashMap::new();
         for (i, key) in s_keys.into_iter().enumerate() {
@@ -55,7 +59,7 @@ impl InputAnalyzer {
                 Tag::Normal => {
                     reduce_space = true;
                     self.search_candidates(&seg.0, 0, if i == segment_len - 1 { 9 } else { 1 })
-                        .map_or((seg.0.iter().collect(), None), |candidates| {
+                        .map_or((seg.0.iter().collect(), None), |(candidates, _unique)| {
                             (candidates[0].text.clone(), Some(candidates))
                         })
                 }
@@ -65,7 +69,7 @@ impl InputAnalyzer {
                         i_cand,
                         if i == segment_len - 1 { 9 } else { 1 },
                     )
-                    .map_or((String::new(), None), |candidates| {
+                    .map_or((String::new(), None), |(candidates, _unique)| {
                         (candidates[0].text.clone(), None)
                     }),
                 Tag::Punctuation => (self.punctuation_solve(&seg.0), None),
@@ -92,13 +96,18 @@ impl InputAnalyzer {
         }
     }
 
-    fn search_candidates(&self, code: &[char], index: usize, count: usize) -> Option<&[Candidate]> {
+    fn search_candidates(
+        &self,
+        code: &[char],
+        index: usize,
+        count: usize,
+    ) -> Option<(&[Candidate], bool)> {
         self.dict.search(code).map(|c| {
             if index == 0 {
-                &c[0..c.len().min(count)]
+                (&c[0..c.len().min(count)], c.len() == 1)
             } else {
                 let index = if index >= c.len() { 0 } else { index };
-                &c[index..index + 1]
+                (&c[index..index + 1], true)
             }
         })
     }
