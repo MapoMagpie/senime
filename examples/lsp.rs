@@ -1,16 +1,25 @@
+use clap::Parser;
 use dashmap::DashMap;
 use log::LevelFilter;
 use ropey::Rope;
-use tim::{AnalysisResult, Dict, InputAnalyzer};
+use senime::{AnalysisResult, Dict, InputAnalyzer};
+use serde_json::Value;
+use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{LanguageServer, LspService, Server};
+
+#[derive(Debug)]
+struct State {
+    completion: bool,
+}
 
 #[derive(Debug)]
 struct Backend {
     // client: Client,
     engine: InputAnalyzer,
     doc_map: DashMap<String, Rope>,
+    state: RwLock<State>,
     selection_keys: Vec<&'static str>,
 }
 
@@ -20,13 +29,23 @@ impl LanguageServer for Backend {
         log::info!("initialize");
         return Ok(InitializeResult {
             server_info: Some(ServerInfo {
-                name: "timlsp".to_string(),
+                name: "senimels".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        "senime_completion_enable".to_string(),
+                        "senime_completion_disable".to_string(),
+                    ],
+                    work_done_progress_options: WorkDoneProgressOptions {
+                        work_done_progress: None,
+                    },
+                }),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: Some(
@@ -43,6 +62,11 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        log::info!("completion start");
+        let st = self.state.read().await;
+        if !st.completion {
+            return Ok(None);
+        }
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let rope = match self.doc_map.get(uri.as_str()) {
@@ -52,11 +76,17 @@ impl LanguageServer for Backend {
 
         let line_chars: Vec<char> = rope.line(position.line as usize).chars().collect();
         let end = position.character as usize;
+        if let Some(char) = line_chars.get(end)
+            && (*char == '\t' || *char == ' ')
+        {
+            return Ok(None);
+        }
         let mut start = end;
         for i in (0..end).rev() {
             let char = line_chars[i];
             // log::info!("completion char {}", char);
             if char.is_ascii() && !char.is_control() {
+                // 连续空格
                 if i > 0 && char.is_ascii_whitespace() && line_chars[i - 1].is_ascii_whitespace() {
                     break;
                 }
@@ -65,6 +95,13 @@ impl LanguageServer for Backend {
                 break;
             }
         }
+        if start >= end {
+            log::info!("completion empty");
+            return Ok(None);
+        }
+        let reduce_first_space = start > 0
+            && line_chars[start].is_ascii_whitespace()
+            && !line_chars[start - 1].is_whitespace();
         let mut filter_text_start = start;
         for i in (0..start).rev() {
             let char = line_chars[i as usize];
@@ -74,12 +111,8 @@ impl LanguageServer for Backend {
                 break;
             }
         }
-        if start == end {
-            log::info!("completion empty");
-            return Ok(None);
-        }
         let AnalysisResult {
-            sentence,
+            mut sentence,
             candidates,
         } = self
             .engine
@@ -97,7 +130,14 @@ impl LanguageServer for Backend {
         //     end,
         //     filter_text
         // );
+        if reduce_first_space {
+            log::info!("reduce_first_space: {}", sentence[0]);
+            sentence[0] = sentence[0].trim_start().to_string();
+        }
         let sentence = sentence.join("");
+        if sentence.trim().is_empty() {
+            return Ok(None);
+        }
         let sentence_item = CompletionItem {
             label: sentence.clone(),
             preselect: Some(true),
@@ -156,6 +196,11 @@ impl LanguageServer for Backend {
                 })
                 .collect()
         };
+        log::info!(
+            "completion result: {}, candidates: {}",
+            sentence,
+            cand_items.len()
+        );
         Ok(Some(CompletionResponse::List(CompletionList {
             is_incomplete: true,
             items: [vec![sentence_item], cand_items].concat(),
@@ -209,12 +254,39 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-    // async fn initialized(&self, _: InitializedParams) {
-    //     self.client
-    //         .log_message(MessageType::INFO, "server initialized!")
-    //         .await;
-    // }
-    //
+    async fn code_action(&self, _params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        log::info!("code_action");
+        let st = self.state.read().await;
+        let command = if st.completion {
+            Command::new(
+                "Disable Senime Completion".into(),
+                "senime_completion_disable".into(),
+                None,
+            )
+        } else {
+            Command::new(
+                "Enable Senime Completion".into(),
+                "senime_completion_enable".into(),
+                None,
+            )
+        };
+        Ok(Some(vec![command.into()]))
+    }
+
+    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
+        log::info!("execute_command: {}", params.command);
+        let mut st = self.state.write().await;
+        match params.command.as_str() {
+            "senime_completion_disable" => {
+                st.completion = false;
+            }
+            "senime_completion_enable" => {
+                st.completion = true;
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
 }
 
 pub fn char_index(rope: &Rope, pos: Position) -> Option<usize> {
@@ -266,11 +338,23 @@ mod tests {
         assert!(char.is_alphabetic());
         let char = '好';
         assert!(char.is_alphabetic());
+        let char = '\n';
+        assert!(char.is_ascii_whitespace());
     }
+}
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+pub struct Args {
+    /// 码表文件，其结构应为: 字词<TAB>编码<TAB>权重(可选) 每行
+    /// 当没有权重时则以行的顺序判断编码对应的字词的首选还是候选
+    #[arg(short, long)]
+    pub table: String,
 }
 
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
     simple_logging::log_to_file("/home/mapomagpie/.cache/helix/timls.log", LevelFilter::Info)
         .unwrap();
     log::info!("start");
@@ -278,13 +362,15 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let selection_keys = vec!["U", "I", "O", "H", "J", "K", "B", "N", "M"];
-    let dict = Dict::load("/home/mapomagpie/code/tableim/test/虎码码表_我.txt");
+    let dict = Dict::load(args.table);
     let engine = InputAnalyzer::new(dict);
     let doc_map = DashMap::default();
+    let state = RwLock::new(State { completion: true });
     let (service, socket) = LspService::new(|_client| Backend {
         engine,
         doc_map,
         selection_keys,
+        state,
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

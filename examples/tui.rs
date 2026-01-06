@@ -12,7 +12,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use tim::{AnalysisResult, Dict, InputAnalyzer};
+use senime::{AnalysisResult, Dict, InputAnalyzer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Parser, Debug)]
