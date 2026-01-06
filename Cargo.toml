@@ -1,10 +1,9 @@
 [package]
-name = "tim"
-version = "0.1.0"
+name = "senime"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
-ropey = "1.6.1"
 bincode = "2.0.1"
 
 [dev-dependencies]
@@ -12,3 +11,23 @@ clap = { version = "4.5.35", features = ["derive"] }
 ratatui = "0.30.0"
 crossterm = "0.29.0"
 unicode-width = "0.2.2"
+
+dashmap = "6.1.0"
+ropey = "1.6.1"
+tower-lsp = "0.20.0"
+tokio = { version = "1.49.0", features = [
+  "fs",
+  "io-util",
+  "io-std",
+  "macros",
+  # "net",
+  # "parking_lot",
+  # "process",
+  # "rt",
+  "rt-multi-thread",
+  "signal",
+  # "sync",
+  # "time",
+]}
+log = "0.4.29"
+simple-logging = "2.0.2"
