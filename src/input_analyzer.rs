@@ -6,6 +6,7 @@ use crate::trie::{Candidate, Dict};
 enum InputType {
     Selection(usize),
     Punctuation(Vec<char>),
+    EscapePair(char),
     Unknown,
 }
 
@@ -13,11 +14,12 @@ enum InputType {
 pub struct InputAnalyzer {
     dict: Dict,
     key_map: HashMap<char, InputType>,
+    selection_keys: Vec<char>,
 }
 
 impl InputAnalyzer {
     pub fn new(dict: Dict) -> Self {
-        let s_keys = ['U', 'I', 'O', 'H', 'J', 'K', 'B', 'N', 'M'];
+        let selection_keys = vec!['U', 'I', 'O', 'H', 'J', 'K', 'B', 'N', 'M'];
         let p_keys = [
             (',', vec!['，', ',']),
             ('.', vec!['。', '.']),
@@ -30,13 +32,18 @@ impl InputAnalyzer {
             ('|', vec!['·', '|']),
         ];
         let mut key_map = HashMap::new();
-        for (i, key) in s_keys.into_iter().enumerate() {
-            key_map.insert(key, InputType::Selection(i));
+        for (i, key) in selection_keys.iter().enumerate() {
+            key_map.insert(*key, InputType::Selection(i));
         }
         for (key, values) in p_keys.into_iter() {
             key_map.insert(key, InputType::Punctuation(values));
         }
-        Self { dict, key_map }
+        key_map.insert('`', InputType::EscapePair('`'));
+        Self {
+            dict,
+            key_map,
+            selection_keys,
+        }
     }
 }
 #[derive(Debug)]
@@ -44,6 +51,7 @@ enum Tag {
     Normal,
     Selection(usize),
     Punctuation,
+    Escape,
     Unknown,
 }
 
@@ -52,44 +60,50 @@ impl InputAnalyzer {
         let segments = self.segments(input);
         let segment_len = segments.len();
         let mut reduce_space = false;
-        let text_with_last_candidates: Vec<(String, Option<&[Candidate]>)> = segments
-            .into_iter()
-            .enumerate()
-            .map(|(i, seg)| match seg.1 {
+        let mut sentence: Vec<String> = vec![];
+        let mut candidates: Vec<CandidateRich> = vec![];
+        for (i, (codes, tag)) in segments.into_iter().enumerate() {
+            let at_last = i == segment_len - 1;
+            let get_count = if at_last { 9 } else { 1 };
+            match tag {
                 Tag::Normal => {
                     reduce_space = true;
-                    self.search_candidates(&seg.0, 0, if i == segment_len - 1 { 9 } else { 1 })
-                        .map_or((seg.0.iter().collect(), None), |(candidates, _unique)| {
-                            (candidates[0].text.clone(), Some(candidates))
-                        })
+                    if let Some((cands, _unique)) = self.search_candidates(&codes, 0, get_count) {
+                        sentence.push(cands[0].text.clone());
+                        if at_last {
+                            let to_rich = |(i, cand): (usize, &Candidate)| -> CandidateRich {
+                                let select_key =
+                                    self.selection_keys.get(i).map(|c| *c).unwrap_or(' ');
+                                CandidateRich::new(cand.clone(), i, select_key, false)
+                            };
+                            candidates = cands.iter().enumerate().map(to_rich).collect();
+                        }
+                    } else {
+                        sentence.push(codes.iter().collect());
+                    }
                 }
-                Tag::Selection(i_cand) => self
-                    .search_candidates(
-                        &seg.0[0..seg.0.len() - 1],
-                        i_cand,
-                        if i == segment_len - 1 { 9 } else { 1 },
-                    )
-                    .map_or((String::new(), None), |(candidates, _unique)| {
-                        (candidates[0].text.clone(), None)
-                    }),
-                Tag::Punctuation => (self.punctuation_solve(&seg.0), None),
+                Tag::Selection(i_cand) => {
+                    if let Some((cands, _unique)) =
+                        self.search_candidates(&codes[..codes.len() - 1], i_cand, get_count)
+                    {
+                        sentence.push(cands[0].text.clone());
+                    }
+                }
+                Tag::Punctuation => {
+                    sentence.push(self.punctuation_solve(&codes));
+                }
+                Tag::Escape => {
+                    sentence.push(codes.iter().collect());
+                }
                 _ => {
-                    let start = (reduce_space && seg.0[0] == ' ') as usize;
+                    let start = (reduce_space && codes[0] == ' ') as usize;
                     if reduce_space {
                         reduce_space = false;
                     }
-                    (seg.0[start..].iter().collect(), None)
+                    sentence.push(codes[start..].iter().collect());
                 }
-            })
-            .collect();
-        let candidates: Vec<Candidate> = text_with_last_candidates
-            .last()
-            .map(|e| e.1.map_or(vec![], |c| c.to_vec()))
-            .unwrap_or(vec![]);
-        let sentence = text_with_last_candidates
-            .into_iter()
-            .map(|e| e.0)
-            .collect::<Vec<_>>();
+            };
+        }
         AnalysisResult {
             sentence,
             candidates,
@@ -117,8 +131,21 @@ impl InputAnalyzer {
         let mut segments: Vec<(Vec<char>, Tag)> = vec![];
         let mut codes = vec![];
         let mut last_tag = None;
+        let mut escape_end: Option<char> = None;
         for c in input.iter().chain(std::iter::once(&'\n')) {
             codes.push(*c);
+
+            // 字面量不参与解析
+            if let Some(escape_end_char) = escape_end {
+                if *c == escape_end_char || *c == '\n' {
+                    segments.push((codes.to_vec(), Tag::Escape));
+                    codes.clear();
+                    escape_end = None;
+                }
+                last_tag = None;
+                continue;
+            }
+
             let is_code = c.is_ascii_lowercase();
             let reachable = self.dict.reachable(&codes);
             // 仍是有效code
@@ -126,8 +153,10 @@ impl InputAnalyzer {
                 last_tag = None;
                 continue;
             }
-            // if reachable && !is_code // not possible
-            // 无效code，但之前是有效code，选择之前的code，留下当前code
+            // (reachable && !is_code) 此条件不可能
+
+            // 由于codes加上当前字符后，已无法到达，表示此字符之前的codes是有效的
+            // 因此这是顶字上屏
             if is_code {
                 if codes.len() > 1 {
                     let before = codes[0..codes.len() - 1].to_vec();
@@ -137,15 +166,25 @@ impl InputAnalyzer {
                 last_tag = None;
                 continue;
             }
+
+            // (reachable = false) codes到此处时已无法到达
             match self.key_map.get(&c).unwrap_or(&InputType::Unknown) {
+                InputType::EscapePair(char) => {
+                    if codes.len() > 1 {
+                        let before = codes[0..codes.len() - 1].to_vec();
+                        segments.push((before, Tag::Normal));
+                    }
+                    codes = vec![*c];
+                    escape_end = Some(*char);
+                }
                 InputType::Selection(index) => {
                     // 如果上一个字符也是Selection，直接抛弃当前
-                    // TODO: 当selection_keys连续重复出现时，后面的selection_keys作为原始输入
                     if !matches!(last_tag, Some(Tag::Selection(_))) && codes.len() > 1 {
                         segments.push((codes.clone(), Tag::Selection(*index)));
                     }
-                    last_tag = Some(Tag::Selection(*index));
+                    // TODO: 当selection_keys连续重复出现时，后面的selection_keys作为原始输入
                     codes.clear();
+                    last_tag = Some(Tag::Selection(*index));
                 }
                 InputType::Punctuation(_) => {
                     if matches!(last_tag, Some(Tag::Punctuation)) {
@@ -167,6 +206,7 @@ impl InputAnalyzer {
                         let before = codes[0..codes.len() - 1].to_vec();
                         segments.push((before, Tag::Normal));
                     }
+                    // 未知字符不进行解析，且每一个字符单独一段
                     if *c != '\n' {
                         segments.push((vec![*c], Tag::Unknown));
                         codes.clear();
@@ -220,9 +260,33 @@ fn compact_vec(v: &[char]) -> Vec<(char, usize)> {
     result
 }
 
+#[derive(Debug)]
+pub struct CandidateRich {
+    pub code: String,
+    pub text: String,
+    pub weight: i32,
+    pub order: usize,
+    pub select_key: char,
+    pub unique: bool,
+}
+
+impl CandidateRich {
+    pub fn new(cand: Candidate, order: usize, select_key: char, unique: bool) -> Self {
+        let Candidate { code, text, weight } = cand;
+        Self {
+            code,
+            text,
+            weight,
+            order,
+            select_key,
+            unique,
+        }
+    }
+}
+
 pub struct AnalysisResult {
     pub sentence: Vec<String>,
-    pub candidates: Vec<Candidate>,
+    pub candidates: Vec<CandidateRich>,
 }
 
 #[cfg(test)]
@@ -263,6 +327,12 @@ zkc 射 1"#;
             result.sentence,
             vec!["可能", "", " ", "不", "，", "还", "来", "。", "h", "不是",]
         );
+        let input = "zk`zk`c,cua.hcI";
+        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
+        assert_eq!(
+            result.sentence,
+            vec!["可能", "`zk`", "不", "，", "还", "来", "。", "h", "不是",]
+        );
     }
 
     #[test]
@@ -282,6 +352,12 @@ zkc 射 1"#;
             (
                 "zk  c,cua.hcI",
                 vec!["zk", " ", " ", "c", ",", "cu", "a", ".", "h", "cI"],
+            ),
+            (
+                "zk  `hello``world`c,cua.hcI",
+                vec![
+                    "zk", " ", " ", "`hello`", "`world`", "c", ",", "cu", "a", ".", "h", "cI",
+                ],
             ),
         ];
         for (input, expected) in samples {
