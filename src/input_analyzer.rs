@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::trie::{Candidate, Dict};
+use crate::dict::{Candidate, Dict};
 
 #[derive(Debug)]
 enum InputType {

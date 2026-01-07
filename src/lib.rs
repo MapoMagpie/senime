@@ -1,5 +1,5 @@
+pub mod dict;
 pub mod input_analyzer;
-pub mod trie;
 
+pub use dict::Dict;
 pub use input_analyzer::{AnalysisResult, InputAnalyzer};
-pub use trie::Dict;
