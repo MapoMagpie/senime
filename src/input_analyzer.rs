@@ -137,7 +137,11 @@ impl InputAnalyzer {
 
             // 字面量不参与解析
             if let Some(escape_end_char) = escape_end {
-                if *c == escape_end_char || *c == '\n' {
+                let is_lf = *c == '\n';
+                if *c == escape_end_char || is_lf {
+                    if is_lf {
+                        codes.pop();
+                    }
                     segments.push((codes.to_vec(), Tag::Escape));
                     codes.clear();
                     escape_end = None;
@@ -357,6 +361,18 @@ zkc 射 1"#;
                 "zk  `hello``world`c,cua.hcI",
                 vec![
                     "zk", " ", " ", "`hello`", "`world`", "c", ",", "cu", "a", ".", "h", "cI",
+                ],
+            ),
+            (
+                "zk  c,cua.hcI`hello",
+                vec![
+                    "zk", " ", " ", "c", ",", "cu", "a", ".", "h", "cI", "`hello",
+                ],
+            ),
+            (
+                "zk  c,cua.hcI`hello`",
+                vec![
+                    "zk", " ", " ", "c", ",", "cu", "a", ".", "h", "cI", "`hello`",
                 ],
             ),
         ];
