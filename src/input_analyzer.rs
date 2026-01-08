@@ -46,7 +46,7 @@ impl InputAnalyzer {
         }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 enum Tag {
     Normal,
     Selection(usize),
@@ -142,7 +142,7 @@ impl InputAnalyzer {
                     if is_lf {
                         codes.pop();
                     }
-                    segments.push((codes.to_vec(), Tag::Escape));
+                    segments.push((codes.clone(), Tag::Escape));
                     codes.clear();
                     escape_end = None;
                 }
@@ -164,7 +164,7 @@ impl InputAnalyzer {
             if is_code {
                 if codes.len() > 1 {
                     let before = codes[0..codes.len() - 1].to_vec();
-                    segments.push((before, Tag::Normal));
+                    segments.push((before, last_tag.unwrap_or(Tag::Normal)));
                 }
                 codes = vec![*c];
                 last_tag = None;
@@ -176,19 +176,17 @@ impl InputAnalyzer {
                 InputType::EscapePair(char) => {
                     if codes.len() > 1 {
                         let before = codes[0..codes.len() - 1].to_vec();
-                        segments.push((before, Tag::Normal));
+                        segments.push((before, last_tag.clone().unwrap_or(Tag::Normal)));
                     }
                     codes = vec![*c];
                     escape_end = Some(*char);
                 }
-                InputType::Selection(index) => {
-                    // 如果上一个字符也是Selection，直接抛弃当前
-                    if !matches!(last_tag, Some(Tag::Selection(_))) && codes.len() > 1 {
+                InputType::Selection(index) if last_tag.is_none() => {
+                    if codes.len() > 1 {
                         segments.push((codes.clone(), Tag::Selection(*index)));
                     }
-                    // TODO: 当selection_keys连续重复出现时，后面的selection_keys作为原始输入
                     codes.clear();
-                    last_tag = Some(Tag::Selection(*index));
+                    last_tag = Some(Tag::Unknown);
                 }
                 InputType::Punctuation(_) => {
                     if matches!(last_tag, Some(Tag::Punctuation)) {
@@ -198,21 +196,23 @@ impl InputAnalyzer {
                     } else {
                         if codes.len() > 1 {
                             let before = codes[0..codes.len() - 1].to_vec();
-                            segments.push((before, Tag::Normal));
+                            segments.push((before, last_tag.unwrap_or(Tag::Normal)));
                         }
                         segments.push((vec![*c], Tag::Punctuation));
                     }
                     codes.clear();
                     last_tag = Some(Tag::Punctuation);
                 }
-                InputType::Unknown => {
-                    if codes.len() > 1 {
+                _ => {
+                    if last_tag.is_none() && codes.len() > 1 {
                         let before = codes[0..codes.len() - 1].to_vec();
                         segments.push((before, Tag::Normal));
+                        codes = vec![*c];
                     }
                     // 未知字符不进行解析，且每一个字符单独一段
-                    if *c != '\n' {
-                        segments.push((vec![*c], Tag::Unknown));
+                    if *c == '\n' && codes.len() > 1 {
+                        let before = codes[0..codes.len() - 1].to_vec();
+                        segments.push((before, Tag::Unknown));
                         codes.clear();
                     }
                     last_tag = Some(Tag::Unknown);
@@ -324,12 +324,15 @@ zkc 射 1"#;
         assert_eq!(result.sentence, vec!["来", "不是", "可能"]);
         let input = "zk  cuahcI";
         let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        assert_eq!(result.sentence, vec!["可能", "", " ", "还", "疲惫不堪"]);
+        assert_eq!(result.sentence, vec!["可能", " ", "还", "疲惫不堪"]);
+        let input = "zk ,cuahcI";
+        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
+        assert_eq!(result.sentence, vec!["可能", "", "，", "还", "疲惫不堪"]);
         let input = "zk  c,cua.hcI";
         let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
         assert_eq!(
             result.sentence,
-            vec!["可能", "", " ", "不", "，", "还", "来", "。", "h", "不是",]
+            vec!["可能", " ", "不", "，", "还", "来", "。", "h", "不是",]
         );
         let input = "zk`zk`c,cua.hcI";
         let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
@@ -337,53 +340,167 @@ zkc 射 1"#;
             result.sentence,
             vec!["可能", "`zk`", "不", "，", "还", "来", "。", "h", "不是",]
         );
+        let input = "zk `zk` c,cua.hcI";
+        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
+        assert_eq!(
+            result.sentence,
+            vec![
+                "可能", "", "`zk`", " ", "不", "，", "还", "来", "。", "h", "不是",
+            ]
+        );
     }
 
     #[test]
     fn test_segments() {
         let trie = Dict::from_str(gen_table());
         let analyzer = InputAnalyzer::new(trie);
-        let samples = vec![
-            ("c zk,,zkcI", vec!["c", " ", "zk", ",,", "zkcI"]),
+        let samples: Vec<(&str, Vec<&str>, Vec<Tag>)> = vec![
             (
-                "ahcgahccb cIII;...",
-                vec!["ahcg", "ahc", "cb", " ", "cI", ";..."],
+                "c zk,,zkcI",
+                vec!["c", " ", "zk", ",,", "zkcI"],
+                vec![
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Selection(1),
+                ],
             ),
             (
-                "  ahcgahccb  cIII;...",
-                vec![" ", " ", "ahcg", "ahc", "cb", " ", " ", "cI", ";..."],
+                "ahcgahccb cIII;...",
+                vec!["ahcg", "ahc", "cb", " ", "cI", "II", ";..."],
+                vec![
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Selection(1),
+                    Tag::Unknown,
+                    Tag::Punctuation,
+                ],
+            ),
+            (
+                "8  8ahcgahccb  cIII;...",
+                vec!["8  8", "ahcg", "ahc", "cb", "  ", "cI", "II", ";..."],
+                vec![
+                    Tag::Unknown,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Selection(1),
+                    Tag::Unknown,
+                    Tag::Punctuation,
+                ],
             ),
             (
                 "zk  c,cua.hcI",
-                vec!["zk", " ", " ", "c", ",", "cu", "a", ".", "h", "cI"],
+                vec!["zk", "  ", "c", ",", "cu", "a", ".", "h", "cI"],
+                vec![
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Selection(1),
+                ],
+            ),
+            (
+                "zk  ,c,cua.hcI",
+                vec!["zk", "  ", ",", "c", ",", "cu", "a", ".", "h", "cI"],
+                vec![
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Selection(1),
+                ],
+            ),
+            (
+                "zk ,c,cua.hcI",
+                vec!["zk", " ", ",", "c", ",", "cu", "a", ".", "h", "cI"],
+                vec![
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Selection(1),
+                ],
             ),
             (
                 "zk  `hello``world`c,cua.hcI",
                 vec![
-                    "zk", " ", " ", "`hello`", "`world`", "c", ",", "cu", "a", ".", "h", "cI",
+                    "zk", "  ", "`hello`", "`world`", "c", ",", "cu", "a", ".", "h", "cI",
+                ],
+                vec![
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Escape,
+                    Tag::Escape,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Selection(1),
                 ],
             ),
             (
                 "zk  c,cua.hcI`hello",
+                vec!["zk", "  ", "c", ",", "cu", "a", ".", "h", "cI", "`hello"],
                 vec![
-                    "zk", " ", " ", "c", ",", "cu", "a", ".", "h", "cI", "`hello",
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Selection(1),
+                    Tag::Escape,
                 ],
             ),
             (
                 "zk  c,cua.hcI`hello`",
+                vec!["zk", "  ", "c", ",", "cu", "a", ".", "h", "cI", "`hello`"],
                 vec![
-                    "zk", " ", " ", "c", ",", "cu", "a", ".", "h", "cI", "`hello`",
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Normal,
+                    Tag::Selection(1),
+                    Tag::Escape,
                 ],
             ),
         ];
-        for (input, expected) in samples {
+        for (input, expected, expected_tags) in samples {
             let segments = analyzer.segments(input.chars().collect::<Vec<_>>().as_slice());
-            println!("Segments: {:?}", segments);
-            let segments = segments
+            // println!("Segments: {:?}", segments);
+            let (segments, tags): (Vec<String>, Vec<Tag>) = segments
                 .into_iter()
-                .map(|seg| seg.0.iter().collect::<String>())
-                .collect::<Vec<_>>();
+                .map(|seg| (seg.0.iter().collect::<String>(), seg.1))
+                .unzip();
             assert_eq!(segments, expected);
+            assert_eq!(tags, expected_tags);
         }
     }
 
