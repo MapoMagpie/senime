@@ -1,10 +1,20 @@
 use bincode::{Decode, Encode, config};
+use serde::Deserialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs::File,
-    io::{self, BufReader, Error, Read, Write},
+    io::{self, Error, Read, Write},
+    os::unix::fs::MetadataExt,
     path::PathBuf,
 };
+
+/// 二进制文件头，用于检测码表是否发生了变动
+#[derive(Debug, Decode, Encode)]
+struct DictMeta {
+    head: [char; 6],
+    ver: usize,
+    mtime: i64,
+}
 
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct Candidate {
@@ -110,6 +120,7 @@ impl Prism {
 pub struct Dict {
     prism: Prism,
     candidates: Vec<Candidate>,
+    config: Config,
 }
 
 impl Dict {
@@ -118,33 +129,80 @@ impl Dict {
         P: Into<PathBuf>,
     {
         let path = path.into();
-        let filename = path.file_name().unwrap().to_str().unwrap();
-        let file_dir = path.parent().unwrap().to_str().unwrap();
+        let filename = path
+            .file_name()
+            .expect("无效的码表文件路径")
+            .to_str()
+            .unwrap();
+        let t_mtime = path.metadata().expect("无法读取码表文件元信息").mtime();
+        let file_dir = path
+            .parent()
+            .expect("码表文件需要在某个文件夹内")
+            .to_str()
+            .unwrap();
         let bin_path = format!("{}/{}.bin", file_dir, filename);
-        match File::open(&bin_path) {
-            Ok(mut file) => {
-                let reader = BufReader::new(&mut file);
-                let trie: Dict = bincode::decode_from_reader(reader, config::standard()).unwrap();
-                // println!("Loaded trie from file: {}", trie.count());
-                trie
-            }
-            _ => {
+        File::open(&bin_path)
+            .and_then(|mut file| {
+                let map_err = |reason: &str| io::Error::new(io::ErrorKind::InvalidData, reason);
+                let mut metadata = [0; 20];
+                file.read(&mut metadata)?;
+                let (DictMeta { head, ver, mtime }, _size): (DictMeta, usize) =
+                    bincode::decode_from_slice(&metadata, config::standard())
+                        .map_err(|_| map_err("无效的二进制数据[HEAD]"))?;
+                let c_head = ['s', 'e', 'n', 'i', 'm', 'e'];
+                let c_ver = 1;
+                if !(head == c_head && ver == c_ver && mtime == t_mtime) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "码表已更新，重新构建二进制文件",
+                    ));
+                }
+                let mut buf: Vec<u8> = vec![];
+                file.read_to_end(&mut buf)?;
+                // 前二十个字节
+                bincode::decode_from_slice::<Dict, _>(&buf, config::standard())
+                    .map_err(|_| map_err("无效的二进制数据[DICT]"))
+                    .map(|a| a.0)
+            })
+            .unwrap_or_else(|err| {
+                println!("打开码表二进制文件: {}", err);
                 let mut file = File::open(path).expect("无法读取码表文件");
                 let mut content = String::new();
                 file.read_to_string(&mut content)
                     .expect("无法从码表中读取内容");
+                let mut dict_bin = File::create(bin_path).unwrap();
+                let meta = DictMeta {
+                    head: ['s', 'e', 'n', 'i', 'm', 'e'],
+                    ver: 1,
+                    mtime: t_mtime,
+                };
+                let mut head = [0; 20];
+                bincode::encode_into_slice(meta, &mut head, config::standard()).unwrap();
+                dict_bin.write(&head).unwrap();
                 let dict = Self::from_str(content);
                 let encoded = bincode::encode_to_vec(&dict, config::standard()).unwrap();
-                let mut dict_bin = File::create(bin_path).unwrap();
                 dict_bin.write_all(&encoded).unwrap();
                 dict
-            }
-        }
+            })
     }
 
     pub fn from_str(raw: String) -> Self {
         let mut candidates = Vec::new();
+        let mut enter_toml = false;
+        let mut toml_content = String::new();
         for line in raw.lines() {
+            if enter_toml {
+                if line.starts_with("```") {
+                    enter_toml = false;
+                } else {
+                    toml_content.push_str(line);
+                }
+                continue;
+            }
+            if line.starts_with("```") {
+                enter_toml = true;
+                continue;
+            }
             match Candidate::parse(line) {
                 Ok(candidate) => {
                     candidates.push(candidate);
@@ -154,9 +212,19 @@ impl Dict {
                 }
             }
         }
+        println!("toml_content {}", toml_content);
+        let config = if toml_content.is_empty() {
+            Config::default()
+        } else {
+            toml::from_str(&toml_content).expect("无法从码表中解析配置")
+        };
         candidates.sort();
         let prism = Prism::new(&candidates);
-        Self { candidates, prism }
+        Self {
+            candidates,
+            prism,
+            config,
+        }
     }
 
     pub fn reachable(&self, chars: &[char]) -> bool {
@@ -176,6 +244,56 @@ impl Dict {
     pub fn count(&self) -> usize {
         self.candidates.len()
     }
+    pub fn config(&self) -> Config {
+        self.config.clone()
+    }
+}
+
+#[derive(Debug, Clone, Decode, Encode, Deserialize)]
+pub struct Config {
+    #[serde(default = "default_selection_keys")]
+    pub selection_keys: [char; 9],
+    #[serde(default = "default_punctuations")]
+    pub punctuations: HashMap<char, Vec<char>>,
+    #[serde(default = "default_escape_pair")]
+    pub escape_pair: Option<[char; 2]>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            selection_keys: default_selection_keys(),
+            punctuations: default_punctuations(),
+            escape_pair: Some(['`', '`']),
+        }
+    }
+}
+
+fn default_selection_keys() -> [char; 9] {
+    // ['U', 'I', 'O', 'H', 'J', 'K', 'B', 'N', 'M']
+    ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+}
+fn default_punctuations() -> HashMap<char, Vec<char>> {
+    let punctuations = vec![
+        (',', vec!['，', ',']),
+        ('.', vec!['。', '.']),
+        ('!', vec!['！', '!']),
+        ('/', vec!['？', '?']),
+        (';', vec!['：', ';']),
+        ('[', vec!['「', '“', '[']),
+        (']', vec!['」', '”', ']']),
+        ('\\', vec!['、', '\\']),
+        ('|', vec!['·', '|']),
+    ];
+    let mut map = HashMap::new();
+    punctuations.into_iter().for_each(|(ch, puncs)| {
+        map.insert(ch, puncs);
+    });
+    map
+}
+
+fn default_escape_pair() -> Option<[char; 2]> {
+    Some(['`', '`'])
 }
 
 // https://github.com/rime/librime/blob/47033202f986f4dced82eceb90440285fcb9501e/src/rime/gear/charset_filter.cc#L18
@@ -203,7 +321,8 @@ mod tests {
     use std::time::Instant;
 
     fn gen_table() -> String {
-        let raw = r#"ahb 来 1
+        let raw = r#"
+ahb 来 1
 ahc 麦克 1
 ahcg 疲惫不堪 1
 c 不 1
@@ -285,13 +404,6 @@ zkc 射 1"#;
             "search time: {:?}",
             time_searched.duration_since(time_trie_loaded)
         );
-        // calculate Trie candidates memory usage
-        // let trie_size = trie.get_heap_size();
-        // let candidates_size = trie.candidates.get_heap_size();
-        // let node_size = trie.root.get_heap_size();
-        // println!("Trie size: {} bytes", trie_size);
-        // println!("Candidates size: {} bytes", candidates_size);
-        // println!("Node size: {} bytes", node_size);
     }
 
     // #[test]
@@ -326,5 +438,30 @@ zkc 射 1"#;
         let prim_path = "./test/prism.txt";
         std::fs::write(can_path, candidates).unwrap();
         std::fs::write(prim_path, prims.collect::<Vec<String>>().join("\n")).unwrap();
+    }
+
+    #[test]
+    fn test_parse_config() {
+        let raw = r#"
+selection_keys = ["U","I","O","H","J","K","B","N","M"]
+[punctuations]
+"," = [",", "，"]
+"." = ["。", "."]
+";" = ["；", ";"]
+
+"#;
+        let config: Config = toml::from_str(raw).unwrap();
+        println!("config 1: {:?}", config);
+        let raw = r#"
+[punctuations]
+"," = [",", "，"]
+"." = ["。", "."]
+";" = ["；", ";"]
+"#;
+        let config: Config = toml::from_str(raw).unwrap();
+        println!("config 2: {:?}", config);
+        let raw = r#""#;
+        let config: Config = toml::from_str(raw).unwrap();
+        println!("config 3: {:?}", config);
     }
 }

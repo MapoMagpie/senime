@@ -20,7 +20,6 @@ struct Backend {
     engine: InputAnalyzer,
     doc_map: DashMap<String, Rope>,
     state: RwLock<State>,
-    selection_keys: Vec<&'static str>,
 }
 
 #[tower_lsp::async_trait]
@@ -168,13 +167,7 @@ impl LanguageServer for Backend {
                 .into_iter()
                 .enumerate()
                 .map(|(i, c)| CompletionItem {
-                    label: format!(
-                        "{}[{}]: {} {}",
-                        i + 1,
-                        self.selection_keys[i],
-                        c.text,
-                        c.code
-                    ),
+                    label: format!("[{}]: {} {}", c.select_key, c.text, c.code),
                     preselect: Some(false),
                     kind: Some(CompletionItemKind::TEXT),
                     filter_text: Some(filter_text.clone()),
@@ -361,7 +354,6 @@ async fn main() {
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let selection_keys = vec!["U", "I", "O", "H", "J", "K", "B", "N", "M"];
     let dict = Dict::load(args.table);
     let engine = InputAnalyzer::new(dict);
     let doc_map = DashMap::default();
@@ -369,7 +361,6 @@ async fn main() {
     let (service, socket) = LspService::new(|_client| Backend {
         engine,
         doc_map,
-        selection_keys,
         state,
     });
     Server::new(stdin, stdout, socket).serve(service).await;

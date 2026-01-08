@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::dict::{Candidate, Dict};
+use crate::dict::{Candidate, Config, Dict};
 
 #[derive(Debug)]
 enum InputType {
@@ -14,31 +14,26 @@ enum InputType {
 pub struct InputAnalyzer {
     dict: Dict,
     key_map: HashMap<char, InputType>,
-    selection_keys: Vec<char>,
+    selection_keys: [char; 9],
 }
 
 impl InputAnalyzer {
     pub fn new(dict: Dict) -> Self {
-        let selection_keys = vec!['U', 'I', 'O', 'H', 'J', 'K', 'B', 'N', 'M'];
-        let p_keys = [
-            (',', vec!['，', ',']),
-            ('.', vec!['。', '.']),
-            ('!', vec!['！', '!']),
-            ('/', vec!['？', '?']),
-            (';', vec!['：', ';']),
-            ('[', vec!['「', '“', '[']),
-            (']', vec!['」', '”', ']']),
-            ('\\', vec!['、', '\\']),
-            ('|', vec!['·', '|']),
-        ];
+        let Config {
+            selection_keys,
+            punctuations,
+            escape_pair,
+        } = dict.config();
         let mut key_map = HashMap::new();
         for (i, key) in selection_keys.iter().enumerate() {
             key_map.insert(*key, InputType::Selection(i));
         }
-        for (key, values) in p_keys.into_iter() {
+        for (key, values) in punctuations.into_iter() {
             key_map.insert(key, InputType::Punctuation(values));
         }
-        key_map.insert('`', InputType::EscapePair('`'));
+        if let Some([left, right]) = escape_pair {
+            key_map.insert(left, InputType::EscapePair(right));
+        }
         Self {
             dict,
             key_map,
@@ -74,7 +69,13 @@ impl InputAnalyzer {
                             let to_rich = |(i, cand): (usize, &Candidate)| -> CandidateRich {
                                 let select_key =
                                     self.selection_keys.get(i).map(|c| *c).unwrap_or(' ');
-                                CandidateRich::new(cand.clone(), i, select_key, false)
+                                CandidateRich::new(
+                                    cand.clone(),
+                                    codes.iter().collect(),
+                                    i,
+                                    select_key,
+                                    false,
+                                )
                             };
                             candidates = cands.iter().enumerate().map(to_rich).collect();
                         }
@@ -269,18 +270,26 @@ pub struct CandidateRich {
     pub code: String,
     pub text: String,
     pub weight: i32,
+    pub origin: String,
     pub order: usize,
     pub select_key: char,
     pub unique: bool,
 }
 
 impl CandidateRich {
-    pub fn new(cand: Candidate, order: usize, select_key: char, unique: bool) -> Self {
+    pub fn new(
+        cand: Candidate,
+        origin: String,
+        order: usize,
+        select_key: char,
+        unique: bool,
+    ) -> Self {
         let Candidate { code, text, weight } = cand;
         Self {
             code,
             text,
             weight,
+            origin,
             order,
             select_key,
             unique,

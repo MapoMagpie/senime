@@ -40,7 +40,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut input: Vec<char> = vec![];
     let mut sentence_ret = vec![];
 
-    let selection_keys = vec!["U", "I", "O", "H", "J", "K", "B", "N", "M"];
     loop {
         terminal.draw(|frame| {
             let size = frame.area();
@@ -61,10 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let candidate_widget = Paragraph::new(
                 candidates
                     .into_iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        format!("{}[{}]: {}  {}", (i + 1), selection_keys[i], c.text, c.code)
-                    })
+                    .map(|c| format!("[{}]: {}  {}", c.select_key, c.text, c.code))
                     .collect::<Vec<_>>()
                     .join("\n"),
             )
