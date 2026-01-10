@@ -13,6 +13,7 @@ clap = { version = "4.5.35", features = ["derive"] }
 ratatui = "0.30.0"
 crossterm = "0.29.0"
 unicode-width = "0.2.2"
+derive_setters = "0.1.8"
 
 dashmap = "6.1.0"
 ropey = "1.6.1"

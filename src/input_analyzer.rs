@@ -307,7 +307,11 @@ mod tests {
     use super::*;
 
     fn gen_table() -> String {
-        let raw = r#"ahb 来 1
+        let raw = r#"
+```toml
+selection_keys = ["U","I","O","H","J","K","B","N","M"]
+```
+ahb 来 1
 ahc 麦克 1
 ahcg 疲惫不堪 1
 c 不 10

@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
-    io::{self, Error, Read, Write},
+    io::{Error, ErrorKind, Read, Write},
     os::unix::fs::MetadataExt,
     path::PathBuf,
 };
@@ -14,6 +14,14 @@ struct DictMeta {
     head: [char; 6],
     ver: usize,
     mtime: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Column {
+    Code,
+    Text,
+    Weight,
+    Other,
 }
 
 #[derive(Debug, Clone, Decode, Encode)]
@@ -47,35 +55,40 @@ impl PartialOrd for Candidate {
 }
 
 impl Candidate {
-    fn parse(raw: &str) -> Result<Self, Error> {
-        let split = raw.split("\t").collect::<Vec<_>>();
+    fn parse(raw: &str, columns: &Vec<Column>) -> Result<Self, Error> {
+        let split = raw.split('\t').collect::<Vec<_>>();
         if split.len() < 2 {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("无效行: {raw}"),
-            ))
+            Err(Error::new(ErrorKind::InvalidData, format!("无效行: {raw}")))
         } else {
-            let code = split[0].trim().to_string();
-            let text = split[1].trim().chars().collect::<Vec<_>>();
-            if text.len() == 1 && is_extended_cjk(text[0]) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("拓展字符: {raw}"),
-                ));
+            let mut code = "";
+            let mut text = Vec::with_capacity(0);
+            let mut weight = 0;
+            for (i, col) in columns.iter().enumerate() {
+                if let Some(v) = split.get(i) {
+                    match *col {
+                        Column::Code => code = v.trim(),
+                        Column::Text => text = v.trim().chars().collect::<Vec<_>>(),
+                        Column::Weight => {
+                            weight = v.trim().parse().unwrap_or_default();
+                        }
+                        _ => {}
+                    }
+                }
             }
-            if code.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
+            if code.is_empty() || text.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
                     format!("code为空: {raw}"),
                 ));
             }
-            let weight = if split.len() > 2 {
-                split[2].parse().unwrap_or_default()
-            } else {
-                0
-            };
+            if text.len() == 1 && is_extended_cjk(text[0]) {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("拓展字符: {raw}"),
+                ));
+            }
             Ok(Self {
-                code,
+                code: code.to_string(),
                 text: text.into_iter().collect(),
                 weight,
             })
@@ -83,7 +96,7 @@ impl Candidate {
     }
 }
 
-// Trie 节点结构
+// Dict 节点结构
 #[derive(Debug, Decode, Encode)]
 struct Prism {
     keys: Vec<Vec<char>>,
@@ -115,7 +128,7 @@ impl Prism {
     }
 }
 
-// Trie 结构
+// Dict 结构
 #[derive(Debug, Decode, Encode)]
 pub struct Dict {
     prism: Prism,
@@ -143,7 +156,7 @@ impl Dict {
         let bin_path = format!("{}/{}.bin", file_dir, filename);
         File::open(&bin_path)
             .and_then(|mut file| {
-                let map_err = |reason: &str| io::Error::new(io::ErrorKind::InvalidData, reason);
+                let map_err = |reason: &str| Error::new(ErrorKind::InvalidData, reason);
                 let mut metadata = [0; 20];
                 file.read(&mut metadata)?;
                 let (DictMeta { head, ver, mtime }, _size): (DictMeta, usize) =
@@ -152,8 +165,8 @@ impl Dict {
                 let c_head = ['s', 'e', 'n', 'i', 'm', 'e'];
                 let c_ver = 1;
                 if !(head == c_head && ver == c_ver && mtime == t_mtime) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
+                    return Err(Error::new(
+                        ErrorKind::Other,
                         "码表已更新，重新构建二进制文件",
                     ));
                 }
@@ -190,12 +203,15 @@ impl Dict {
         let mut candidates = Vec::new();
         let mut enter_toml = false;
         let mut toml_content = String::new();
+        let mut columns: Option<Vec<Column>> = None;
+        let mut parse_cloumns_times = 0;
         for line in raw.lines() {
             if enter_toml {
                 if line.starts_with("```") {
                     enter_toml = false;
                 } else {
                     toml_content.push_str(line);
+                    toml_content.push('\n');
                 }
                 continue;
             }
@@ -203,7 +219,21 @@ impl Dict {
                 enter_toml = true;
                 continue;
             }
-            match Candidate::parse(line) {
+            if columns.is_none() {
+                match try_parse_columns(line) {
+                    Ok(cols) => columns = Some(cols),
+                    Err(_) => {
+                        parse_cloumns_times += 1;
+                        if parse_cloumns_times > 100 {
+                            panic!(
+                                "码表中的第一个有效项(非第一行)未满足码表格式:必须要有英文和汉字，以制表符隔开，顺序随意，数字(权重)可选，以供程序自动且正确解析码表排列顺序。"
+                            )
+                        }
+                        continue;
+                    }
+                }
+            }
+            match Candidate::parse(line, columns.as_ref().unwrap()) {
                 Ok(candidate) => {
                     candidates.push(candidate);
                 }
@@ -212,7 +242,7 @@ impl Dict {
                 }
             }
         }
-        println!("toml_content {}", toml_content);
+        // println!("toml_content {}", toml_content);
         let config = if toml_content.is_empty() {
             Config::default()
         } else {
@@ -247,6 +277,46 @@ impl Dict {
     pub fn config(&self) -> Config {
         self.config.clone()
     }
+}
+
+/// 从这一行中解析 列 的顺序
+/// 有效行是指：非空的、以 `\t` 分隔后，最少有两列的行
+/// 满足条件后，对每一列进行分析，
+///   全英文则为 code(英文码)
+///   全数字则为 weight
+///   包含ascii之外字符的则为 text(通常为汉字，不限制字符)
+///   如果有两列都是code或text，则无法确认列顺序，抛出错误
+/// 简而言之：必须要有一列是 code ，一列 text
+fn try_parse_columns(line: &str) -> Result<Vec<Column>, std::io::Error> {
+    let split = line
+        .split('\t')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if split.len() < 2 {
+        return Err(Error::new(ErrorKind::InvalidData, "非有效行"));
+    }
+    let mut code_count = 0;
+    let mut text_count = 0;
+    let mut columns = Vec::with_capacity(split.len());
+    for sp in split {
+        let col = if sp.chars().all(|c| c.is_ascii_alphabetic()) {
+            code_count += 1;
+            Column::Code
+        } else if sp.chars().all(|c| c.is_ascii_digit()) {
+            Column::Weight
+        } else if sp.chars().any(|c| !c.is_ascii()) {
+            text_count += 1;
+            Column::Text
+        } else {
+            Column::Other
+        };
+        columns.push(col);
+    }
+    if code_count == 1 && text_count == 1 {
+        return Ok(columns);
+    }
+    Err(Error::new(ErrorKind::InvalidData, "无法确认[列] 顺序"))
 }
 
 #[derive(Debug, Clone, Decode, Encode, Deserialize)]
@@ -321,7 +391,18 @@ mod tests {
     use std::time::Instant;
 
     fn gen_table() -> String {
-        let raw = r#"
+        let head = r#"
+```toml
+
+selection_keys = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
+[punctuations]
+"," = [",", "，"]
+"." = ["。", "."]
+";" = ["；", ";"]
+
+```
+"#;
+        let tab = r#"
 ahb 来 1
 ahc 麦克 1
 ahcg 疲惫不堪 1
@@ -333,62 +414,68 @@ cb 不 1
 z 可 1
 z 可以 1
 zk 可能 1
-zkc 射 1"#;
-        raw.replace(" ", "\t")
+zkc 射 1
+"#
+        .replace(" ", "\t");
+        head.to_string() + tab.as_ref()
     }
 
     #[test]
-    fn test_trie() {
-        let trie = Dict::from_str(gen_table());
-        println!("trie loaded: {}", trie.count());
-        let result = trie.search("ah".chars().collect::<Vec<_>>().as_slice());
+    fn test_dict() {
+        let dict = Dict::from_str(gen_table());
+        println!("dict loaded: {}", dict.count());
+        let result = dict.search("ah".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(3, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("ahb".chars().collect::<Vec<_>>().as_slice());
+        let result = dict.search("ahb".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(1, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("aha".chars().collect::<Vec<_>>().as_slice());
+        let result = dict.search("aha".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(0, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("c".chars().collect::<Vec<_>>().as_slice());
+        let result = dict.search("c".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(5, result.map_or(0, |candidates| candidates.len()));
-        let result = trie.search("cb".chars().collect::<Vec<_>>().as_slice());
+        let result = dict.search("cb".chars().collect::<Vec<_>>().as_slice());
         // println!("result: {:?}", result);
         assert_eq!(2, result.map_or(0, |candidates| candidates.len()));
+        assert_eq!(
+            dict.config().selection_keys,
+            ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']
+        );
     }
 
     // 初版
     // loaded 162982 from ./test/虎码码表.txt
     // searched: 6099
-    // trie loaded time: 392.5498ms
+    // dict loaded time: 392.5498ms
     // search time: 2.929678ms
 
     // 非递归后
     // loaded 162982 from ./test/虎码码表.txt
     // searched: 6099
-    // trie loaded time: 295.150222ms
+    // dict loaded time: 295.150222ms
     // search time: 1.874144ms
 
     // 限制最大候选后，数量为9
     // loaded 162982 from ./test/虎码码表.txt
     // searched: 12
-    // trie loaded time: 301.187025ms
+    // dict loaded time: 301.187025ms
     // search time: 21.641µs
 
     // 最大候选1000，无--release参数
     // loaded 162982 from ./test/虎码码表.txt
     // searched: 1000
-    // trie loaded time: 460.254761ms
+    // dict loaded time: 460.254761ms
     // search time: 481.759µs
     //
     // 最大候选1000，无--release参数，使用prism
     // loaded 162982 from ./test/虎码码表.txt
     // searched: 1000
-    // trie loaded time: 1.128577844s
+    // dict loaded time: 1.128577844s
     // search time: 11.27µs
     #[test]
     fn test_load() {
         let path = "./test/虎码码表.txt";
         let time_start = Instant::now();
         let dict = Dict::load(path);
-        let time_trie_loaded = Instant::now();
+        let time_dict_loaded = Instant::now();
         println!("loaded {} from {}", dict.count(), path);
         let candidates = dict.search("i".chars().collect::<Vec<_>>().as_slice());
         let time_searched = Instant::now();
@@ -397,12 +484,12 @@ zkc 射 1"#;
             candidates.map_or(0, |candidates| candidates.len())
         );
         println!(
-            "trie loaded time: {:?}",
-            time_trie_loaded.duration_since(time_start)
+            "dict loaded time: {:?}",
+            time_dict_loaded.duration_since(time_start)
         );
         println!(
             "search time: {:?}",
-            time_searched.duration_since(time_trie_loaded)
+            time_searched.duration_since(time_dict_loaded)
         );
     }
 
@@ -463,5 +550,20 @@ selection_keys = ["U","I","O","H","J","K","B","N","M"]
         let raw = r#""#;
         let config: Config = toml::from_str(raw).unwrap();
         println!("config 3: {:?}", config);
+    }
+
+    #[test]
+    fn test_try_parse_column_head() {
+        let line = "abcd 你好 10".replace(' ', "\t");
+        let ret = try_parse_columns(&line).expect("解析失败");
+        assert_eq!(vec![Column::Code, Column::Text, Column::Weight], ret);
+        let line = "你好 10 abcd".replace(' ', "\t");
+        let ret = try_parse_columns(&line).expect("解析失败");
+        assert_eq!(vec![Column::Text, Column::Weight, Column::Code], ret);
+        let line = "你好 10 abcd efgh".replace(' ', "\t");
+        try_parse_columns(&line).expect_err("解析应该失败");
+        let line = "你好hello 10 abcd".replace(' ', "\t");
+        let ret = try_parse_columns(&line).expect("解析失败");
+        assert_eq!(vec![Column::Text, Column::Weight, Column::Code], ret);
     }
 }
