@@ -52,6 +52,12 @@ enum Tag {
 
 impl InputAnalyzer {
     pub fn analyze(&self, input: &[char]) -> AnalysisResult {
+        if input.is_empty() {
+            return AnalysisResult {
+                sentence: vec![],
+                candidates: None,
+            };
+        }
         let segments = self.segments(input);
         let segment_len = segments.len();
         let mut reduce_space = false;
@@ -67,11 +73,10 @@ impl InputAnalyzer {
                         sentence.push(cands[0].text.clone());
                         if at_last {
                             let to_rich = |(i, cand): (usize, &Candidate)| -> CandidateRich {
-                                let select_key =
-                                    self.selection_keys.get(i).map(|c| *c).unwrap_or(' ');
+                                let select_key = self.selection_keys.get(i).copied().unwrap_or(' ');
                                 CandidateRich::new(
                                     cand.clone(),
-                                    codes.iter().collect(),
+                                    codes.to_vec(),
                                     i,
                                     select_key,
                                     false,
@@ -185,7 +190,7 @@ impl InputAnalyzer {
             }
 
             // (reachable = false) codes到此处时已无法到达
-            match self.key_map.get(&c).unwrap_or(&InputType::Unknown) {
+            match self.key_map.get(c).unwrap_or(&InputType::Unknown) {
                 InputType::EscapePair(char) => {
                     if codes.len() > 1 {
                         let before = codes[0..codes.len() - 1].to_vec();
@@ -265,7 +270,7 @@ impl InputAnalyzer {
                             code: String::new(),
                             text: pu.clone(),
                             weight: 0,
-                            origin: punc.to_string().repeat(repeat),
+                            origin: [*punc].repeat(repeat),
                             order: i,
                             select_key: '_',
                             unique: false,
@@ -304,7 +309,7 @@ pub struct CandidateRich {
     pub code: String,
     pub text: String,
     pub weight: i32,
-    pub origin: String,
+    pub origin: Vec<char>,
     pub order: usize,
     pub select_key: char,
     pub unique: bool,
@@ -313,7 +318,7 @@ pub struct CandidateRich {
 impl CandidateRich {
     pub fn new(
         cand: Candidate,
-        origin: String,
+        origin: Vec<char>,
         order: usize,
         select_key: char,
         unique: bool,
@@ -338,6 +343,8 @@ pub struct AnalysisResult {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     fn gen_table() -> String {
@@ -399,7 +406,7 @@ zkc 射 1"#;
 
     #[test]
     fn test_segments() {
-        let trie = Dict::from_str(gen_table());
+        let trie = Dict::from_str(&gen_table()).unwrap();
         let analyzer = InputAnalyzer::new(trie);
         let samples: Vec<(&str, Vec<&str>, Vec<Tag>)> = vec![
             (

@@ -6,6 +6,7 @@ use std::{
     io::{Error, ErrorKind, Read, Write},
     os::unix::fs::MetadataExt,
     path::PathBuf,
+    str::FromStr,
 };
 
 /// 二进制文件头，用于检测码表是否发生了变动
@@ -55,7 +56,7 @@ impl PartialOrd for Candidate {
 }
 
 impl Candidate {
-    fn parse(raw: &str, columns: &Vec<Column>) -> Result<Self, Error> {
+    fn parse(raw: &str, columns: &[Column]) -> Result<Self, Error> {
         let split = raw.split('\t').collect::<Vec<_>>();
         if split.len() < 2 {
             Err(Error::new(ErrorKind::InvalidData, format!("无效行: {raw}")))
@@ -136,70 +137,10 @@ pub struct Dict {
     config: Config,
 }
 
-impl Dict {
-    pub fn load<P>(path: P) -> Self
-    where
-        P: Into<PathBuf>,
-    {
-        let path = path.into();
-        let filename = path
-            .file_name()
-            .expect("无效的码表文件路径")
-            .to_str()
-            .unwrap();
-        let t_mtime = path.metadata().expect("无法读取码表文件元信息").mtime();
-        let file_dir = path
-            .parent()
-            .expect("码表文件需要在某个文件夹内")
-            .to_str()
-            .unwrap();
-        let bin_path = format!("{}/{}.bin", file_dir, filename);
-        File::open(&bin_path)
-            .and_then(|mut file| {
-                let map_err = |reason: &str| Error::new(ErrorKind::InvalidData, reason);
-                let mut metadata = [0; 20];
-                file.read(&mut metadata)?;
-                let (DictMeta { head, ver, mtime }, _size): (DictMeta, usize) =
-                    bincode::decode_from_slice(&metadata, config::standard())
-                        .map_err(|_| map_err("无效的二进制数据[HEAD]"))?;
-                let c_head = ['s', 'e', 'n', 'i', 'm', 'e'];
-                let c_ver = 1;
-                if !(head == c_head && ver == c_ver && mtime == t_mtime) {
-                    return Err(Error::new(
-                        ErrorKind::Other,
-                        "码表已更新，重新构建二进制文件",
-                    ));
-                }
-                let mut buf: Vec<u8> = vec![];
-                file.read_to_end(&mut buf)?;
-                // 前二十个字节
-                bincode::decode_from_slice::<Dict, _>(&buf, config::standard())
-                    .map_err(|_| map_err("无效的二进制数据[DICT]"))
-                    .map(|a| a.0)
-            })
-            .unwrap_or_else(|err| {
-                println!("打开码表二进制文件: {}", err);
-                let mut file = File::open(path).expect("无法读取码表文件");
-                let mut content = String::new();
-                file.read_to_string(&mut content)
-                    .expect("无法从码表中读取内容");
-                let mut dict_bin = File::create(bin_path).unwrap();
-                let meta = DictMeta {
-                    head: ['s', 'e', 'n', 'i', 'm', 'e'],
-                    ver: 1,
-                    mtime: t_mtime,
-                };
-                let mut head = [0; 20];
-                bincode::encode_into_slice(meta, &mut head, config::standard()).unwrap();
-                dict_bin.write(&head).unwrap();
-                let dict = Self::from_str(content);
-                let encoded = bincode::encode_to_vec(&dict, config::standard()).unwrap();
-                dict_bin.write_all(&encoded).unwrap();
-                dict
-            })
-    }
+impl FromStr for Dict {
+    type Err = String;
 
-    pub fn from_str(raw: String) -> Self {
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let mut candidates = Vec::new();
         let mut enter_toml = false;
         let mut toml_content = String::new();
@@ -225,9 +166,9 @@ impl Dict {
                     Err(_) => {
                         parse_cloumns_times += 1;
                         if parse_cloumns_times > 100 {
-                            panic!(
-                                "码表中的第一个有效项(非第一行)未满足码表格式:必须要有英文和汉字，以制表符隔开，顺序随意，数字(权重)可选，以供程序自动且正确解析码表排列顺序。"
-                            )
+                            return Err(
+                                "码表中的第一个有效项(非第一行)未满足码表格式:必须要有英文和汉字，以制表符隔开，顺序随意，数字(权重)可选，以供程序自动且正确解析码表排列顺序。".to_string()
+                            );
                         }
                         continue;
                     }
@@ -246,15 +187,77 @@ impl Dict {
         let config = if toml_content.is_empty() {
             Config::default()
         } else {
-            toml::from_str(&toml_content).expect("无法从码表中解析配置")
+            toml::from_str(&toml_content)
+                .map_err(|e| format!("无法从码表中解析配置: {}", e.message()))?
         };
         candidates.sort();
         let prism = Prism::new(&candidates);
-        Self {
+        Ok(Self {
             candidates,
             prism,
             config,
-        }
+        })
+    }
+}
+
+impl Dict {
+    pub fn load<P>(path: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        let path = path.into();
+        let filename = path
+            .file_name()
+            .expect("无效的码表文件路径")
+            .to_str()
+            .unwrap();
+        let t_mtime = path.metadata().expect("无法读取码表文件元信息").mtime();
+        let file_dir = path
+            .parent()
+            .expect("码表文件需要在某个文件夹内")
+            .to_str()
+            .unwrap();
+        let bin_path = format!("{}/{}.bin", file_dir, filename);
+        File::open(&bin_path)
+            .and_then(|mut file| {
+                let map_err = |reason: &str| Error::new(ErrorKind::InvalidData, reason);
+                let mut metadata = [0; 20];
+                file.read_exact(&mut metadata)?;
+                let (DictMeta { head, ver, mtime }, _size): (DictMeta, usize) =
+                    bincode::decode_from_slice(&metadata, config::standard())
+                        .map_err(|_| map_err("无效的二进制数据[HEAD]"))?;
+                let c_head = ['s', 'e', 'n', 'i', 'm', 'e'];
+                let c_ver = 1;
+                if !(head == c_head && ver == c_ver && mtime == t_mtime) {
+                    return Err(Error::other("码表已更新，重新构建二进制文件"));
+                }
+                let mut buf: Vec<u8> = vec![];
+                file.read_to_end(&mut buf)?;
+                // 前二十个字节
+                bincode::decode_from_slice::<Dict, _>(&buf, config::standard())
+                    .map_err(|_| map_err("无效的二进制数据[DICT]"))
+                    .map(|a| a.0)
+            })
+            .unwrap_or_else(|err| {
+                println!("打开码表二进制文件: {}", err);
+                let mut file = File::open(path).expect("无法读取码表文件");
+                let mut content = String::new();
+                file.read_to_string(&mut content)
+                    .expect("无法从码表中读取内容");
+                let mut dict_bin = File::create(bin_path).unwrap();
+                let meta = DictMeta {
+                    head: ['s', 'e', 'n', 'i', 'm', 'e'],
+                    ver: 1,
+                    mtime: t_mtime,
+                };
+                let mut head = [0; 20];
+                bincode::encode_into_slice(meta, &mut head, config::standard()).unwrap();
+                dict_bin.write_all(&head).unwrap();
+                let dict = Self::from_str(&content).unwrap();
+                let encoded = bincode::encode_to_vec(&dict, config::standard()).unwrap();
+                dict_bin.write_all(&encoded).unwrap();
+                dict
+            })
     }
 
     pub fn reachable(&self, chars: &[char]) -> bool {
@@ -305,7 +308,7 @@ fn try_parse_columns(line: &str) -> Result<Vec<Column>, std::io::Error> {
             Column::Code
         } else if sp.chars().all(|c| c.is_ascii_digit()) {
             Column::Weight
-        } else if sp.chars().any(|c| !c.is_ascii()) {
+        } else if !sp.is_ascii() {
             text_count += 1;
             Column::Text
         } else {
@@ -422,7 +425,7 @@ zkc 射 1
 
     #[test]
     fn test_dict() {
-        let dict = Dict::from_str(gen_table());
+        let dict = Dict::from_str(&gen_table()).unwrap();
         println!("dict loaded: {}", dict.count());
         let result = dict.search("ah".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(3, result.map_or(0, |candidates| candidates.len()));
