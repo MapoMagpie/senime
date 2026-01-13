@@ -324,7 +324,7 @@ pub struct Config {
     #[serde(default = "default_selection_keys")]
     pub selection_keys: [char; 9],
     #[serde(default = "default_punctuations")]
-    pub punctuations: HashMap<char, Vec<char>>,
+    pub punctuations: HashMap<char, Vec<String>>,
     #[serde(default = "default_escape_pair")]
     pub escape_pair: Option<[char; 2]>,
 }
@@ -343,21 +343,21 @@ fn default_selection_keys() -> [char; 9] {
     // ['U', 'I', 'O', 'H', 'J', 'K', 'B', 'N', 'M']
     ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 }
-fn default_punctuations() -> HashMap<char, Vec<char>> {
+fn default_punctuations() -> HashMap<char, Vec<String>> {
     let punctuations = vec![
-        (',', vec!['，', ',']),
-        ('.', vec!['。', '.']),
-        ('!', vec!['！', '!']),
-        ('/', vec!['？', '?']),
-        (';', vec!['：', ';']),
-        ('[', vec!['「', '“', '[']),
-        (']', vec!['」', '”', ']']),
-        ('\\', vec!['、', '\\']),
-        ('|', vec!['·', '|']),
+        (',', vec!["，", ","]),
+        ('.', vec!["。", ".", "……"]),
+        ('!', vec!["！", "!"]),
+        ('/', vec!["？", "?"]),
+        (';', vec!["：", ";"]),
+        ('[', vec!["「", "“", "["]),
+        (']', vec!["」", "”", "]"]),
+        ('\\', vec!["、", "\\"]),
+        ('|', vec!["·", "|"]),
     ];
     let mut map = HashMap::new();
     punctuations.into_iter().for_each(|(ch, puncs)| {
-        map.insert(ch, puncs);
+        map.insert(ch, puncs.iter().map(|s| s.to_string()).collect());
     });
     map
 }

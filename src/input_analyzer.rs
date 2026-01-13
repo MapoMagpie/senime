@@ -5,7 +5,7 @@ use crate::dict::{Candidate, Config, Dict};
 #[derive(Debug)]
 enum InputType {
     Selection(usize),
-    Punctuation(Vec<char>),
+    Punctuation(Vec<String>),
     EscapePair(char),
     Unknown,
 }
@@ -56,7 +56,7 @@ impl InputAnalyzer {
         let segment_len = segments.len();
         let mut reduce_space = false;
         let mut sentence: Vec<String> = vec![];
-        let mut candidates: Vec<CandidateRich> = vec![];
+        let mut candidates: Option<Vec<CandidateRich>> = None;
         for (i, (codes, tag)) in segments.into_iter().enumerate() {
             let at_last = i == segment_len - 1;
             let get_count = if at_last { 9 } else { 1 };
@@ -77,7 +77,7 @@ impl InputAnalyzer {
                                     false,
                                 )
                             };
-                            candidates = cands.iter().enumerate().map(to_rich).collect();
+                            candidates = Some(cands.iter().enumerate().map(to_rich).collect());
                         }
                     } else {
                         sentence.push(codes.iter().collect());
@@ -91,7 +91,19 @@ impl InputAnalyzer {
                     }
                 }
                 Tag::Punctuation => {
-                    sentence.push(self.punctuation_solve(&codes));
+                    for (punc, repeat) in compact_vec(&codes) {
+                        match self.get_punctuation(&punc, repeat) {
+                            Some((punc_, cands)) => {
+                                sentence.push(punc_);
+                                if at_last {
+                                    candidates = cands;
+                                }
+                            }
+                            _ => {
+                                sentence.push(punc.to_string().repeat(repeat));
+                            }
+                        }
+                    }
                 }
                 Tag::Escape => {
                     sentence.push(codes.iter().collect());
@@ -223,26 +235,48 @@ impl InputAnalyzer {
         segments
     }
 
-    fn punctuation_solve(&self, puncs: &[char]) -> String {
-        compact_vec(puncs)
-            .iter()
-            .map(|(p, c)| {
-                self.key_map.get(p).map_or(String::new(), |t| match t {
-                    InputType::Punctuation(ps) => {
-                        let mut result = vec![];
-                        let mut c = *c;
-                        while c > 0 {
-                            let index = (c - 1) % ps.len();
-                            result.push(ps[index]);
-                            c = c - ps.len().min(c);
-                        }
-                        result.iter().collect::<String>()
-                    }
-                    _ => String::new(),
-                })
-            })
-            .collect::<Vec<_>>()
-            .join("")
+    fn get_punctuation(
+        &self,
+        punc: &char,
+        repeat: usize,
+    ) -> Option<(String, Option<Vec<CandidateRich>>)> {
+        self.key_map.get(punc).map(|t| match t {
+            InputType::Punctuation(ps) => {
+                let mut result = String::new();
+                let mut cands: &[String] = &ps[..];
+                let mut c = repeat;
+                while c > 0 {
+                    let index = if (c - 1) >= ps.len() {
+                        ps.len() - 1
+                    } else {
+                        c - 1
+                    };
+                    result.push_str(&ps[index]);
+                    cands = &ps[index..];
+                    c = c - ps.len().min(c);
+                }
+                let cands: Option<Vec<CandidateRich>> = if cands.is_empty() || cands.len() < 2 {
+                    None
+                } else {
+                    let cands = cands
+                        .iter()
+                        .enumerate()
+                        .map(|(i, pu)| CandidateRich {
+                            code: String::new(),
+                            text: pu.clone(),
+                            weight: 0,
+                            origin: punc.to_string().repeat(repeat),
+                            order: i,
+                            select_key: '_',
+                            unique: false,
+                        })
+                        .collect();
+                    Some(cands)
+                };
+                Some((result, cands))
+            }
+            _ => None,
+        })?
     }
 }
 
@@ -299,7 +333,7 @@ impl CandidateRich {
 
 pub struct AnalysisResult {
     pub sentence: Vec<String>,
-    pub candidates: Vec<CandidateRich>,
+    pub candidates: Option<Vec<CandidateRich>>,
 }
 
 #[cfg(test)]

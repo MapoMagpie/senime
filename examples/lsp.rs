@@ -48,7 +48,7 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: Some(
-                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,.]"
+                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,."
                             .chars()
                             .map(|c| c.to_string())
                             .collect(),
@@ -160,10 +160,10 @@ impl LanguageServer for Backend {
             // commit_characters: todo!(),
             ..Default::default()
         };
-        let cand_items: Vec<CompletionItem> = if candidates.len() == 1 {
-            vec![]
-        } else {
-            candidates
+        let cand_items: Vec<CompletionItem> = if let Some(cands) = candidates
+            && cands.len() > 1
+        {
+            cands
                 .into_iter()
                 .enumerate()
                 .map(|(i, c)| CompletionItem {
@@ -188,6 +188,8 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 })
                 .collect()
+        } else {
+            vec![]
         };
         log::info!(
             "completion result: {}, candidates: {}",
