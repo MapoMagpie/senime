@@ -111,11 +111,12 @@ impl LanguageServer for Backend {
             }
         }
         let AnalysisResult {
-            mut sentence,
+            segments,
             candidates,
         } = self
             .engine
             .analyze(&line_chars[start as usize..end as usize]);
+        let (mut sentence, _) = segments.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
         // 编辑器在收到补全后，全根据fiter_text进行过滤，比如helix会用[向前日后一个字..当前光标]这个范围的字符去搜索，如果搜索的分数太低就会丢弃
         // 所谓的字，就是英文字母、汉字、等其他非标点符号的字
         // 设置fiter_text最简单的方式是从当前行的首位开始也就是0，到当前光标的位置
