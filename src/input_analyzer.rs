@@ -204,8 +204,8 @@ impl InputAnalyzer {
                 InputType::Selection(index) if last_tag.is_none() => {
                     if codes.len() > 1 {
                         segments.push((codes.clone(), Tag::Selection(*index)));
+                        codes.clear();
                     }
-                    codes.clear();
                     last_tag = Some(Tag::Unknown);
                 }
                 InputType::Punctuation(_) => {
@@ -229,7 +229,6 @@ impl InputAnalyzer {
                         segments.push((before, Tag::Normal));
                         codes = vec![*c];
                     }
-                    // 未知字符不进行解析，且每一个字符单独一段
                     if *c == '\n' && codes.len() > 1 {
                         let before = codes[0..codes.len() - 1].to_vec();
                         segments.push((before, Tag::Unknown));
@@ -424,6 +423,28 @@ zkc 射 1"#;
                 vec![
                     Tag::Normal,
                     Tag::Unknown,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Selection(1),
+                ],
+            ),
+            (
+                "c   A  zk,,zkcI",
+                vec!["c", "   A  ", "zk", ",,", "zkcI"],
+                vec![
+                    Tag::Normal,
+                    Tag::Unknown,
+                    Tag::Normal,
+                    Tag::Punctuation,
+                    Tag::Selection(1),
+                ],
+            ),
+            (
+                "IOczk,,zkcI",
+                vec!["IO", "c", "zk", ",,", "zkcI"],
+                vec![
+                    Tag::Unknown,
+                    Tag::Normal,
                     Tag::Normal,
                     Tag::Punctuation,
                     Tag::Selection(1),
