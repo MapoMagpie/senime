@@ -13,9 +13,9 @@ use ratatui::Terminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::CrosstermBackend;
-use ratatui::style::Style;
+use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
 use senime::{AnalysisResult, Dict, InputAnalyzer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -103,26 +103,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let area = chunks[0];
             let sentence_iter = sentence_rec
                 .iter()
-                .map(|(s, _)| s)
-                .chain(std::iter::once(&pending))
-                .filter(|s| !s.is_empty());
-            let (text, last_width, text_height) = sentence_iter.fold::<(String, u16, u16), _>(
-                (String::new(), 0, 1),
-                |(mut lines, mut width, mut height), word| {
+                .map(|(s, _)| Span::from(s))
+                .chain(std::iter::once(Span::from(&pending).red().underlined()));
+            let (text, last_width, text_height) = sentence_iter.fold::<(Text, u16, u16), _>(
+                (Text::from(""), 0, 1),
+                |(mut text, mut width, mut height), word| {
                     let word_width = word.width_cjk() as u16;
-                    if width + word_width > area.width - 2 {
-                        lines.push_str("\n");
+                    if width + word_width > area.width - 2 || word.content == "\n" {
+                        text.push_line("");
                         width = 0;
                         height += 1;
                     }
-                    lines.push_str(word);
-                    (lines, width + word_width, height)
+                    if word.content != "\n" {
+                        text.push_span(word);
+                    }
+                    (text, width + word_width, height)
                 },
             );
             let inner_height = area.height - 2;
             let sentence_widget = Paragraph::new(text)
                 .scroll((text_height.max(inner_height) - inner_height, 0))
-                .wrap(Wrap { trim: false })
+                // .wrap(Wrap { trim: false })
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
@@ -139,11 +140,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut cand_text: Vec<Line> = vec![];
                 for cand in candidates.into_iter() {
                     let mut cand_line = Line::from("[");
-                    cand_line.push_span(
-                        Span::from(cand.select_key.to_string()).style(Style::default().green()),
-                    );
+                    cand_line.push_span(Span::from(cand.select_key.to_string()).green());
                     cand_line.push_span("]: ");
                     cand_line.push_span(cand.text);
+                    if cand.code.len() > input.len() {
+                        cand_line
+                            .push_span(Span::from(cand.code.clone().split_off(input.len())).red());
+                    }
                     cand_max_width = cand_line.width_cjk().max(cand_max_width);
                     cand_text.push(cand_line);
                 }
@@ -207,6 +210,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 KeyCode::Esc => {
                     break;
+                }
+                KeyCode::Enter => {
+                    if !pending.is_empty() {
+                        sentence_rec.push((pending, input.clone()));
+                        input.clear();
+                    }
+                    sentence_rec.push(("\n".to_string(), vec!['\n']));
                 }
                 KeyCode::Backspace => {
                     if pending.is_empty() {
