@@ -17,7 +17,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
-use senime::{AnalysisResult, Dict, InputAnalyzer};
+use senime_lib::{AnalysisResult, Dict, InputAnalyzer};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Parser, Debug)]

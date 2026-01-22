@@ -1,37 +1,17 @@
-[package]
+[workspace.package]
 name = "senime"
 version = "0.0.1"
 edition = "2024"
+authors = ["MapoMagpie"]
 
-[dependencies]
-bincode = "2.0.1"
-serde = { version = "1.0.228", features = ["std", "derive"] }
-toml = "0.9.10"
-
-[dev-dependencies]
-clap = { version = "4.5.35", features = ["derive"] }
-ratatui = "0.30.0"
-crossterm = "0.29.0"
-unicode-width = "0.2.2"
-derive_setters = "0.1.8"
-
-dashmap = "6.1.0"
-ropey = "1.6.1"
-tower-lsp = "0.20.0"
-tokio = { version = "1.49.0", features = [
-  "fs",
-  "io-util",
-  "io-std",
-  "macros",
-  # "net",
-  # "parking_lot",
-  # "process",
-  # "rt",
-  "rt-multi-thread",
-  "signal",
-  # "sync",
-  # "time",
-]}
-log = "0.4.29"
-simple-logging = "2.0.2"
-serde_json = "1.0.148"
+[workspace]
+resolver = "2"
+members = [
+  "senime-lib",
+  "senime-tui",
+  "senime-lsp",
+  "senime-wasm",
+]
+default-member = [
+  "senime-tui"
+]

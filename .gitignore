@@ -1,2 +1,4 @@
 target
 test
+dist
+node_modules

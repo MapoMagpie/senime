@@ -2,7 +2,7 @@ use clap::Parser;
 use dashmap::DashMap;
 use log::LevelFilter;
 use ropey::Rope;
-use senime::{AnalysisResult, Dict, InputAnalyzer};
+use senime_lib::{AnalysisResult, Dict, InputAnalyzer};
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;

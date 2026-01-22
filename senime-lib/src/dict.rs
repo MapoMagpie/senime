@@ -4,9 +4,9 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
     io::{Error, ErrorKind, Read, Write},
-    os::unix::fs::MetadataExt,
     path::PathBuf,
     str::FromStr,
+    time::{Duration, UNIX_EPOCH},
 };
 
 /// 二进制文件头，用于检测码表是否发生了变动
@@ -129,12 +129,33 @@ impl Prism {
     }
 }
 
+const VERSION: usize = 1;
+
 // Dict 结构
 #[derive(Debug, Decode, Encode)]
 pub struct Dict {
     prism: Prism,
     candidates: Vec<Candidate>,
     config: Config,
+}
+
+impl TryFrom<(i64, &[u8])> for Dict {
+    type Error = std::io::Error;
+    fn try_from((f_mtime, bs): (i64, &[u8])) -> Result<Dict, Error> {
+        let map_err = |reason: &str| Error::new(ErrorKind::InvalidData, reason);
+        let metadata = &bs[..20];
+        let (DictMeta { head, ver, mtime }, _size): (DictMeta, usize) =
+            bincode::decode_from_slice(&metadata, config::standard())
+                .map_err(|_| map_err("无效的二进制数据[HEAD]"))?;
+        let c_head = ['s', 'e', 'n', 'i', 'm', 'e'];
+        if !(head == c_head && ver == VERSION && (f_mtime == 0 || f_mtime == mtime)) {
+            return Err(Error::other("码表已更新，重新构建二进制文件"));
+        }
+        let buf = &bs[20..];
+        bincode::decode_from_slice::<Dict, _>(buf, config::standard())
+            .map_err(|_| map_err("无效的二进制数据[DICT]"))
+            .map(|a| a.0)
+    }
 }
 
 impl FromStr for Dict {
@@ -200,6 +221,22 @@ impl FromStr for Dict {
     }
 }
 
+// #[cfg(unix)]
+fn get_mtime(path: &PathBuf) -> i64 {
+    let metadata = path.metadata().expect("无法读取码表文件元信息");
+    if let Ok(modi) = metadata.modified() {
+        let duration = modi.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);
+        duration.as_millis() as i64
+    } else {
+        0
+    }
+}
+
+// #[cfg(not(unix))]
+// fn get_mtime(path: &PathBuf) -> i64 {
+//     0
+// }
+
 impl Dict {
     pub fn load<P>(path: P) -> Self
     where
@@ -211,7 +248,7 @@ impl Dict {
             .expect("无效的码表文件路径")
             .to_str()
             .unwrap();
-        let t_mtime = path.metadata().expect("无法读取码表文件元信息").mtime();
+        let mtime = get_mtime(&path);
         let file_dir = path
             .parent()
             .expect("码表文件需要在某个文件夹内")
@@ -220,23 +257,11 @@ impl Dict {
         let bin_path = format!("{}/{}.bin", file_dir, filename);
         File::open(&bin_path)
             .and_then(|mut file| {
-                let map_err = |reason: &str| Error::new(ErrorKind::InvalidData, reason);
-                let mut metadata = [0; 20];
-                file.read_exact(&mut metadata)?;
-                let (DictMeta { head, ver, mtime }, _size): (DictMeta, usize) =
-                    bincode::decode_from_slice(&metadata, config::standard())
-                        .map_err(|_| map_err("无效的二进制数据[HEAD]"))?;
-                let c_head = ['s', 'e', 'n', 'i', 'm', 'e'];
-                let c_ver = 1;
-                if !(head == c_head && ver == c_ver && mtime == t_mtime) {
-                    return Err(Error::other("码表已更新，重新构建二进制文件"));
-                }
                 let mut buf: Vec<u8> = vec![];
-                file.read_to_end(&mut buf)?;
-                // 前二十个字节
-                bincode::decode_from_slice::<Dict, _>(&buf, config::standard())
-                    .map_err(|_| map_err("无效的二进制数据[DICT]"))
-                    .map(|a| a.0)
+                {
+                    file.read_to_end(&mut buf)?;
+                }
+                Self::try_from((mtime, buf.as_slice()))
             })
             .unwrap_or_else(|err| {
                 println!("打开码表二进制文件: {}", err);
@@ -247,8 +272,8 @@ impl Dict {
                 let mut dict_bin = File::create(bin_path).unwrap();
                 let meta = DictMeta {
                     head: ['s', 'e', 'n', 'i', 'm', 'e'],
-                    ver: 1,
-                    mtime: t_mtime,
+                    ver: VERSION,
+                    mtime,
                 };
                 let mut head = [0; 20];
                 bincode::encode_into_slice(meta, &mut head, config::standard()).unwrap();
@@ -476,7 +501,7 @@ zkc 射 1
     // search time: 11.27µs
     #[test]
     fn test_load() {
-        let path = "./test/虎码码表.txt";
+        let path = "../test/虎码码表.txt";
         let time_start = Instant::now();
         let dict = Dict::load(path);
         let time_dict_loaded = Instant::now();
@@ -510,7 +535,7 @@ zkc 射 1
 
     #[test]
     fn test_dict_by_output() {
-        let path = "./test/虎码码表.txt";
+        let path = "../test/虎码码表.txt";
         let dict = Dict::load(path);
         let candidates = dict
             .candidates
@@ -525,8 +550,8 @@ zkc 射 1
             .iter()
             .zip(dict.prism.indices)
             .map(|(k, r)| format!("{}\t{}\t{}", k.iter().collect::<String>(), r.0, r.1));
-        let can_path = "./test/candidates.txt";
-        let prim_path = "./test/prism.txt";
+        let can_path = "../test/candidates.txt";
+        let prim_path = "../test/prism.txt";
         std::fs::write(can_path, candidates).unwrap();
         std::fs::write(prim_path, prims.collect::<Vec<String>>().join("\n")).unwrap();
     }
