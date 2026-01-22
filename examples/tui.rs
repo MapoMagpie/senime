@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
 use senime::{AnalysisResult, Dict, InputAnalyzer};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -27,9 +27,6 @@ pub struct Args {
     /// 当没有权重时则以行的顺序判断编码对应的字词的首选还是候选
     #[arg(short, long)]
     pub table: String,
-    // /// 文本文件，纯文本
-    // #[arg(short, long)]
-    // pub input: String,
 }
 
 #[derive(Debug, Default, Setters)]
@@ -61,6 +58,14 @@ impl Widget for Popup<'_> {
     }
 }
 
+// struct SentenceRecord {
+//     text: String,
+//     origin: Vec<char>,
+//     width: u16,
+//     satrt: Instant,
+//     end: Instant,
+// }
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let dict = Dict::load(args.table);
@@ -81,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal.draw(|frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Fill(1), Constraint::Length(3)])
+                .constraints([Constraint::Fill(1)])
                 .split(frame.area());
 
             let time_start = Instant::now();
@@ -108,13 +113,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (text, last_width, text_height) = sentence_iter.fold::<(Text, u16, u16), _>(
                 (Text::from(""), 0, 1),
                 |(mut text, mut width, mut height), word| {
-                    let word_width = word.width_cjk() as u16;
+                    let mut word_width = word.width_cjk() as u16;
                     if width + word_width > area.width - 2 || word.content == "\n" {
                         text.push_line("");
                         width = 0;
                         height += 1;
                     }
-                    if word.content != "\n" {
+                    if word.content == "\n" {
+                        word_width = 0; // "\n" word_width = 1, fix it to 0;
+                    } else {
                         text.push_span(word);
                     }
                     (text, width + word_width, height)
@@ -124,12 +131,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let sentence_widget = Paragraph::new(text)
                 .scroll((text_height.max(inner_height) - inner_height, 0))
                 // .wrap(Wrap { trim: false })
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!("成句 [{:?}]", elapsed)),
-                );
+                .block(Block::default().borders(Borders::ALL).title(format!(
+                    "成句 [{:?}], {}",
+                    elapsed,
+                    input.iter().collect::<String>()
+                )));
             frame.render_widget(sentence_widget, chunks[0]);
+            frame.set_cursor_position((
+                area.x + last_width + 1,
+                area.y + text_height.min(area.height - 2),
+            ));
 
             // candidates
             if let Some(candidates) = candidates
@@ -177,29 +188,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .border_style(Style::new().red());
                 frame.render_widget(popup, popup_area);
             }
-
-            // input
-            let (input_width, mut new_input) = input.iter().rfold::<(u16, Vec<char>), _>(
-                (0, vec![]),
-                |(mut width, mut chars), word| {
-                    if width + 5 < area.width {
-                        let word_width = word.width_cjk().unwrap_or(0) as u16;
-                        if width + 5 + word_width < area.width {
-                            chars.push(*word);
-                            width += word_width;
-                        }
-                    }
-                    (width, chars)
-                },
-            );
-            new_input.reverse();
-
-            let input_widget =
-                Paragraph::new(format!("> {}", new_input.iter().collect::<String>()))
-                    .block(Block::default().borders(Borders::ALL).title("输入"));
-
-            frame.render_widget(input_widget, chunks[1]);
-            frame.set_cursor_position((input_width + 3, chunks[1].y + 1));
         })?;
         // 事件处理
         // if event::poll(Duration::from_millis(100))? {
@@ -223,7 +211,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         sentence_rec.pop();
                         input.clear();
                     } else {
-                        input.pop();
+                        input.clear();
                     }
                 }
                 KeyCode::Char(c) => input.push(c),
