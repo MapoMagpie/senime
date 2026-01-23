@@ -129,7 +129,7 @@ impl Prism {
     }
 }
 
-const VERSION: usize = 1;
+const VERSION: usize = 2;
 
 // Dict 结构
 #[derive(Debug, Decode, Encode)]
@@ -383,6 +383,8 @@ fn default_punctuations() -> HashMap<char, Vec<String>> {
         ('\\', vec!["、", "\\"]),
         ('|', vec!["·", "|"]),
         ('_', vec!["——", "_"]),
+        ('<', vec!["《", "<"]),
+        ('>', vec!["》", ">"]),
     ];
     let mut map = HashMap::new();
     punctuations.into_iter().for_each(|(ch, puncs)| {

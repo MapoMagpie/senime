@@ -1,8 +1,8 @@
+use std::borrow::Borrow;
 use std::fs::OpenOptions;
-use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -13,12 +13,12 @@ use ratatui::Terminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::CrosstermBackend;
-use ratatui::style::{Style, Stylize};
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -27,6 +27,10 @@ pub struct Args {
     /// 当没有权重时则以行的顺序判断编码对应的字词的首选还是候选
     #[arg(short, long)]
     pub table: String,
+    /// 是否接受输入流，并将输入流的数据作为预设文本
+    /// 此功能类似赛码器，将以灰色的文本展示这些预设文本
+    #[arg(short, long, action = ArgAction::SetTrue)]
+    pub stdin: bool,
 }
 
 #[derive(Debug, Default, Setters)]
@@ -58,15 +62,30 @@ impl Widget for Popup<'_> {
 }
 
 struct SentenceRecord {
-    text: String,
+    text: Vec<char>,
     origin: Vec<char>,
-    width: u16,
+    width: Vec<usize>,
     satrt: Instant,
     end: Instant,
 }
 
+fn read_stdin() -> Result<String, std::io::Error> {
+    use std::io::Read;
+    let mut stdin = std::io::stdin();
+    let mut str = String::new();
+    stdin.read_to_string(&mut str)?;
+    Ok(str)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let mut preset_text: Option<Vec<char>> = if args.stdin {
+        read_stdin().map(|str| Some(str.chars().collect())).unwrap()
+    } else {
+        None
+    };
+    let mut need_wrapped_preset_text = true;
+
     let dict = Dict::load(args.table);
     let an = InputAnalyzer::new(dict);
     enable_raw_mode()?;
@@ -82,13 +101,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut input: Vec<char> = vec![];
     let mut input_start = Instant::now();
     loop {
-        let mut pending: String = String::new();
-        let mut pending_width = 0;
+        let mut pending: Vec<char> = vec![];
+        let mut pending_width: Vec<usize> = vec![];
         terminal.draw(|frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Fill(1), Constraint::Length(4)])
                 .split(frame.area());
+
+            if need_wrapped_preset_text && preset_text.is_some() {
+                let (wrapped, _, _) = wrap(
+                    preset_text
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|s| (s, s.width().unwrap_or(0))),
+                    chunks[0].width as usize - 2,
+                );
+                preset_text = Some(wrapped);
+                need_wrapped_preset_text = false;
+            }
 
             let AnalysisResult {
                 candidates,
@@ -97,9 +129,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let poped = segments.pop();
             if segments.len() > 0 {
                 sentence_rec.extend(segments.into_iter().map(|seg| {
-                    let width = seg.0.width_cjk() as u16;
+                    let (width, text): (Vec<usize>, Vec<char>) =
+                        seg.0.chars().map(|c| (c.width().unwrap_or(0), c)).unzip();
                     SentenceRecord {
-                        text: seg.0,
+                        text,
                         origin: seg.1,
                         width,
                         satrt: input_start,
@@ -109,38 +142,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some((text, chars)) = poped {
                 input = chars;
-                pending = text;
-                pending_width = pending.width_cjk() as u16;
+                pending = text.chars().collect();
+                pending_width = pending.iter().map(|c| c.width().unwrap_or(0)).collect();
             }
 
             // sentence
             let area = chunks[0];
-            let sentence_iter = sentence_rec
+
+            let aa = sentence_rec
                 .iter()
-                .map::<(Span, u16), _>(|se| (Span::from(se.text.clone()), se.width))
-                .chain(std::iter::once((
-                    Span::from(&pending).red().underlined(),
-                    pending_width,
-                )));
-            let (text, last_width, text_height) = sentence_iter.fold::<(Text, u16, u16), _>(
-                (Text::from(""), 0, 1),
-                |(mut text, mut width, mut height), (word, mut word_width)| {
-                    if width + word_width > area.width - 2 || word.content == "\n" {
-                        text.push_line("");
-                        width = 0;
-                        height += 1;
-                    }
-                    if word.content == "\n" {
-                        word_width = 0; // "\n" word_width = 1, fix it to 0;
-                    } else {
-                        text.push_span(word);
-                    }
-                    (text, width + word_width, height)
-                },
-            );
+                .map(|sen| sen.text.iter().zip(sen.width.iter()))
+                .flatten()
+                .chain(pending.iter().zip(pending_width.iter()));
+            let wrapped = wrap(aa, area.width as usize - 2);
+            let last_width = wrapped.1 as u16;
+            let lines = wrapped.2 as u16;
+            let wrapped = wrapped.0;
+
+            let text: Text = create_diff_text(wrapped, preset_text.as_ref(), pending.len());
             let inner_height = area.height - 2;
             let sentence_widget = Paragraph::new(text)
-                .scroll((text_height.max(inner_height) - inner_height, 0))
+                .scroll(((lines + 1).max(inner_height) - inner_height, 0))
                 .block(Block::default().borders(Borders::ALL).title(format!(
                     "成句 [输入中:{}]",
                     input.iter().collect::<String>()
@@ -148,7 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame.render_widget(sentence_widget, chunks[0]);
             frame.set_cursor_position((
                 area.x + last_width.max(1),
-                area.y + text_height.min(area.height - 2),
+                area.y + lines.min(area.height - 3),
             ));
 
             // measurements
@@ -173,18 +195,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         cand_line
                             .push_span(Span::from(cand.code.clone().split_off(input.len())).red());
                     }
-                    cand_max_width = cand_line.width_cjk().max(cand_max_width);
+                    cand_max_width = cand_line.width().max(cand_max_width);
                     cand_text.push(cand_line);
                 }
                 let popup_width = (cand_max_width as u16 + 2).min((area.width - 4) / 2);
-                let mut popup_height = (area.height - (text_height + 2)).min(cand_count + 2);
-                let mut popup_y = (area.y + text_height + 1).max(2);
+                let mut popup_height = (area.height - (lines + 2)).min(cand_count + 2);
+                let mut popup_y = (area.y + lines + 1).max(2);
                 let popup_x = (area.x + last_width)
                     .max(1)
                     .min(area.width - popup_width - 1);
-                if text_height + 1 > area.height / 2 {
-                    popup_height = (text_height - 1).min(area.height - 3).min(cand_count + 2);
-                    popup_y = area.y + (text_height.min(area.height - 2)) - popup_height;
+                if lines + 1 > area.height / 2 {
+                    popup_height = (lines - 1).min(area.height - 3).min(cand_count + 2);
+                    popup_y = area.y + ((lines - 1).min(area.height - 3)) - popup_height;
                     if popup_height - 2 < cand_count {
                         let _ = cand_text.split_off((popup_height - 2) as usize);
                     }
@@ -206,8 +228,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         // 事件处理
         // if event::poll(Duration::from_millis(100))? {
-        if let Event::Key(key) = event::read()? {
-            match key.code {
+        match event::read()? {
+            Event::Resize(_, _) => {
+                need_wrapped_preset_text = true;
+            }
+            Event::Key(key) => match key.code {
                 KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                     break;
                 }
@@ -226,9 +251,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         input.clear();
                     }
                     sentence_rec.push(SentenceRecord {
-                        text: "\n".to_string(),
+                        text: vec!['\n'],
                         origin: vec!['\n'],
-                        width: 0,
+                        width: vec![0],
                         satrt: Instant::now(),
                         end: Instant::now(),
                     });
@@ -248,7 +273,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     input.push(c)
                 }
                 _ => {}
-            }
+            },
+            _ => {}
         }
     }
 
@@ -257,14 +283,135 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
     }
-    let bs = sentence_rec
-        .iter()
-        .map(|se| se.text.as_bytes().to_vec())
-        .flatten()
-        .collect::<Vec<u8>>();
-    io::stdout().write(&bs)?;
-    io::stdout().write_all(b"\n")?;
+    // let bs = sentence_rec
+    //     .iter()
+    //     .map(|se| se.text.as_bytes().to_vec())
+    //     .flatten()
+    //     .collect::<Vec<u8>>();
+    // io::stdout().write(&bs)?;
+    // io::stdout().write_all(b"\n")?;
     Ok(())
+}
+
+fn push_to_text(text: &mut Text<'_>, chars: &[char], style: Option<Style>) {
+    if chars.is_empty() {
+        return;
+    }
+    let mut start = 0;
+    for i in 0..chars.len() {
+        if chars[i] == '\n' {
+            let mut line = Span::from(chars[start..i].iter().collect::<String>());
+            if let Some(style) = style {
+                line = line.style(style);
+            }
+            text.push_span(line);
+            text.push_line("");
+            start = i + 1;
+        }
+    }
+    if start < chars.len() {
+        let mut line = Span::from(chars[start..].iter().collect::<String>());
+        if let Some(style) = style {
+            line = line.style(style);
+        }
+        text.push_span(line);
+    }
+}
+
+fn create_diff_text(chars: Vec<char>, other: Option<&Vec<char>>, pending_chars: usize) -> Text<'_> {
+    if other.is_none() {
+        let mut text = Text::from("");
+        let end = chars.len() - pending_chars;
+        push_to_text(&mut text, &chars[..end], None);
+        if pending_chars > 0 {
+            push_to_text(&mut text, &chars[end..], Some(Color::Green.into()));
+        }
+        return text;
+    }
+    let preset = other.unwrap();
+    let mut start = 0;
+    let mut text = Text::from("");
+    for i in 0..chars.len().min(preset.len()) {
+        let (l, r) = (chars[i], preset[i]);
+        if l != r {
+            if start < i {
+                push_to_text(&mut text, &chars[start..i], None);
+            }
+            text.push_span(Span::from(l.to_string()).on_light_red().crossed_out());
+            start = i + 1;
+        }
+    }
+    if start < chars.len() {
+        push_to_text(&mut text, &chars[start..], None);
+    }
+    if chars.len() < preset.len() {
+        push_to_text(
+            &mut text,
+            &preset[chars.len()..],
+            Some(Color::DarkGray.into()),
+        );
+    }
+    text
+}
+
+#[cfg(test)]
+mod test {
+    use unicode_width::UnicodeWidthStr;
+
+    use crate::create_diff_text;
+
+    #[test]
+    fn test_create_diff_text() {
+        let left = "hello, world".chars().collect::<Vec<_>>();
+        let right = "hella,_world, gray".chars().collect::<Vec<_>>();
+        let text = create_diff_text(left, Some(&right), 0);
+        println!("text: {text:?}");
+    }
+
+    #[test]
+    fn test_punc_length() {
+        let punc = "……";
+        let width_cjk = punc.width_cjk();
+        let width2 = punc.width();
+        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+        let punc = "——";
+        let width_cjk = punc.width_cjk();
+        let width2 = punc.width();
+        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+        let punc = "你好";
+        let width_cjk = punc.width_cjk();
+        let width2 = punc.width();
+        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+        let punc = "你好abc";
+        let width_cjk = punc.width_cjk();
+        let width2 = punc.width();
+        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+    }
+}
+
+fn wrap<I, C, U>(chars: I, limit: usize) -> (Vec<char>, usize, usize)
+where
+    I: IntoIterator<Item = (C, U)>,
+    C: Borrow<char>,
+    U: Borrow<usize>,
+{
+    let (mut wrapped, mut last_width, mut lines) = (vec![], 0, 1);
+    for (cha, wid) in chars {
+        let cha = *cha.borrow();
+        let wid = *wid.borrow();
+        if cha == '\n' || last_width + wid > limit {
+            last_width = 0;
+            lines += 1;
+            if cha != '\n' {
+                wrapped.push('\n');
+            }
+        }
+        if cha != '\n' {
+            last_width += wid;
+        }
+        wrapped.push(cha);
+    }
+    (wrapped, last_width, lines)
 }
 
 /// 计量速度.
@@ -287,7 +434,7 @@ fn calc_measurements(records: &[SentenceRecord]) -> Measurement {
             .iter()
             .fold((0, 0, 0), |(total_text, total_code, space_times), rec| {
                 (
-                    total_text + rec.text.chars().count(),
+                    total_text + rec.text.len(),
                     total_code + rec.origin.len(),
                     space_times,
                 )
