@@ -1,6 +1,6 @@
 use std::fs::OpenOptions;
 use std::io::{self, Write};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
@@ -51,20 +51,19 @@ impl Widget for Popup<'_> {
             .borders(Borders::ALL)
             .border_style(self.border_style);
         Paragraph::new(self.content)
-            // .wrap(Wrap { trim: true })
             .style(self.style)
             .block(block)
             .render(area, buf);
     }
 }
 
-// struct SentenceRecord {
-//     text: String,
-//     origin: Vec<char>,
-//     width: u16,
-//     satrt: Instant,
-//     end: Instant,
-// }
+struct SentenceRecord {
+    text: String,
+    origin: Vec<char>,
+    width: u16,
+    satrt: Instant,
+    end: Instant,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -79,41 +78,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut sentence_rec: Vec<(String, Vec<char>)> = vec![];
+    let mut sentence_rec: Vec<SentenceRecord> = vec![];
     let mut input: Vec<char> = vec![];
+    let mut input_start = Instant::now();
     loop {
         let mut pending: String = String::new();
+        let mut pending_width = 0;
         terminal.draw(|frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Fill(1)])
+                .constraints([Constraint::Fill(1), Constraint::Length(4)])
                 .split(frame.area());
 
-            let time_start = Instant::now();
             let AnalysisResult {
                 candidates,
                 mut segments,
             } = an.analyze(&input);
             let poped = segments.pop();
             if segments.len() > 0 {
-                sentence_rec.extend(segments);
+                sentence_rec.extend(segments.into_iter().map(|seg| {
+                    let width = seg.0.width_cjk() as u16;
+                    SentenceRecord {
+                        text: seg.0,
+                        origin: seg.1,
+                        width,
+                        satrt: input_start,
+                        end: Instant::now(),
+                    }
+                }));
             }
             if let Some((text, chars)) = poped {
                 input = chars;
                 pending = text;
+                pending_width = pending.width_cjk() as u16;
             }
-            let elapsed = time_start.elapsed();
 
             // sentence
             let area = chunks[0];
             let sentence_iter = sentence_rec
                 .iter()
-                .map(|(s, _)| Span::from(s))
-                .chain(std::iter::once(Span::from(&pending).red().underlined()));
+                .map::<(Span, u16), _>(|se| (Span::from(se.text.clone()), se.width))
+                .chain(std::iter::once((
+                    Span::from(&pending).red().underlined(),
+                    pending_width,
+                )));
             let (text, last_width, text_height) = sentence_iter.fold::<(Text, u16, u16), _>(
                 (Text::from(""), 0, 1),
-                |(mut text, mut width, mut height), word| {
-                    let mut word_width = word.width_cjk() as u16;
+                |(mut text, mut width, mut height), (word, mut word_width)| {
                     if width + word_width > area.width - 2 || word.content == "\n" {
                         text.push_line("");
                         width = 0;
@@ -130,17 +141,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let inner_height = area.height - 2;
             let sentence_widget = Paragraph::new(text)
                 .scroll((text_height.max(inner_height) - inner_height, 0))
-                // .wrap(Wrap { trim: false })
                 .block(Block::default().borders(Borders::ALL).title(format!(
-                    "成句 [{:?}], {}",
-                    elapsed,
+                    "成句 [输入中:{}]",
                     input.iter().collect::<String>()
                 )));
             frame.render_widget(sentence_widget, chunks[0]);
             frame.set_cursor_position((
-                area.x + last_width + 1,
+                area.x + last_width.max(1),
                 area.y + text_height.min(area.height - 2),
             ));
+
+            // measurements
+            let measurement = calc_measurements(&sentence_rec);
+            let measurement_widget = Paragraph::new(measurement.to_string())
+                .block(Block::default().borders(Borders::ALL).title("计量"));
+            frame.render_widget(measurement_widget, chunks[1]);
 
             // candidates
             if let Some(candidates) = candidates
@@ -201,20 +216,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 KeyCode::Enter => {
                     if !pending.is_empty() {
-                        sentence_rec.push((pending, input.clone()));
+                        sentence_rec.push(SentenceRecord {
+                            text: pending,
+                            origin: input.to_vec(),
+                            width: pending_width,
+                            satrt: input_start,
+                            end: Instant::now(),
+                        });
                         input.clear();
                     }
-                    sentence_rec.push(("\n".to_string(), vec!['\n']));
+                    sentence_rec.push(SentenceRecord {
+                        text: "\n".to_string(),
+                        origin: vec!['\n'],
+                        width: 0,
+                        satrt: Instant::now(),
+                        end: Instant::now(),
+                    });
                 }
                 KeyCode::Backspace => {
                     if pending.is_empty() {
                         sentence_rec.pop();
                         input.clear();
                     } else {
-                        input.clear();
+                        input.pop();
                     }
                 }
-                KeyCode::Char(c) => input.push(c),
+                KeyCode::Char(c) => {
+                    if input.is_empty() {
+                        input_start = Instant::now();
+                    }
+                    input.push(c)
+                }
                 _ => {}
             }
         }
@@ -227,10 +259,78 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let bs = sentence_rec
         .iter()
-        .map(|(s, _c)| s.as_bytes().to_vec())
+        .map(|se| se.text.as_bytes().to_vec())
         .flatten()
         .collect::<Vec<u8>>();
     io::stdout().write(&bs)?;
     io::stdout().write_all(b"\n")?;
     Ok(())
+}
+
+/// 计量速度.
+/// 需要的信息:
+///   开始时间-结束时间
+///   总字数
+///   总输入
+///   码长
+///   顶字次数?
+///   空格次数?
+///   回退次数?
+fn calc_measurements(records: &[SentenceRecord]) -> Measurement {
+    let (start, end) = if let (Some(first), Some(last)) = (records.first(), records.last()) {
+        (first.satrt, last.end)
+    } else {
+        (Instant::now(), Instant::now())
+    };
+    let (total_text, total_code, _space_times) =
+        records
+            .iter()
+            .fold((0, 0, 0), |(total_text, total_code, space_times), rec| {
+                (
+                    total_text + rec.text.chars().count(),
+                    total_code + rec.origin.len(),
+                    space_times,
+                )
+            });
+
+    let duration = end.duration_since(start);
+    let wpm = total_text as f32 / (duration.as_secs_f32() / 60.0);
+    let kps = total_code as f32 / duration.as_secs_f32();
+    let avg_len = total_code as f32 / total_text as f32;
+
+    Measurement {
+        // start,
+        // end,
+        duration,
+        total_text,
+        total_code,
+        wpm,
+        kps,
+        avg_len,
+    }
+}
+
+struct Measurement {
+    // start: Instant,
+    // end: Instant,
+    duration: Duration,
+    total_text: usize,
+    total_code: usize,
+    kps: f32,
+    wpm: f32,
+    avg_len: f32,
+}
+
+impl ToString for Measurement {
+    fn to_string(&self) -> String {
+        format!(
+            "  耗时: [{}]秒, 速度: [{:.2}]字/分, 击键: [{:.2}]键/秒\n  总字数: [{}], 总输入: [{}], 平均码长: [{:.2}]",
+            self.duration.as_secs(),
+            self.wpm,
+            self.kps,
+            self.total_text,
+            self.total_code,
+            self.avg_len,
+        )
+    }
 }
