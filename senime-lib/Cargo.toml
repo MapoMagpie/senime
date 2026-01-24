@@ -8,3 +8,4 @@ include = ["src/**/*", "README.md"]
 bincode = "2.0.1"
 serde = { version = "1.0.228", features = ["std", "derive"] }
 toml = "0.9.10"
+ahash = "0.8.12"

@@ -135,7 +135,7 @@ const VERSION: usize = 2;
 #[derive(Debug, Decode, Encode)]
 pub struct Dict {
     prism: Prism,
-    candidates: Vec<Candidate>,
+    pub candidates: Vec<Candidate>,
     config: Config,
 }
 
