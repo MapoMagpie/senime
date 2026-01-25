@@ -1,0 +1,15 @@
+[package]
+name = "senime-encode"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+default-run = "senienc"
+include = ["src/**/*", "README.md"]
+
+[[bin]]
+name = "senienc"
+path = "src/main.rs"
+
+[dependencies]
+senime-lib = { path = "../senime-lib" }
+clap = { version = "4.5.35", features = ["derive"] }

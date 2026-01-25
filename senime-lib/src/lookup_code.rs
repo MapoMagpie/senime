@@ -20,7 +20,7 @@ pub struct Looker {
     code_trie: Trie,
 }
 
-const INFINITY: usize = 10000000;
+const INFINITY: usize = 100000000;
 impl Looker {
     pub fn new(candidates: &[Candidate]) -> Self {
         let mut map: AHashMap<String, Vec<CodePos>> = AHashMap::new();
@@ -61,21 +61,17 @@ impl Looker {
     pub fn analyze(&self, chars: &[char]) -> Vec<Segment> {
         let char_len = chars.len();
         // dp[i]表示前i个字符的最小编码长度
-        let mut dp: Vec<Segment> =
-            vec![
-                Segment::new(0..1, "".to_string(), "".to_string(), 0, false, INFINITY);
-                char_len + 1
-            ];
+        let mut dp: Vec<Segment> = vec![Segment::default(); char_len + 1];
         dp[0].cost = 0; // 空字符串的编码长度为0
         // 记录分词路径
         let mut path: Vec<Option<usize>> = vec![None; char_len + 1];
         let mut j_cursor = 0;
         for i in 1..=char_len {
             // 不存在于码表中的字符单独作为一段，如标点符号
-            // 另外，如果一个字不在码表里，虽然也可以进行分割，但是单字虽然不在码表，却可能包含在某个词里，因此不以无编码的字来分割
+            // 另外，如果一个单字不在码表里，却可能包含在某个词里，因此不以无编码的字来分割
             // is_alphanumeric 指的是汉字与字母数字类的char，不包括标点符号emoji等
             let cha = &chars[i - 1];
-            if !cha.is_alphanumeric() {
+            if !cha.is_alphanumeric() || cha.is_control() {
                 dp[i] = Segment::new((i - 1)..i, cha.to_string(), cha.to_string(), 0, true, 0);
                 path[i] = Some(i - 1);
                 j_cursor = i;
@@ -84,6 +80,7 @@ impl Looker {
             let mut j = j_cursor;
             while j < i {
                 let word = chars[j..i].iter().collect::<String>();
+                // println!("[{j}..{i}] {word}, j [{j}] cost: {}", dp[j].cost);
                 if let Some(code_pos) = self.get(word.as_str()) {
                     // 找出下一单字对应的编码的首个字
                     let next_code = (i < char_len)
@@ -96,20 +93,57 @@ impl Looker {
                         .unwrap_or("".to_string());
                     let (code_cost, no_space, CodePos(code, pos)) =
                         self.code_cost(code_pos, next_code.as_str());
-                    let curr_cost = dp[j].cost + code_cost;
+                    let j_cost = if i - j == 1 && dp[j].cost == INFINITY {
+                        if dp[i].cost < INFINITY {
+                            println!("asdjalsd: {:?}", dp[i]);
+                            j += 1;
+                            continue;
+                        }
+                        0
+                    } else {
+                        dp[j].cost
+                    };
+                    let curr_cost = j_cost + code_cost;
+                    // println!(
+                    //     "word: [{}] code cost: [{}], befo cost: [{}], curr cost: [{}]",
+                    //     word, code_cost, dp[j].cost, curr_cost
+                    // );
                     if curr_cost < dp[i].cost {
+                        // println!("set [{i}]> {j} cost: {}, word: {word}", curr_cost);
                         dp[i] = Segment::new(j..i, word, code, pos, no_space, curr_cost);
                         path[i] = Some(j);
                     }
+                } else if i - j == 1 && path[i].is_none() {
+                    // 单字不存在于码表，也可能是英文字母
+                    // 进入下一轮时，可能整个词里包含这个字，这种情况下 path[i] 表现为Some
+                    path[i] = Some(j);
+                    dp[i] = Segment::new(j..i, word.clone(), word.clone(), 0, true, INFINITY);
                 }
                 j += 1;
             }
         }
+        // dp.iter()
+        //     .zip(path.iter())
+        //     .enumerate()
+        //     .for_each(|(i, (seg, path))| {
+        //         println!(
+        //             "[{i}] path:{path:?} range: {:?} text: {} code: {} cost: {}",
+        //             seg.range, seg.text, seg.code, seg.cost
+        //         );
+        //     });
         // 回溯找出分词方案
         let mut segments = vec![];
         let mut i = char_len;
         while i > 0 {
-            let j: usize = path[i].expect("分词时出现错误");
+            let j: usize = path[i].unwrap_or_else(|| {
+                panic!(
+                    "分词时出现错误: [{}] in [{}]",
+                    chars[i.min(char_len - 1)],
+                    chars[(i - 10).max(0)..(i + 10).min(char_len - 1)]
+                        .iter()
+                        .collect::<String>()
+                )
+            });
             segments.push(dp.swap_remove(i));
             i = j;
         }
@@ -155,6 +189,19 @@ pub struct Segment {
     pub cost: usize,
 }
 
+impl Default for Segment {
+    fn default() -> Self {
+        Self {
+            range: Default::default(),
+            text: Default::default(),
+            code: Default::default(),
+            pos: Default::default(),
+            auto_select: true,
+            cost: INFINITY,
+        }
+    }
+}
+
 impl Segment {
     fn new(
         range: Range<usize>,
@@ -162,7 +209,7 @@ impl Segment {
         code: String,
         pos: usize,
         auto_select: bool,
-        length: usize,
+        cost: usize,
     ) -> Self {
         Self {
             range,
@@ -170,7 +217,7 @@ impl Segment {
             code,
             pos,
             auto_select,
-            cost: length,
+            cost,
         }
     }
 }
@@ -198,6 +245,7 @@ mod test {
             ("hkdm", "公民", 0),
             ("djv", "喻", 0),
             ("jdm", "人民网", 0),
+            ("jdma", "人民网world", 0),
         ];
         let mut cands: Vec<_> = data
             .iter()
@@ -215,7 +263,7 @@ mod test {
     fn test_analyze_segments() {
         let cands = create_candidates();
         let looker = Looker::new(&cands);
-        let text = "中华人民是中华人民共和国的公民，共和国"
+        let text = "中华人民是中华人民共和国的公民，共和hello国人民网world。"
             .chars()
             .collect::<Vec<_>>();
         let segments = looker.analyze(text.as_slice());
@@ -228,7 +276,15 @@ mod test {
             "的",
             "公民",
             "，",
-            "共和国",
+            "共和",
+            "h",
+            "e",
+            "l",
+            "l",
+            "o",
+            "国",
+            "人民网world",
+            "。",
         ];
         assert_eq!(ranges, expected);
     }
@@ -236,9 +292,11 @@ mod test {
     fn test_with_file_analyze_segments() {
         let dict = Dict::load("../test/虎码码表.txt");
         let looker = Looker::new(&dict.candidates);
-        let text = "当第一片梧桐叶染上金黄，当清晨的风带上丝丝凉意，当枝头的果实缀满枝头，我们便知道，秋，悄无声息地来了。秋天没有春天的姹紫嫣红，没有夏天的热烈奔放，没有冬天的银装素裹，却有着独属于自己的温柔与厚重，像一杯陈年的酒，越品越有滋味，像一首悠远的诗，越读越有深意。秋日的清晨，薄雾缭绕，天地间仿佛蒙上了一层轻纱，朦胧而美好。路边的草木褪去了盛夏的翠绿，换上了五彩的盛装，金黄的银杏、火红的枫叶、深褐的松柏，交织在一起，构成了一幅绚丽多彩的画卷。踩在铺满落叶的小路上，脚下发出“沙沙”的声响，那是秋天的私语，是岁月的回响。午后的阳光变得格外温柔，不再像盛夏那样刺眼，透过枝叶的缝隙洒下来，在地上投下斑驳的光影。坐在院子里，晒着太阳，看着落叶随风飘落，心中没有丝毫的伤感，反而多了一份从容与淡然。秋天是收获的季节，田埂上，金黄的稻田随风起伏，像一片金色的海洋；果园里，红彤彤的苹果、黄澄澄的梨子、沉甸甸的葡萄，挂满了枝头，散发着诱人的香气，那是汗水浇灌的成果，是岁月馈赠的惊喜。秋天也是沉淀的季节，褪去了盛夏的浮躁，人心也变得沉静下来。我们开始复盘过往，整理心情，放下不必要的执念，珍藏那些温暖的回忆，为接下来的日子积蓄力量。秋意渐浓，岁月沉香，愿我们能在这温柔的秋日里，收获成长，珍藏美好，不负时光，不负自己。"
-            .chars()
-            .collect::<Vec<_>>();
+        let text = r#"奶煺妫约词鼓阋丫龉攀笫伲灰褂行俺嘧又摹保部梢愿吒咝诵说目吹"#;
+        // let text = r#"噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦"#;
+        // let text = r#"Ｋ纳贸ぶΓ匀皇窃谑闱榈氖坏庖黄窦涔适率渌凳录＜蚱樱闯渎哦"#;
+        // let text = "当第一片梧桐叶染上金黄，当清晨的风带上丝丝凉意，当枝头的果实缀满枝头，我们便知道，秋，悄无声息地来了。秋天没有春天的姹紫嫣红，没有夏天的热烈奔放，没有冬天的银装素裹，却有着独属于自己的温柔与厚重，像一杯陈年的酒，越品越有滋味，像一首悠远的诗，越读越有深意。秋日的清晨，薄雾缭绕，天地间仿佛蒙上了一层轻纱，朦胧而美好。路边的草木褪去了盛夏的翠绿，换上了五彩的盛装，金黄的银杏、火红的枫叶、深褐的松柏，交织在一起，构成了一幅绚丽多彩的画卷。踩在铺满落叶的小路上，脚下发出“沙沙”的声响，那是秋天的私语，是岁月的回响。午后的阳光变得格外温柔，不再像盛夏那样刺眼，透过枝叶的缝隙洒下来，在地上投下斑驳的光影。坐在院子里，晒着太阳，看着落叶随风飘落，心中没有丝毫的伤感，反而多了一份从容与淡然。秋天是收获的季节，田埂上，金黄的稻田随风起伏，像一片金色的海洋；果园里，红彤彤的苹果、黄澄澄的梨子、沉甸甸的葡萄，挂满了枝头，散发着诱人的香气，那是汗水浇灌的成果，是岁月馈赠的惊喜。秋天也是沉淀的季节，褪去了盛夏的浮躁，人心也变得沉静下来。我们开始复盘过往，整理心情，放下不必要的执念，珍藏那些温暖的回忆，为接下来的日子积蓄力量。秋意渐浓，岁月沉香，愿我们能在这温柔的秋日里，收获成长，珍藏美好，不负时光，不负自己。"
+        let text = text.chars().collect::<Vec<_>>();
         let segments = looker.analyze(text.as_slice());
         let ranges = segments
             .iter()
