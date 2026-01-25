@@ -28,7 +28,9 @@ fn main() {
     let args = Args::parse();
     let start = Instant::now();
     let dict = Dict::load(args.table);
+    // let looker_new = Instant::now();
     let looker = Looker::new(&dict.candidates);
+    // println!("初始化looker耗时: {:?}", looker_new.elapsed());
     let load_table_time = Instant::now().duration_since(start);
     println!(
         "读取码表成功，加载[{}]个条目, 耗时[{:?}]",
@@ -77,12 +79,12 @@ fn main() {
             // 检查是否可以顶字上屏，将当前段的code与下一段的code首个字符相连，在字典中查询是否存在
             // 如果不存在表示可以顶字上屏，此方式无需检测下一段是否是标点符号
             colors_id += 1;
-            code_len += seg.code.chars().count(); // 没有按char来，不严谨
+            code_len += seg.code.len();
             let mut str = colors[colors_id % colors.len()].to_string();
             if args.with_text {
-                str += &seg.text;
+                str.extend(&seg.text);
             }
-            str += &seg.code;
+            str.extend(&seg.code);
             // 需要空格
             if !seg.auto_select && seg.pos == 0 {
                 use_space_times += 1;

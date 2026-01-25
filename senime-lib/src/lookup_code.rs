@@ -6,27 +6,30 @@
 // aamc>世界
 // cee>后面
 // 输入"你好后面" aam接c时触发世界，表示不能顶字需要空格
-use std::{ops::Range, ptr};
+use std::{borrow::Borrow, ops::Range, ptr};
 
 use ahash::AHashMap;
 
 use crate::dict::Candidate;
 
 #[derive(Debug, Clone)]
-struct CodePos(String, usize);
+struct CodePos(Vec<char>, usize);
 
 pub struct Looker {
-    map: AHashMap<String, Vec<CodePos>>,
+    map: AHashMap<Vec<char>, Vec<CodePos>>,
     code_trie: Trie,
+    // 码表中最长的字词，将用于动态规划时的长度
+    max_text_len: usize,
 }
 
 const INFINITY: usize = 100000000;
 impl Looker {
     pub fn new(candidates: &[Candidate]) -> Self {
-        let mut map: AHashMap<String, Vec<CodePos>> = AHashMap::new();
+        let mut map: AHashMap<Vec<char>, Vec<CodePos>> = AHashMap::new();
         let mut code_trie = Trie::new();
         let mut code = "";
         let mut pos = 0;
+        let mut max_text_len = 0;
 
         for i in 0..candidates.len() {
             let cand = &candidates[i];
@@ -37,23 +40,30 @@ impl Looker {
                 code = &cand.code;
                 pos = 0;
             }
-            match map.get_mut(cand.text.as_str()) {
+            let chars = cand.text.chars().collect::<Vec<_>>();
+            let codes = cand.code.chars().collect::<Vec<_>>();
+            max_text_len = max_text_len.max(chars.len());
+            match map.get_mut(&chars) {
                 Some(v) => {
-                    v.push(CodePos(cand.code.clone(), pos));
+                    v.push(CodePos(codes, pos));
                 }
                 None => {
-                    map.insert(cand.text.clone(), vec![CodePos(cand.code.clone(), pos)]);
+                    map.insert(chars, vec![CodePos(codes, pos)]);
                 }
             }
         }
-        Self { map, code_trie }
+        Self {
+            map,
+            code_trie,
+            max_text_len,
+        }
     }
 
-    fn get<'a>(&'a self, text: &str) -> Option<&'a Vec<CodePos>> {
+    fn get<'a>(&'a self, text: &[char]) -> Option<&'a Vec<CodePos>> {
         let codes = self.map.get(text);
         codes
     }
-    fn get_single<'a>(&'a self, text: &str) -> Option<&'a CodePos> {
+    fn get_single<'a>(&'a self, text: &[char]) -> Option<&'a CodePos> {
         let codes = self.map.get(text);
         codes.map(|c| &c[0])
     }
@@ -71,31 +81,28 @@ impl Looker {
             // 另外，如果一个单字不在码表里，却可能包含在某个词里，因此不以无编码的字来分割
             // is_alphanumeric 指的是汉字与字母数字类的char，不包括标点符号emoji等
             let cha = &chars[i - 1];
-            if !cha.is_alphanumeric() || cha.is_control() {
-                dp[i] = Segment::new((i - 1)..i, cha.to_string(), cha.to_string(), 0, true, 0);
+            if !cha.is_alphanumeric() {
+                dp[i] = Segment::new((i - 1)..i, vec![*cha; 1], vec![*cha; 1], 0, true, 0);
                 path[i] = Some(i - 1);
                 j_cursor = i;
                 continue;
             }
+            if i - j_cursor > self.max_text_len {
+                j_cursor += 1;
+            }
             let mut j = j_cursor;
             while j < i {
-                let word = chars[j..i].iter().collect::<String>();
-                // println!("[{j}..{i}] {word}, j [{j}] cost: {}", dp[j].cost);
-                if let Some(code_pos) = self.get(word.as_str()) {
+                let word = &chars[j..i];
+                // println!("[{j}..{i}] {word:?}, j [{j}] cost: {}", dp[j].cost);
+                if let Some(code_pos) = self.get(word) {
                     // 找出下一单字对应的编码的首个字
                     let next_code = (i < char_len)
-                        .then(|| {
-                            self.get_single(chars[i].to_string().as_str())
-                                .map(|cp| cp.0.chars().next().map(|c| c.to_string()))
-                        })
-                        .flatten()
-                        .flatten()
-                        .unwrap_or("".to_string());
+                        .then(|| self.get_single(&chars[i..i + 1]).map(|cp| &cp.0[0]))
+                        .flatten();
                     let (code_cost, no_space, CodePos(code, pos)) =
-                        self.code_cost(code_pos, next_code.as_str());
+                        self.code_cost(code_pos, next_code);
                     let j_cost = if i - j == 1 && dp[j].cost == INFINITY {
                         if dp[i].cost < INFINITY {
-                            println!("asdjalsd: {:?}", dp[i]);
                             j += 1;
                             continue;
                         }
@@ -110,14 +117,14 @@ impl Looker {
                     // );
                     if curr_cost < dp[i].cost {
                         // println!("set [{i}]> {j} cost: {}, word: {word}", curr_cost);
-                        dp[i] = Segment::new(j..i, word, code, pos, no_space, curr_cost);
+                        dp[i] = Segment::new(j..i, word.to_vec(), code, pos, no_space, curr_cost);
                         path[i] = Some(j);
                     }
                 } else if i - j == 1 && path[i].is_none() {
                     // 单字不存在于码表，也可能是英文字母
                     // 进入下一轮时，可能整个词里包含这个字，这种情况下 path[i] 表现为Some
                     path[i] = Some(j);
-                    dp[i] = Segment::new(j..i, word.clone(), word.clone(), 0, true, INFINITY);
+                    dp[i] = Segment::new(j..i, word.to_vec(), word.to_vec(), 0, true, INFINITY);
                 }
                 j += 1;
             }
@@ -157,7 +164,7 @@ impl Looker {
     /// 空格  +1
     /// 次选  +2
     /// 最后选取消耗最小的CodePos.
-    fn code_cost(&self, code_pos: &Vec<CodePos>, next: &str) -> (usize, bool, CodePos) {
+    fn code_cost(&self, code_pos: &Vec<CodePos>, next: Option<&char>) -> (usize, bool, CodePos) {
         let costs: Vec<(usize, bool, &CodePos)> = code_pos
             .iter()
             .map(|cp| {
@@ -167,7 +174,11 @@ impl Looker {
                     return (cost + 2, true, cp);
                 }
                 // 需要空格
-                if !next.is_empty() && self.code_trie.reachable(cp.0.chars().chain(next.chars())) {
+                if next.is_some()
+                    && self
+                        .code_trie
+                        .reachable(cp.0.iter().chain(std::iter::once(next.unwrap())))
+                {
                     return (cost + 1, false, cp);
                 }
                 // 自动顶
@@ -182,8 +193,8 @@ impl Looker {
 #[derive(Clone, Debug)]
 pub struct Segment {
     pub range: Range<usize>,
-    pub text: String,
-    pub code: String,
+    pub text: Vec<char>,
+    pub code: Vec<char>,
     pub pos: usize,
     pub auto_select: bool,
     pub cost: usize,
@@ -193,7 +204,7 @@ impl Default for Segment {
     fn default() -> Self {
         Self {
             range: Default::default(),
-            text: Default::default(),
+            text: Vec::with_capacity(0),
             code: Default::default(),
             pos: Default::default(),
             auto_select: true,
@@ -205,8 +216,8 @@ impl Default for Segment {
 impl Segment {
     fn new(
         range: Range<usize>,
-        text: String,
-        code: String,
+        text: Vec<char>,
+        code: Vec<char>,
         pos: usize,
         auto_select: bool,
         cost: usize,
@@ -263,12 +274,21 @@ mod test {
     fn test_analyze_segments() {
         let cands = create_candidates();
         let looker = Looker::new(&cands);
-        let text = "中华人民是中华人民共和国的公民，共和hello国人民网world。"
+        let text = "中华人民是中华人民共和国的公民中华人民是中华人民共和国的公民，共和hello国人民网world。"
             .chars()
             .collect::<Vec<_>>();
         let segments = looker.analyze(text.as_slice());
-        let ranges = segments.into_iter().map(|seg| seg.text).collect::<Vec<_>>();
+        let ranges = segments
+            .into_iter()
+            .map(|seg| seg.text.iter().collect::<String>())
+            .collect::<Vec<_>>();
         let expected = vec![
+            "中华",
+            "人民",
+            "是",
+            "中华人民共和国",
+            "的",
+            "公民",
             "中华",
             "人民",
             "是",
@@ -303,8 +323,8 @@ mod test {
             .map(|seg| {
                 format!(
                     "{}{}{}",
-                    seg.text,
-                    seg.code,
+                    seg.text.iter().collect::<String>(),
+                    seg.code.iter().collect::<String>(),
                     if seg.pos > 0 {
                         seg.pos.to_string()
                     } else if seg.auto_select {
@@ -368,13 +388,18 @@ impl Trie {
     }
 
     // 搜索单词 dmt
-    pub fn reachable(&self, chars: impl IntoIterator<Item = char>) -> bool {
+    pub fn reachable<I, C>(&self, chars: I) -> bool
+    where
+        I: IntoIterator<Item = C>,
+        C: Borrow<char>,
+    {
         unsafe {
             let mut current = self.root;
 
             let mut hit = false;
             for c in chars {
-                let index = (c as usize) - ('a' as usize);
+                let c = *c.borrow() as usize;
+                let index = c as usize - ('a' as usize);
                 if index >= 26 {
                     return false;
                 }
