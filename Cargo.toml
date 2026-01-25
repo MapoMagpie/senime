@@ -11,6 +11,7 @@ members = [
   "senime-tui",
   "senime-lsp",
   "senime-wasm",
+  "senime-encode",
 ]
 default-member = [
   "senime-tui"

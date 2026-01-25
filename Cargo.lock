@@ -1543,6 +1543,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
+name = "senime-encode"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "senime-lib",
+]
+
+[[package]]
 name = "senime-lib"
 version = "0.0.1"
 dependencies = [
@@ -1554,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "senime-lsp"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "dashmap 6.1.0",
@@ -1569,7 +1577,7 @@ dependencies = [
 
 [[package]]
 name = "senime-tui"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "crossterm",
@@ -1581,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "senime-wasm"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "senime-lib",
  "wasm-bindgen",
