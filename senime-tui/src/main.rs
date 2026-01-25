@@ -174,7 +174,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ));
 
             // measurements
-            let measurement = calc_measurements(&sentence_rec);
+            let measurement =
+                calc_measurements(&sentence_rec, preset_text.as_ref().map(|p| p.len()));
             let measurement_widget = Paragraph::new(measurement.to_string())
                 .block(Block::default().borders(Borders::ALL).title("计量"));
             frame.render_widget(measurement_widget, chunks[1]);
@@ -337,7 +338,12 @@ fn create_diff_text(chars: Vec<char>, other: Option<&Vec<char>>, pending_chars: 
             if start < i {
                 push_to_text(&mut text, &chars[start..i], None);
             }
-            text.push_span(Span::from(l.to_string()).on_light_red().crossed_out());
+            let sp = l.to_string();
+            // FIXME
+            // if r.width() != l.width() {
+            //     sp = r.to_string();
+            // }
+            text.push_span(Span::from(sp).on_light_red().crossed_out());
             start = i + 1;
         }
     }
@@ -423,13 +429,13 @@ where
 ///   顶字次数?
 ///   空格次数?
 ///   回退次数?
-fn calc_measurements(records: &[SentenceRecord]) -> Measurement {
+fn calc_measurements(records: &[SentenceRecord], preset_wc: Option<usize>) -> Measurement {
     let (start, end) = if let (Some(first), Some(last)) = (records.first(), records.last()) {
         (first.satrt, last.end)
     } else {
         (Instant::now(), Instant::now())
     };
-    let (total_text, total_code, _space_times) =
+    let (text_wc, code_cc, _space_times) =
         records
             .iter()
             .fold((0, 0, 0), |(total_text, total_code, space_times), rec| {
@@ -441,16 +447,17 @@ fn calc_measurements(records: &[SentenceRecord]) -> Measurement {
             });
 
     let duration = end.duration_since(start);
-    let wpm = total_text as f32 / (duration.as_secs_f32() / 60.0);
-    let kps = total_code as f32 / duration.as_secs_f32();
-    let avg_len = total_code as f32 / total_text as f32;
+    let wpm = text_wc as f32 / (duration.as_secs_f32() / 60.0);
+    let kps = code_cc as f32 / duration.as_secs_f32();
+    let avg_len = code_cc as f32 / text_wc as f32;
 
     Measurement {
         // start,
         // end,
         duration,
-        total_text,
-        total_code,
+        text_wc,
+        code_cc,
+        preset_wc,
         wpm,
         kps,
         avg_len,
@@ -461,8 +468,9 @@ struct Measurement {
     // start: Instant,
     // end: Instant,
     duration: Duration,
-    total_text: usize,
-    total_code: usize,
+    text_wc: usize,
+    code_cc: usize,
+    preset_wc: Option<usize>,
     kps: f32,
     wpm: f32,
     avg_len: f32,
@@ -471,12 +479,13 @@ struct Measurement {
 impl ToString for Measurement {
     fn to_string(&self) -> String {
         format!(
-            "  耗时: [{}]秒, 速度: [{:.2}]字/分, 击键: [{:.2}]键/秒\n  总字数: [{}], 总输入: [{}], 平均码长: [{:.2}]",
+            "  耗时: [{}]秒, 速度: [{:.2}]字/分, 击键: [{:.2}]键/秒\n  总字数: [{}{}], 总输入: [{}], 平均码长: [{:.2}]",
             self.duration.as_secs(),
             self.wpm,
             self.kps,
-            self.total_text,
-            self.total_code,
+            self.text_wc,
+            self.preset_wc.map_or("".to_string(), |pw| format!("/{pw}")),
+            self.code_cc,
             self.avg_len,
         )
     }
