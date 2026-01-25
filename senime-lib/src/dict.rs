@@ -163,22 +163,22 @@ impl FromStr for Dict {
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let mut candidates = Vec::new();
-        let mut enter_toml = false;
+        let mut enter_toml = 0;
         let mut toml_content = String::new();
         let mut columns: Option<Vec<Column>> = None;
         let mut parse_cloumns_times = 0;
         for line in raw.lines() {
-            if enter_toml {
+            if enter_toml == 1 {
                 if line.starts_with("```") {
-                    enter_toml = false;
+                    enter_toml = 2;
                 } else {
                     toml_content.push_str(line);
                     toml_content.push('\n');
                 }
                 continue;
             }
-            if line.starts_with("```") {
-                enter_toml = true;
+            if enter_toml == 0 && line.starts_with("```") && !line.contains('\t') {
+                enter_toml = 1;
                 continue;
             }
             if columns.is_none() {
@@ -200,7 +200,7 @@ impl FromStr for Dict {
                     candidates.push(candidate);
                 }
                 Err(_err) => {
-                    println!("{:?}", _err.to_string())
+                    // println!("{:?}", _err.to_string())
                 }
             }
         }
@@ -297,8 +297,6 @@ impl Dict {
         }
     }
 
-    // unused
-    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.candidates.len()
     }
