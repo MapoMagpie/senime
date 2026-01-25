@@ -74,8 +74,7 @@ fn main() {
     let mut colors_id: usize = 0;
     let codes = segments
         .iter()
-        .enumerate()
-        .map(|(_i, seg)| {
+        .map(|seg| {
             // 检查是否可以顶字上屏，将当前段的code与下一段的code首个字符相连，在字典中查询是否存在
             // 如果不存在表示可以顶字上屏，此方式无需检测下一段是否是标点符号
             colors_id += 1;
@@ -95,7 +94,7 @@ fn main() {
             }
             str
         })
-        .chain(color_reset.into_iter())
+        .chain(color_reset)
         .collect::<String>();
     code_len += use_space_times;
     code_len += use_candidate_times;

@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
     io::{Error, ErrorKind, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, UNIX_EPOCH},
 };
@@ -145,7 +145,7 @@ impl TryFrom<(i64, &[u8])> for Dict {
         let map_err = |reason: &str| Error::new(ErrorKind::InvalidData, reason);
         let metadata = &bs[..20];
         let (DictMeta { head, ver, mtime }, _size): (DictMeta, usize) =
-            bincode::decode_from_slice(&metadata, config::standard())
+            bincode::decode_from_slice(metadata, config::standard())
                 .map_err(|_| map_err("无效的二进制数据[HEAD]"))?;
         let c_head = ['s', 'e', 'n', 'i', 'm', 'e'];
         if !(head == c_head && ver == VERSION && (f_mtime == 0 || f_mtime == mtime)) {
@@ -222,7 +222,7 @@ impl FromStr for Dict {
 }
 
 // #[cfg(unix)]
-fn get_mtime(path: &PathBuf) -> i64 {
+fn get_mtime(path: &Path) -> i64 {
     let metadata = path.metadata().expect("无法读取码表文件元信息");
     if let Ok(modi) = metadata.modified() {
         let duration = modi.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);

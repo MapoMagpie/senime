@@ -31,8 +31,8 @@ impl Looker {
         let mut pos = 0;
         let mut max_text_len = 0;
 
-        for i in 0..candidates.len() {
-            let cand = &candidates[i];
+        for cand in candidates {
+            // let cand = &candidates[i];
             if code == cand.code {
                 pos += 1;
             } else {
@@ -60,12 +60,10 @@ impl Looker {
     }
 
     fn get<'a>(&'a self, text: &[char]) -> Option<&'a Vec<CodePos>> {
-        let codes = self.map.get(text);
-        codes
+        self.map.get(text)
     }
     fn get_single<'a>(&'a self, text: &[char]) -> Option<&'a CodePos> {
-        let codes = self.map.get(text);
-        codes.map(|c| &c[0])
+        self.map.get(text).map(|c| &c[0])
     }
 
     pub fn analyze(&self, chars: &[char]) -> Vec<Segment> {
@@ -164,7 +162,7 @@ impl Looker {
     /// 空格  +1
     /// 次选  +2
     /// 最后选取消耗最小的CodePos.
-    fn code_cost(&self, code_pos: &Vec<CodePos>, next: Option<&char>) -> (usize, bool, CodePos) {
+    fn code_cost(&self, code_pos: &[CodePos], next: Option<&char>) -> (usize, bool, CodePos) {
         let costs: Vec<(usize, bool, &CodePos)> = code_pos
             .iter()
             .map(|cp| {
@@ -346,10 +344,9 @@ struct TrieNode {
 impl TrieNode {
     // 创建新节点
     unsafe fn new() -> *mut Self {
-        let node = Box::into_raw(Box::new(TrieNode {
+        Box::into_raw(Box::new(TrieNode {
             children: [ptr::null_mut(); 26],
-        }));
-        node
+        }))
     }
 }
 
@@ -357,6 +354,12 @@ impl TrieNode {
 #[derive(Debug)]
 pub struct Trie {
     root: *mut TrieNode,
+}
+
+impl Default for Trie {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Trie {
@@ -399,7 +402,7 @@ impl Trie {
             let mut hit = false;
             for c in chars {
                 let c = *c.borrow() as usize;
-                let index = c as usize - ('a' as usize);
+                let index = c - ('a' as usize);
                 if index >= 26 {
                     return false;
                 }

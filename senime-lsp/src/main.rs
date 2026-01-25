@@ -103,7 +103,7 @@ impl LanguageServer for Backend {
             && !line_chars[start - 1].is_whitespace();
         let mut filter_text_start = start;
         for i in (0..start).rev() {
-            let char = line_chars[i as usize];
+            let char = line_chars[i];
             if char.is_alphabetic() {
                 filter_text_start = i;
             } else {
@@ -113,17 +113,13 @@ impl LanguageServer for Backend {
         let AnalysisResult {
             segments,
             candidates,
-        } = self
-            .engine
-            .analyze(&line_chars[start as usize..end as usize]);
+        } = self.engine.analyze(&line_chars[start..end]);
         let (mut sentence, _) = segments.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
         // 编辑器在收到补全后，全根据fiter_text进行过滤，比如helix会用[向前到后一个字..当前光标]这个范围的字符去搜索，如果搜索的分数太低就会丢弃
         // 所谓的字，就是英文字母、汉字、等其他非标点符号的字
         // 设置fiter_text最简单的方式是从当前行的首位开始也就是0，到当前光标的位置
         // 不过如果一行太长的话，可能有性能问题，更好的方式是从start开始，再向前找到字的位置。
-        let filter_text: String = (&line_chars[filter_text_start as usize..end as usize])
-            .iter()
-            .collect();
+        let filter_text: String = line_chars[filter_text_start..end].iter().collect();
         // log::info!(
         //     "completion word: [{}-{}], filter_text: {}",
         //     start,

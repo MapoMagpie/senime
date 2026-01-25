@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::fmt::Display;
 use std::fs::OpenOptions;
 use std::time::{Duration, Instant};
 
@@ -47,7 +48,7 @@ struct Popup<'a> {
 impl Widget for Popup<'_> {
     fn render(self, mut area: Rect, buf: &mut Buffer) {
         // ensure that all cells under the popup are cleared to avoid leaking content
-        area.x = area.x - 1;
+        area.x -= 1;
         Clear.render(area, buf);
         let block = Block::new()
             .title(self.title)
@@ -127,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mut segments,
             } = an.analyze(&input);
             let poped = segments.pop();
-            if segments.len() > 0 {
+            if segments.is_empty() {
                 sentence_rec.extend(segments.into_iter().map(|seg| {
                     let (width, text): (Vec<usize>, Vec<char>) =
                         seg.0.chars().map(|c| (c.width().unwrap_or(0), c)).unzip();
@@ -151,8 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let aa = sentence_rec
                 .iter()
-                .map(|sen| sen.text.iter().zip(sen.width.iter()))
-                .flatten()
+                .flat_map(|sen| sen.text.iter().zip(sen.width.iter()))
                 .chain(pending.iter().zip(pending_width.iter()));
             let wrapped = wrap(aa, area.width as usize - 2);
             let last_width = wrapped.1 as u16;
@@ -476,9 +476,10 @@ struct Measurement {
     avg_len: f32,
 }
 
-impl ToString for Measurement {
-    fn to_string(&self) -> String {
-        format!(
+impl Display for Measurement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
             "  耗时: [{}]秒, 速度: [{:.2}]字/分, 击键: [{:.2}]键/秒\n  总字数: [{}{}], 总输入: [{}], 平均码长: [{:.2}]",
             self.duration.as_secs(),
             self.wpm,
