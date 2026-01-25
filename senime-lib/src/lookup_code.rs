@@ -6,7 +6,8 @@
 // aamc>世界
 // cee>后面
 // 输入"你好后面" aam接c时触发世界，表示不能顶字需要空格
-use std::{borrow::Borrow, ops::Range, ptr};
+use std::ops::Range;
+use trie::Trie;
 
 use ahash::AHashMap;
 
@@ -66,7 +67,7 @@ impl Looker {
         self.map.get(text).map(|c| &c[0])
     }
 
-    pub fn analyze(&self, chars: &[char]) -> Vec<Segment> {
+    pub fn analyze<'a>(&'a self, chars: &'a [char]) -> Vec<Segment<'a>> {
         let char_len = chars.len();
         // dp[i]表示前i个字符的最小编码长度
         let mut dp: Vec<Segment> = vec![Segment::default(); char_len + 1];
@@ -80,7 +81,7 @@ impl Looker {
             // is_alphanumeric 指的是汉字与字母数字类的char，不包括标点符号emoji等
             let cha = &chars[i - 1];
             if !cha.is_alphanumeric() {
-                dp[i] = Segment::new((i - 1)..i, vec![*cha; 1], vec![*cha; 1], 0, true, 0);
+                dp[i] = Segment::new((i - 1)..i, &chars[i - 1..i], &chars[i - 1..i], 0, true, 0);
                 path[i] = Some(i - 1);
                 j_cursor = i;
                 continue;
@@ -115,14 +116,14 @@ impl Looker {
                     // );
                     if curr_cost < dp[i].cost {
                         // println!("set [{i}]> {j} cost: {}, word: {word}", curr_cost);
-                        dp[i] = Segment::new(j..i, word.to_vec(), code, pos, no_space, curr_cost);
+                        dp[i] = Segment::new(j..i, word, code, *pos, no_space, curr_cost);
                         path[i] = Some(j);
                     }
                 } else if i - j == 1 && path[i].is_none() {
                     // 单字不存在于码表，也可能是英文字母
                     // 进入下一轮时，可能整个词里包含这个字，这种情况下 path[i] 表现为Some
                     path[i] = Some(j);
-                    dp[i] = Segment::new(j..i, word.to_vec(), word.to_vec(), 0, true, INFINITY);
+                    dp[i] = Segment::new(j..i, word, word, 0, true, INFINITY);
                 }
                 j += 1;
             }
@@ -162,7 +163,11 @@ impl Looker {
     /// 空格  +1
     /// 次选  +2
     /// 最后选取消耗最小的CodePos.
-    fn code_cost(&self, code_pos: &[CodePos], next: Option<&char>) -> (usize, bool, CodePos) {
+    fn code_cost<'a>(
+        &'a self,
+        code_pos: &'a [CodePos],
+        next: Option<&char>,
+    ) -> (usize, bool, &'a CodePos) {
         let costs: Vec<(usize, bool, &CodePos)> = code_pos
             .iter()
             .map(|cp| {
@@ -184,25 +189,25 @@ impl Looker {
             })
             .collect();
         let (cost, no_space, code_pos) = costs.iter().min_by_key(|x| x.0).unwrap();
-        (*cost, *no_space, (*code_pos).clone())
+        (*cost, *no_space, code_pos)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Segment {
+pub struct Segment<'a> {
     pub range: Range<usize>,
-    pub text: Vec<char>,
-    pub code: Vec<char>,
+    pub text: &'a [char],
+    pub code: &'a [char],
     pub pos: usize,
     pub auto_select: bool,
     pub cost: usize,
 }
 
-impl Default for Segment {
+impl<'a> Default for Segment<'a> {
     fn default() -> Self {
         Self {
             range: Default::default(),
-            text: Vec::with_capacity(0),
+            text: Default::default(),
             code: Default::default(),
             pos: Default::default(),
             auto_select: true,
@@ -211,11 +216,11 @@ impl Default for Segment {
     }
 }
 
-impl Segment {
+impl<'a> Segment<'a> {
     fn new(
         range: Range<usize>,
-        text: Vec<char>,
-        code: Vec<char>,
+        text: &'a [char],
+        code: &'a [char],
         pos: usize,
         auto_select: bool,
         cost: usize,
@@ -336,143 +341,123 @@ mod test {
         println!("{ranges:?}");
     }
 }
-// Trie 节点结构
-struct TrieNode {
-    children: [*mut TrieNode; 26], // 26个字母的子节点
-}
 
-impl TrieNode {
-    // 创建新节点
-    unsafe fn new() -> *mut Self {
-        Box::into_raw(Box::new(TrieNode {
-            children: [ptr::null_mut(); 26],
-        }))
+mod trie {
+
+    #[derive(Debug)]
+    struct TrieNode {
+        // 使用 usize 存储子节点在 Vec 中的索引，None 表示没有子节点
+        children: [Option<usize>; 26],
     }
-}
 
-// Trie 结构
-#[derive(Debug)]
-pub struct Trie {
-    root: *mut TrieNode,
-}
-
-impl Default for Trie {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Trie {
-    // 创建新 Trie
-    pub fn new() -> Self {
-        unsafe {
-            Trie {
-                root: TrieNode::new(),
+    impl TrieNode {
+        fn new() -> Self {
+            Self {
+                children: [None; 26],
             }
         }
     }
 
-    // 插入单词
-    pub fn insert(&mut self, chars: impl IntoIterator<Item = char>) {
-        unsafe {
-            let mut current = self.root;
+    #[derive(Debug)]
+    pub struct Trie {
+        // 所有节点存储在连续的内存中
+        nodes: Vec<TrieNode>,
+    }
+
+    impl Default for Trie {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Trie {
+        pub fn new() -> Self {
+            // 初始化时放入根节点（索引为 0）
+            Self {
+                nodes: vec![TrieNode::new()],
+            }
+        }
+
+        pub fn insert(&mut self, chars: impl IntoIterator<Item = char>) {
+            let mut current_idx = 0;
 
             for c in chars.into_iter() {
-                let index = (c as usize) - ('a' as usize);
+                // 只处理 a-z
+                let index = (c as usize).wrapping_sub('a' as usize);
                 if index >= 26 {
                     break;
                 }
-                if (*current).children[index].is_null() {
-                    (*current).children[index] = TrieNode::new();
+
+                // 如果当前字符对应的子节点不存在，则创建一个新节点并推入 Vec
+                if self.nodes[current_idx].children[index].is_none() {
+                    let next_idx = self.nodes.len();
+                    self.nodes.push(TrieNode::new());
+                    self.nodes[current_idx].children[index] = Some(next_idx);
                 }
-                current = (*current).children[index];
+
+                // 移动到子节点
+                current_idx = self.nodes[current_idx].children[index].unwrap();
             }
         }
-    }
 
-    // 搜索单词 dmt
-    pub fn reachable<I, C>(&self, chars: I) -> bool
-    where
-        I: IntoIterator<Item = C>,
-        C: Borrow<char>,
-    {
-        unsafe {
-            let mut current = self.root;
-
+        pub fn reachable<I, C>(&self, chars: I) -> bool
+        where
+            I: IntoIterator<Item = C>,
+            C: std::borrow::Borrow<char>,
+        {
+            let mut current_idx = 0;
             let mut hit = false;
+
             for c in chars {
-                let c = *c.borrow() as usize;
-                let index = c - ('a' as usize);
+                let index = (*c.borrow() as usize).wrapping_sub('a' as usize);
                 if index >= 26 {
                     return false;
                 }
+
                 hit = true;
-                if (*current).children[index].is_null() {
-                    return false;
+                match self.nodes[current_idx].children[index] {
+                    Some(next_idx) => current_idx = next_idx,
+                    None => return false,
                 }
-                current = (*current).children[index];
             }
             hit
         }
     }
-}
 
-impl Drop for Trie {
-    fn drop(&mut self) {
-        // 递归释放所有节点
-        fn free_node(node: *mut TrieNode) {
-            if node.is_null() {
-                return;
-            }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
 
-            for i in 0..26 {
-                unsafe {
-                    if !(*node).children[i].is_null() {
-                        free_node((*node).children[i]);
-                    }
-                }
-            }
-            unsafe {
-                let _ = Box::from_raw(node);
-            }
+        #[test]
+        fn test_trie() {
+            let mut trie = Trie::new();
+            let word_1 = vec!['d', 'm', 'r', 'l'];
+            let word_2 = vec!['d', 'm'];
+            let word_3 = vec!['r', 'p', 'p'];
+            let word_4 = vec!['t', 'c'];
+            let word_5 = vec!['x', 'c', 'd', 'z'];
+            let word_6 = vec!['t', 'c', 'x', 'c'];
+            let word_7 = vec!['b', 'w'];
+            let word_8 = vec!['m', 'l', 'w', 'g'];
+            let word_9 = vec!['b', 'w', 'm', 'l'];
+            trie.insert(word_1);
+            trie.insert(word_2);
+            trie.insert(word_3);
+            trie.insert(word_4);
+            trie.insert(word_5);
+            trie.insert(word_6);
+            trie.insert(word_7);
+            trie.insert(word_8);
+            trie.insert(word_9);
+            let search_1 = vec!['t', 'c', 'x'];
+            let search_2 = vec!['b', 'w', 'm'];
+            let search_3 = vec!['d', 'm', 't'];
+            let search_4 = vec!['x', 'c', 'd', 'z'];
+            assert!(trie.reachable(search_1.into_iter()));
+            assert!(trie.reachable(search_2.into_iter()));
+            assert!(!trie.reachable(search_3.into_iter()));
+            assert!(trie.reachable(search_4.into_iter()));
+            // println!("{trie:?}");
         }
-        free_node(self.root);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_trie() {
-        let mut trie = Trie::new();
-        let word_1 = vec!['d', 'm', 'r', 'l'];
-        let word_2 = vec!['d', 'm'];
-        let word_3 = vec!['r', 'p', 'p'];
-        let word_4 = vec!['t', 'c'];
-        let word_5 = vec!['x', 'c', 'd', 'z'];
-        let word_6 = vec!['t', 'c', 'x', 'c'];
-        let word_7 = vec!['b', 'w'];
-        let word_8 = vec!['m', 'l', 'w', 'g'];
-        let word_9 = vec!['b', 'w', 'm', 'l'];
-        trie.insert(word_1);
-        trie.insert(word_2);
-        trie.insert(word_3);
-        trie.insert(word_4);
-        trie.insert(word_5);
-        trie.insert(word_6);
-        trie.insert(word_7);
-        trie.insert(word_8);
-        trie.insert(word_9);
-        let search_1 = vec!['t', 'c', 'x'];
-        let search_2 = vec!['b', 'w', 'm'];
-        let search_3 = vec!['d', 'm', 't'];
-        let search_4 = vec!['x', 'c', 'd', 'z'];
-        assert!(trie.reachable(search_1.into_iter()));
-        assert!(trie.reachable(search_2.into_iter()));
-        assert!(!trie.reachable(search_3.into_iter()));
-        assert!(trie.reachable(search_4.into_iter()));
-        // println!("{trie:?}");
     }
 }

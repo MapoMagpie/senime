@@ -81,9 +81,9 @@ fn main() {
             code_len += seg.code.len();
             let mut str = colors[colors_id % colors.len()].to_string();
             if args.with_text {
-                str.extend(&seg.text);
+                str.extend(seg.text);
             }
-            str.extend(&seg.code);
+            str.extend(seg.code);
             // 需要空格
             if !seg.auto_select && seg.pos == 0 {
                 use_space_times += 1;
