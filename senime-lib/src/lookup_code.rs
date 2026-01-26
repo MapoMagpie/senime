@@ -6,7 +6,7 @@
 // aamc>世界
 // cee>后面
 // 输入"你好后面" aam接c时触发世界，表示不能顶字需要空格
-use std::ops::Range;
+use std::{cmp::Ordering, ops::Range};
 use trie::Trie;
 
 use ahash::AHashMap;
@@ -168,7 +168,7 @@ impl Looker {
         code_pos: &'a [CodePos],
         next: Option<&char>,
     ) -> (usize, bool, &'a CodePos) {
-        let costs: Vec<(usize, bool, &CodePos)> = code_pos
+        code_pos
             .iter()
             .map(|cp| {
                 let cost = cp.0.len();
@@ -187,9 +187,11 @@ impl Looker {
                 // 自动顶
                 (cost, true, cp)
             })
-            .collect();
-        let (cost, no_space, code_pos) = costs.iter().min_by_key(|x| x.0).unwrap();
-        (*cost, *no_space, code_pos)
+            .min_by(|a, b| match a.0.cmp(&(b.0)) {
+                Ordering::Equal => a.2.0.len().cmp(&b.2.0.len()),
+                other => other,
+            })
+            .unwrap()
     }
 }
 
