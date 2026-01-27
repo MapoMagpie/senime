@@ -1584,6 +1584,7 @@ dependencies = [
  "derive_setters",
  "ratatui",
  "senime-lib",
+ "unicode-segmentation",
  "unicode-width",
 ]
 

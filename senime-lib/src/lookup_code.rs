@@ -174,7 +174,7 @@ impl Looker {
                 let cost = cp.0.len();
                 // 需要选重
                 if cp.1 > 0 {
-                    return (cost + 2, true, cp);
+                    return (cost + 2, false, cp);
                 }
                 // 需要空格
                 if next.is_some()

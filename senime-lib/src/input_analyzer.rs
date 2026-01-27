@@ -69,9 +69,9 @@ impl InputAnalyzer {
             match tag {
                 Tag::Normal => {
                     reduce_space = true;
-                    if let Some((cands, _unique)) = self.search_candidates(&codes, 0, get_count) {
+                    if let Some((cands, unique)) = self.search_candidates(&codes, 0, get_count) {
                         segments_ret.push((cands[0].text.clone(), codes.clone()));
-                        if at_last {
+                        if at_last && !unique {
                             let to_rich = |(i, cand): (usize, &Candidate)| -> CandidateRich {
                                 let select_key = self.selection_keys.get(i).copied().unwrap_or(' ');
                                 CandidateRich::new(
