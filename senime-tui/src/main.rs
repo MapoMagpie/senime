@@ -111,13 +111,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             segments.into_iter().for_each(|(text, origin)| {
                 ctx.push(text.chars(), origin);
             });
+            ctx.clear_pending();
         }
         if let Some((text, chars)) = poped {
+            // 会出现text为空，而chars为 ' '(空格)
             let text_chars: Vec<char> = text.chars().collect();
             if candidates.is_none() && text_chars != chars {
-                ctx.push(text_chars, chars);
+                // eprintln!("poped: select [{text:?}]");
                 ctx.clear_pending();
+                ctx.push(text_chars, chars);
             } else {
+                // eprintln!("poped: pending [{text:?}]");
                 ctx.set_pending(text_chars, chars);
             }
         }
@@ -127,7 +131,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .direction(Direction::Vertical)
             .constraints([Constraint::Fill(1), Constraint::Length(5)])
             .split(area);
+
         let b_area = chunks[0];
+        let m_area = chunks[1];
         let t_area = b_area.inner(Margin::new(1, 1));
         let (pre_render, cursor) = ctx.calc_pre_render(t_area);
 
@@ -141,7 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ctx.get_input().iter().collect::<String>(),
                 draw_duration
             ));
-            frame.render_widget(block, area);
+            frame.render_widget(block, b_area);
             frame.render_widget(WrappedText::new(&pre_render), t_area);
             frame.set_cursor_position(cursor);
 
@@ -152,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let measurement_widget = Paragraph::new(measurement.to_string())
                 .block(Block::default().borders(Borders::ALL).title("计量"));
-            frame.render_widget(measurement_widget, chunks[1]);
+            frame.render_widget(measurement_widget, m_area);
         })?;
         // 事件处理
         // if event::poll(Duration::from_millis(100))? {
@@ -172,7 +178,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ctx.push(vec!['\n'], vec!['\n']);
                 }
                 KeyCode::Backspace => {
-                    // TODO
                     ctx.backspace();
                 }
                 KeyCode::Char(c) => {

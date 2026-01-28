@@ -205,6 +205,12 @@ pub struct Segment<'a> {
     pub cost: usize,
 }
 
+impl<'a> Segment<'a> {
+    pub fn simple(&self) -> (Range<usize>, usize, bool) {
+        (self.range.clone(), self.pos, self.auto_select)
+    }
+}
+
 impl<'a> Default for Segment<'a> {
     fn default() -> Self {
         Self {
