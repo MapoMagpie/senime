@@ -119,8 +119,8 @@ impl InputAnalyzer {
                     if reduce_space {
                         reduce_space = false;
                     }
-                    let codes = &codes[start..];
-                    segments_ret.push((codes.iter().collect(), codes.to_vec()));
+                    let text = &codes[start..];
+                    segments_ret.push((text.iter().collect(), codes.to_vec()));
                 }
             };
         }
