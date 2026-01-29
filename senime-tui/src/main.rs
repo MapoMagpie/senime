@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use clap::{ArgAction, Parser};
@@ -36,6 +37,16 @@ pub struct Args {
     /// 此功能类似赛码器，将以灰色的文本展示这些预设文本
     #[arg(short, long)]
     pub preset: Option<String>,
+
+    /// 保持预设文本的格式，默认False
+    /// 不设置此项时，默认移除预设文本中的空格、换行符
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub keep: bool,
+
+    /// 选择预设文本的范围
+    /// 格式为: 1-10 (行一到行十)，1.3-10.6 (行一的第三字到行十的第六字)
+    #[arg(long)]
+    pub pick: Option<String>,
 
     /// 将标准输入流中的内容作为预设文本，与--preset功能一样
     #[arg(short, long, action = ArgAction::SetTrue)]
@@ -100,6 +111,108 @@ where
     Ok(str)
 }
 
+/// 文本选择范围，左闭右开
+struct PickPreset {
+    /// 开始的行
+    line_start: usize,
+    /// 在开始的行中，字符的起始位置
+    char_start: usize,
+    /// 结束的行
+    line_end: usize,
+    /// 在结束的行中，字符的结束位置
+    char_end: usize,
+}
+
+impl FromStr for PickPreset {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let error =
+            "预设文本选择范围格式应为: 1-10(行一到行十)，或1.3-10.6(行一的第三字到行十的第六字)"
+                .to_string();
+        let split = s.split('-').collect::<Vec<_>>();
+        if split.is_empty() {
+            return Err(error);
+        }
+        let parse = |str: &str| -> Result<(usize, usize), String> {
+            let mut sp = str.split('.');
+            let line = sp
+                .next()
+                .unwrap()
+                .parse()
+                .map_err(|e| format!("{e}\n{error}"))?;
+            let pos = sp
+                .next()
+                .unwrap_or("0")
+                .parse()
+                .map_err(|e| format!("{e}\n{error}"))?;
+            Ok((line, pos))
+        };
+
+        let (start, char_start) = parse(&split[0])?;
+        let (end, char_end) = split
+            .get(1)
+            .map(|sp| parse(*sp))
+            .unwrap_or(Ok((usize::MAX, usize::MAX)))?;
+        Ok(Self {
+            line_start: start.saturating_sub(1),
+            char_start: char_start.saturating_sub(1),
+            line_end: end,
+            char_end: char_end,
+        })
+    }
+}
+
+impl Default for PickPreset {
+    fn default() -> Self {
+        Self {
+            line_start: 0,
+            char_start: 0,
+            line_end: usize::MAX,
+            char_end: usize::MAX,
+        }
+    }
+}
+
+fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> {
+    let pick = pick.unwrap_or(PickPreset::default());
+    let mut lines = str
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            if i < pick.line_start || i >= pick.line_end {
+                return vec![];
+            }
+            let chars = line
+                .chars()
+                .enumerate()
+                .filter_map(|(j, c)| {
+                    if (i == pick.line_start && j < pick.char_start)
+                        || (i == pick.line_end && j >= pick.char_end)
+                           // 当不保持预设文本原样时，则过滤空白和控制字符
+                        || !keep && (c.is_whitespace() || c.is_control())
+                    {
+                        None
+                    } else {
+                        Some(c)
+                    }
+                })
+                .chain(if keep {
+                    vec!['\n'].into_iter()
+                } else {
+                    vec![].into_iter()
+                })
+                .collect();
+            chars
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    if keep {
+        lines.pop();
+    }
+    lines
+}
+
 #[cfg(unix)]
 fn create_backend() -> Result<CrosstermBackend<File>, Box<dyn std::error::Error>> {
     let mut stdout = OpenOptions::new()
@@ -134,11 +247,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     }
-    .map(|str| str.chars().collect::<Vec<_>>());
-
-    enable_raw_mode()?;
-    let backend = create_backend()?;
-    let mut terminal = Terminal::new(backend)?;
+    .map(|str| {
+        process_preset(
+            &str,
+            args.keep,
+            args.pick.map(|pi| PickPreset::from_str(&pi).unwrap()),
+        )
+    });
 
     let dict = Dict::load(args.table);
     // 分词器
@@ -150,6 +265,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctx.set_preset(preset);
 
     let mut first = true;
+    enable_raw_mode()?;
+    let backend = create_backend()?;
+    let mut terminal = Terminal::new(backend)?;
+
     loop {
         if first {
             first = false;
@@ -231,7 +350,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 draw_duration
             ));
             frame.render_widget(block, b_area);
-            frame.render_widget(WrappedText::new(&pre_render), t_area);
+            frame.render_widget(WrappedText::new(pre_render), t_area);
             frame.set_cursor_position(cursor);
 
             let popup = create_pupup(candidates, t_area, cursor, ctx.get_input().len());

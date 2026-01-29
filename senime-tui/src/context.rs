@@ -40,6 +40,7 @@ pub struct Context<'a> {
     pending_input: Vec<char>,
     input_start: Instant,
     enc: &'a Looker,
+    pre_render: PreRender,
 }
 impl<'a> Context<'a> {
     pub fn new(enc: &'a Looker) -> Self {
@@ -53,6 +54,7 @@ impl<'a> Context<'a> {
             pending_backup_styles: Default::default(),
             pending_input: Default::default(),
             input_start: Instant::now(),
+            pre_render: Default::default(),
             enc,
         }
     }
@@ -250,7 +252,8 @@ impl<'a> Context<'a> {
         }
     }
 
-    pub fn calc_pre_render(&self, area: Rect) -> (PreRender, Position) {
+    // TODO: 缓存结果
+    pub fn calc_pre_render(&mut self, area: Rect) -> (PreRender, Position) {
         let preset_start = self.sentence.len() + self.pending.len();
         let chars = self
             .sentence
@@ -267,12 +270,14 @@ impl<'a> Context<'a> {
             })
             .map(|c| *c);
         let (pre_render, mut cursor) = calc_pre_render(chars, &self.styles, area, preset_start);
+        self.pre_render = pre_render;
         // 根据cursor.y计算切片窗口，cursor.y 从向下2行开始向上倒止t_area.height，并最终修正cursor.y到t_area内
         let mut l_end = cursor.y as usize + 1;
         let l_start = l_end.saturating_sub(area.height as usize);
-        l_end = (l_start + area.height as usize).min(pre_render.len());
+        l_end = (l_start + area.height as usize).min(self.pre_render.len());
         cursor.y = cursor.y - l_start as u16;
-        (pre_render[l_start..l_end].to_vec(), cursor)
+        let slice = self.pre_render[l_start..l_end].to_vec();
+        (slice, cursor)
     }
 
     pub fn confrim_pending(&mut self) {
@@ -336,30 +341,23 @@ impl<'a> Context<'a> {
 }
 
 #[derive(Debug)]
-pub struct WrappedText<'a> {
-    pub pre_render: PreRenderSlice<'a>,
+pub struct WrappedText {
+    pub pre_render: PreRender,
 }
 
-impl<'a> WrappedText<'a> {
-    pub fn new(pre_render: PreRenderSlice<'a>) -> Self {
+impl WrappedText {
+    pub fn new(pre_render: PreRender) -> Self {
         Self { pre_render }
     }
 }
-impl Widget for WrappedText<'_> {
+impl Widget for WrappedText {
     fn render(self, area: Rect, buf: &mut Buffer) {
         self.pre_render
             .into_iter()
             .enumerate()
             .for_each(|(i, line)| {
                 let y = area.y + i as u16;
-                line.iter().for_each(|(x, c, s)| {
-                    let x = *x;
-                    if let Some(c) = c {
-                        buf[(x, y)].set_char(*c).set_style(*s);
-                    } else {
-                        buf[(x, y)].reset();
-                    }
-                });
+                line.iter().for_each(|cell| cell.render(y, buf));
             });
     }
 }
@@ -374,8 +372,8 @@ where
 {
     let (mut x, mut y, width) = (1, 0, rect.width as usize);
     let init_line = || {
-        let mut v = vec![(0, None, COLOR_PALETTE[COLOR_NORMAL]); rect.width as usize];
-        (0..v.len()).for_each(|i| v[i].0 = rect.x + i as u16);
+        let mut v = vec![RenderCell::default(); rect.width as usize];
+        (0..v.len()).for_each(|i| v[i].x = rect.x + i as u16);
         v
     };
     let mut cursor: Option<Position> = None;
@@ -399,11 +397,12 @@ where
         }
 
         if c != '\n' {
-            ret[y][x].1 = Some(c);
+            ret[y][x].char = Some(c);
+            ret[y][x].sentence_i = i;
             if let Some((palette_idx, patch)) = styles.get(i) {
-                ret[y][x].2 = COLOR_PALETTE[*palette_idx];
+                ret[y][x].style = COLOR_PALETTE[*palette_idx];
                 if let Some(patch) = patch {
-                    ret[y][x].2 = COLOR_PALETTE[*palette_idx].patch(*patch);
+                    ret[y][x].style = COLOR_PALETTE[*palette_idx].patch(*patch);
                 }
             }
         }
@@ -417,8 +416,38 @@ where
         cursor.unwrap_or(Position::new(rect.x + x as u16, rect.y + y as u16)),
     )
 }
-pub type PreRender = Vec<Vec<(u16, Option<char>, Style)>>;
-pub type PreRenderSlice<'a> = &'a [Vec<(u16, Option<char>, Style)>];
+
+pub type PreRender = Vec<Vec<RenderCell>>;
+
+#[derive(Debug, Copy, Clone)]
+pub struct RenderCell {
+    x: u16,
+    sentence_i: usize,
+    char: Option<char>,
+    style: Style,
+}
+
+impl RenderCell {
+    fn render(&self, y: u16, buf: &mut Buffer) {
+        let x = self.x;
+        if let Some(c) = self.char {
+            buf[(x, y)].set_char(c).set_style(self.style);
+        } else {
+            buf[(x, y)].reset();
+        }
+    }
+}
+
+impl Default for RenderCell {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            sentence_i: 0,
+            char: None,
+            style: COLOR_PALETTE[COLOR_NORMAL],
+        }
+    }
+}
 
 fn advance_to_word_boundary(slice: &[char], at_least: usize) -> usize {
     let re = slice.iter().enumerate().find_map(|(i, c)| {
