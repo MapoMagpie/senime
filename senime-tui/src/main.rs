@@ -1,9 +1,11 @@
 use std::fmt::Display;
+use std::fs::File;
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use clap::{ArgAction, Parser};
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -29,10 +31,20 @@ pub struct Args {
     /// 当没有权重时则以行的顺序判断编码对应的字词的首选还是候选
     #[arg(short, long)]
     pub table: String,
-    /// 是否接受输入流，并将输入流的数据作为预设文本
+
+    /// 将此文件中的内容作为预设文本
     /// 此功能类似赛码器，将以灰色的文本展示这些预设文本
+    #[arg(short, long)]
+    pub preset: Option<String>,
+
+    /// 将标准输入流中的内容作为预设文本，与--preset功能一样
     #[arg(short, long, action = ArgAction::SetTrue)]
     pub stdin: bool,
+
+    /// 使用标准输出流做出界面绘制区
+    /// 默认使用/dev/tty做为界面绘制区，若无法打开/dev/tty或其不存在，可使用--stdout解决此问题
+    #[arg(short, long, action = ArgAction::SetTrue)]
+    pub stdout: bool,
 }
 
 #[derive(Debug, Default, Setters)]
@@ -73,33 +85,106 @@ fn read_stdin() -> Result<String, std::io::Error> {
     Ok(str)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
-    enable_raw_mode()?;
+fn read_file<F>(path: F) -> Result<String, std::io::Error>
+where
+    F: AsRef<Path>,
+{
+    use std::io::Read;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(false)
+        .create(false)
+        .open(path)?;
+    let mut str = String::new();
+    file.read_to_string(&mut str)?;
+    Ok(str)
+}
+
+#[cfg(unix)]
+fn create_backend() -> Result<CrosstermBackend<File>, Box<dyn std::error::Error>> {
     let mut stdout = OpenOptions::new()
         .read(false)
         .write(true)
-        .open("/dev/tty")?;
-    // let mut stdout = io::stdout();
+        .open("/dev/tty")
+        .map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!("无法打开 /dev/tty {:?}", err),
+            )
+        })?;
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    Ok(backend)
+}
 
+#[cfg(not(unix))]
+fn create_backend() -> Result<CrosstermBackend<Stdout>, Box<dyn std::error::Error>> {
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    Ok(backend)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
     let preset: Option<Vec<char>> = if args.stdin {
-        read_stdin().map(|str| Some(str.chars().collect())).unwrap()
+        Some(read_stdin()?)
+    } else if let Some(preset_path) = args.preset {
+        Some(read_file(&preset_path)?)
     } else {
         None
-    };
+    }
+    .map(|str| str.chars().collect::<Vec<_>>());
+
+    enable_raw_mode()?;
+    let backend = create_backend()?;
+    let mut terminal = Terminal::new(backend)?;
+
     let dict = Dict::load(args.table);
     // 分词器
     let enc = Looker::new(&dict.candidates);
     // 输入解析器 aka.输入法核心
     let an = InputAnalyzer::new(dict);
-
+    // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
     let mut ctx = Context::new(&enc);
     ctx.set_preset(preset);
 
+    let mut first = true;
     loop {
+        if first {
+            first = false;
+        } else {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                        break;
+                    }
+                    KeyCode::Char('x') if key.modifiers == KeyModifiers::CONTROL => {
+                        ctx.clear();
+                    }
+                    KeyCode::Esc => {
+                        break;
+                    }
+                    KeyCode::Enter => {
+                        ctx.confrim_pending();
+                        ctx.push(vec!['\n'], vec!['\n']);
+                    }
+                    KeyCode::Backspace => {
+                        ctx.backspace();
+                    }
+                    KeyCode::Char(c) => {
+                        ctx.push_input(c);
+                    }
+                    _ => {
+                        continue;
+                    }
+                },
+                _ => {
+                    continue;
+                }
+            }
+        }
+
         let draw_start = Instant::now();
         let AnalysisResult {
             candidates,
@@ -117,11 +202,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // 会出现text为空，而chars为 ' '(空格)
             let text_chars: Vec<char> = text.chars().collect();
             if candidates.is_none() && text_chars != chars {
-                // eprintln!("poped: select [{text:?}]");
                 ctx.clear_pending();
                 ctx.push(text_chars, chars);
             } else {
-                // eprintln!("poped: pending [{text:?}]");
                 ctx.set_pending(text_chars, chars);
             }
         }
@@ -143,7 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // candidates
         terminal.draw(|frame| {
             let block = Block::default().borders(Borders::ALL).title(format!(
-                "成句 [输入中:{}] 绘图时间: [{:?}]",
+                "输入中: [{}] 计算时间: [{:?}]",
                 ctx.get_input().iter().collect::<String>(),
                 draw_duration
             ));
@@ -160,33 +243,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .block(Block::default().borders(Borders::ALL).title("计量"));
             frame.render_widget(measurement_widget, m_area);
         })?;
-        // 事件处理
-        // if event::poll(Duration::from_millis(100))? {
-        match event::read()? {
-            // Event::Resize(_, _) => {
-            //     need_wrapped_preset_text = true;
-            // }
-            Event::Key(key) => match key.code {
-                KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                    break;
-                }
-                KeyCode::Esc => {
-                    break;
-                }
-                KeyCode::Enter => {
-                    ctx.confrim_pending();
-                    ctx.push(vec!['\n'], vec!['\n']);
-                }
-                KeyCode::Backspace => {
-                    ctx.backspace();
-                }
-                KeyCode::Char(c) => {
-                    ctx.push_input(c);
-                }
-                _ => {}
-            },
-            _ => {}
-        }
     }
 
     disable_raw_mode()?;
@@ -260,55 +316,6 @@ fn create_pupup(
     popup
 }
 
-fn diff_sequence<'a>(
-    chars: impl IntoIterator<Item = &'a char>,
-    other: Option<impl IntoIterator<Item = &'a char>>,
-) -> Vec<bool> {
-    if other.is_none() {
-        return Vec::default();
-    }
-    chars
-        .into_iter()
-        .zip(other.unwrap())
-        .map(|(a, b)| a != b)
-        .collect()
-}
-
-#[cfg(test)]
-mod test {
-    use unicode_width::UnicodeWidthStr;
-
-    use crate::diff_sequence;
-
-    #[test]
-    fn test_create_diff_text() {
-        let left = "hello, world".chars().collect::<Vec<_>>();
-        let right = "hella,_world, gray".chars().collect::<Vec<_>>();
-        let diff_indices = diff_sequence(left.iter(), Some(right.iter()));
-        println!("text: {diff_indices:?}");
-    }
-
-    #[test]
-    fn test_punc_length() {
-        let punc = "……";
-        let width_cjk = punc.width_cjk();
-        let width2 = punc.width();
-        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
-        let punc = "——";
-        let width_cjk = punc.width_cjk();
-        let width2 = punc.width();
-        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
-        let punc = "你好";
-        let width_cjk = punc.width_cjk();
-        let width2 = punc.width();
-        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
-        let punc = "你好abc";
-        let width_cjk = punc.width_cjk();
-        let width2 = punc.width();
-        println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
-    }
-}
-
 /// 计量速度.
 /// 需要的信息:
 ///   开始时间-结束时间
@@ -327,19 +334,23 @@ fn calc_measurements(records: &[Record], preset_wc: Option<usize>) -> Measuremen
     let pause_assert = Duration::from_secs(5);
     let (text_wc, code_cc, _space_times, pause_duration, _last_time) = records.iter().fold(
         (0, 0, 0, Duration::from_millis(0), Instant::now()),
-        |(total_text, total_code, space_times, mut pause_time, last_time), rec| {
+        |(total_text, total_code, space_times, pause_time, last_time), rec| {
+            if rec.range.is_empty() {
+                return (total_text, total_code, space_times, pause_time, last_time);
+            }
             // 计算暂停时间，如果两个record之间间隔了5秒，则认为这是暂停
+            let mut pause_dur = Duration::from_secs(0);
             if last_time < rec.start {
                 let dur = rec.start - last_time;
                 if dur > pause_assert {
-                    pause_time += dur;
+                    pause_dur = dur;
                 }
             }
             (
                 total_text + rec.range.len(),
                 total_code + rec.origin.len(),
                 space_times,
-                pause_time,
+                pause_time + pause_dur,
                 rec.end,
             )
         },

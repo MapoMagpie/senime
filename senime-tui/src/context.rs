@@ -9,16 +9,16 @@ use ratatui::{
 use senime_lib::Looker;
 use unicode_width::UnicodeWidthChar;
 
-use crate::diff_sequence;
-
 const COLOR_DIFF: usize = 2;
-const COLOR_NORMAL: usize = 3;
 const COLOR_SEG_LEN: usize = 2;
-const COLOR_PALETTE: [Style; 4] = [
+const COLOR_NORMAL: usize = 3;
+const COLOR_PENDING: usize = 4;
+const COLOR_PALETTE: [Style; 5] = [
     Style::new().on_light_cyan().dark_gray().dim(),
     Style::new().on_light_blue().dark_gray().dim(),
     Style::new().on_light_red().crossed_out().white(),
     Style::new(),
+    Style::new().magenta().underlined(),
 ];
 
 #[derive(Debug)]
@@ -75,7 +75,14 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn diff(&mut self, range: Range<usize>) {
+    pub fn clear(&mut self) {
+        self.clear_pending();
+        self.sentence.clear();
+        self.record.clear();
+        self.segment(0..self.preset.as_ref().map(|p| p.len()).unwrap_or(0));
+    }
+
+    fn diff(&mut self, range: Range<usize>, style_on_same: Option<(usize, Option<Style>)>) {
         if let Some(preset) = self.preset.as_ref()
             && range.start < preset.len()
         {
@@ -93,7 +100,16 @@ impl<'a> Context<'a> {
             let diff_range = diff_sequence(chars, Some(other.iter()))
                 .into_iter()
                 .enumerate()
-                .map(|(i, d)| (range.start + i, d.then(|| (COLOR_DIFF, None))))
+                .map(|(i, d)| {
+                    (
+                        range.start + i,
+                        if d {
+                            style_on_same
+                        } else {
+                            Some((COLOR_DIFF, None))
+                        },
+                    )
+                })
                 .collect::<Vec<_>>();
 
             diff_range
@@ -114,12 +130,17 @@ impl<'a> Context<'a> {
             // 如果range.end 小于 preset.len，表示局部小范围分词，
             // 从preset[range.end]上找到COLOR_PALETTE所在的位置，如1
             // 那么preset[range.end]所在的group idx % COLOR_SEG_LEN后 该为0
-            // 由于要递减，所以选一般较大的固定基数，因此使用preset.len()
+            // 由于要递减，所以选一般较大的固定基数，并且是偶数
             let mut group_idx = if range.end < preset.len() {
-                preset.len() + self.styles[range.end].0 + COLOR_SEG_LEN - 1
+                // eprintln!(
+                //     "next char: [{}]{}, style: {:?}",
+                //     range.end, preset[range.end], self.styles[range.end]
+                // );
+                100_000_000 + self.styles[range.end].0
             } else {
-                preset.len()
+                100_000_000
             };
+            // eprintln!("group_idx: {}", (group_idx - 1) % COLOR_SEG_LEN);
 
             for (slice_range, pos, auto_select) in iter {
                 group_idx -= 1;
@@ -157,7 +178,7 @@ impl<'a> Context<'a> {
         self.sentence.extend(text);
         self.record.push(record);
 
-        self.diff(old_len..old_len + txt_len);
+        self.diff(old_len..old_len + txt_len, None);
         if let Some(preset) = self.preset.as_ref()
             && self.sentence.len() < preset.len()
         {
@@ -203,7 +224,7 @@ impl<'a> Context<'a> {
                 });
         }
 
-        self.diff(range);
+        self.diff(range, Some((COLOR_PENDING, None)));
     }
 
     pub fn clear_pending(&mut self) {
@@ -272,27 +293,35 @@ impl<'a> Context<'a> {
 
     pub fn backspace(&mut self) {
         let mut splice_len = 0;
-        if self.pending.is_empty() {
+        if self.pending_input.is_empty() {
+            self.clear_pending();
             // eprintln!("backspace: remote record");
-            // 有一种情况，text为empty，chars非empry，通常为空格顶字
-            // 当text为empty，继续移除下一个，直到pop.range非空
-            while let Some(pop) = self.record.pop() {
-                splice_len = pop.range.len();
-                if splice_len > 0 {
-                    self.sentence.splice(pop.range.clone(), vec![]);
+            // 有一种情况，range(text)为empty，chars非empry，通常为空格顶字
+            // 当text为empty，继续修改下一个，直到非空并从中删除一个char
+            // 注意：所谓的删除，是修改record中的range，使其-1,
+            // record仍在self.record里面，而range对应的self.sentence确实删除了一个char
+            // 这是为了更多的统计信息，比如回改次数
+            for i in (0..self.record.len()).rev() {
+                let last = &mut self.record[i];
+                last.end = Instant::now();
+                if last.range.is_empty() {
+                    continue;
                 }
-                if let Some(last) = self.record.last_mut() {
-                    last.end = Instant::now();
+                last.range.end -= 1;
+                self.sentence.pop();
+                if last.range.is_empty() && i > 0 {
+                    self.record[i - 1].end = Instant::now();
                 }
-                if !pop.range.is_empty() {
-                    break;
-                }
+                break;
             }
         } else {
             // eprintln!("backspace: clear_pending");
             // FIXME
             splice_len = self.pending_max_len;
-            self.clear_pending();
+            self.pending_input.pop();
+            if self.pending_input.is_empty() {
+                self.clear_pending();
+            }
         }
         // 如果删除的是中间，需要重新diff，但目前不支持从中间删除，因此 TODO:diff
         // 重新分词
@@ -360,6 +389,7 @@ where
         }
         let wid = c.width().unwrap_or(0);
         // if wid == 0 {
+        //     eprintln!("zero width: {c} at {i}");
         //     continue;
         // }
         if x + wid >= width || c == '\n' {
@@ -377,9 +407,8 @@ where
                 }
             }
         }
-        if i + 1 >= cursor_at && cursor.is_none() {
-            // x + 1 的表现更好
-            cursor = Some(Position::new(rect.x + (x + 1) as u16, rect.y + y as u16))
+        if i + wid >= cursor_at && cursor.is_none() {
+            cursor = Some(Position::new(rect.x + (x + wid) as u16, rect.y + y as u16))
         }
         x += wid;
     }
@@ -401,3 +430,53 @@ fn advance_to_word_boundary(slice: &[char], at_least: usize) -> usize {
     });
     re.unwrap_or(slice.len())
 }
+
+/// 比较两个char序列间的不同.
+/// 简单比较，也就是直接比较相同索引下的字符
+/// true为字符相同，false为不同
+fn diff_sequence<'a>(
+    chars: impl IntoIterator<Item = &'a char>,
+    other: Option<impl IntoIterator<Item = &'a char>>,
+) -> Vec<bool> {
+    if other.is_none() {
+        return Vec::default();
+    }
+    chars
+        .into_iter()
+        .zip(other.unwrap())
+        .map(|(a, b)| a == b)
+        .collect()
+}
+
+// #[cfg(test)]
+// mod test {
+//     use unicode_width::UnicodeWidthStr;
+
+//     #[test]
+//     fn test_create_diff_text() {
+//         let left = "hello, world".chars().collect::<Vec<_>>();
+//         let right = "hella,_world, gray".chars().collect::<Vec<_>>();
+//         let diff_indices = diff_sequence(left.iter(), Some(right.iter()));
+//         println!("text: {diff_indices:?}");
+//     }
+
+//     #[test]
+//     fn test_punc_length() {
+//         let punc = "……";
+//         let width_cjk = punc.width_cjk();
+//         let width2 = punc.width();
+//         println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+//         let punc = "——";
+//         let width_cjk = punc.width_cjk();
+//         let width2 = punc.width();
+//         println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+//         let punc = "你好";
+//         let width_cjk = punc.width_cjk();
+//         let width2 = punc.width();
+//         println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+//         let punc = "你好abc";
+//         let width_cjk = punc.width_cjk();
+//         let width2 = punc.width();
+//         println!("{punc} > width cjk: {width_cjk}, width 2: {width2}]");
+//     }
+// }
