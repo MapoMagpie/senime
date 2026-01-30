@@ -11,19 +11,18 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{event, execute};
-use derive_setters::Setters;
 use ratatui::Terminal;
-use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Direction, Layout, Margin, Position, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::prelude::CrosstermBackend;
-use ratatui::style::{Style, Stylize};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
-use senime_lib::input_analyzer::CandidateRich;
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer, Looker};
 
 use crate::context::{Context, Record, WrappedText};
+use crate::popup::Popup;
+
+mod context;
+mod popup;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -58,36 +57,6 @@ pub struct Args {
     pub stdout: bool,
 }
 
-#[derive(Debug, Default, Setters)]
-struct Popup<'a> {
-    #[setters(into)]
-    title: Line<'a>,
-    #[setters(into)]
-    content: Text<'a>,
-    border_style: Style,
-    title_style: Style,
-    style: Style,
-}
-
-impl Widget for Popup<'_> {
-    fn render(self, mut area: Rect, buf: &mut Buffer) {
-        // ensure that all cells under the popup are cleared to avoid leaking content
-        area.x -= 1;
-        Clear.render(area, buf);
-        let block = Block::new()
-            .title(self.title)
-            .title_style(self.title_style)
-            .borders(Borders::ALL)
-            .border_style(self.border_style);
-        Paragraph::new(self.content)
-            .style(self.style)
-            .block(block)
-            .render(area, buf);
-    }
-}
-
-mod context;
-
 fn read_stdin() -> Result<String, std::io::Error> {
     use std::io::Read;
     let mut stdin = std::io::stdin();
@@ -109,108 +78,6 @@ where
     let mut str = String::new();
     file.read_to_string(&mut str)?;
     Ok(str)
-}
-
-/// 文本选择范围，左闭右开
-struct PickPreset {
-    /// 开始的行
-    line_start: usize,
-    /// 在开始的行中，字符的起始位置
-    char_start: usize,
-    /// 结束的行
-    line_end: usize,
-    /// 在结束的行中，字符的结束位置
-    char_end: usize,
-}
-
-impl FromStr for PickPreset {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let error =
-            "预设文本选择范围格式应为: 1-10(行一到行十)，或1.3-10.6(行一的第三字到行十的第六字)"
-                .to_string();
-        let split = s.split('-').collect::<Vec<_>>();
-        if split.is_empty() {
-            return Err(error);
-        }
-        let parse = |str: &str| -> Result<(usize, usize), String> {
-            let mut sp = str.split('.');
-            let line = sp
-                .next()
-                .unwrap()
-                .parse()
-                .map_err(|e| format!("{e}\n{error}"))?;
-            let pos = sp
-                .next()
-                .unwrap_or("0")
-                .parse()
-                .map_err(|e| format!("{e}\n{error}"))?;
-            Ok((line, pos))
-        };
-
-        let (start, char_start) = parse(&split[0])?;
-        let (end, char_end) = split
-            .get(1)
-            .map(|sp| parse(*sp))
-            .unwrap_or(Ok((usize::MAX, usize::MAX)))?;
-        Ok(Self {
-            line_start: start.saturating_sub(1),
-            char_start: char_start.saturating_sub(1),
-            line_end: end,
-            char_end: char_end,
-        })
-    }
-}
-
-impl Default for PickPreset {
-    fn default() -> Self {
-        Self {
-            line_start: 0,
-            char_start: 0,
-            line_end: usize::MAX,
-            char_end: usize::MAX,
-        }
-    }
-}
-
-fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> {
-    let pick = pick.unwrap_or(PickPreset::default());
-    let mut lines = str
-        .lines()
-        .enumerate()
-        .map(|(i, line)| {
-            if i < pick.line_start || i >= pick.line_end {
-                return vec![];
-            }
-            let chars = line
-                .chars()
-                .enumerate()
-                .filter_map(|(j, c)| {
-                    if (i == pick.line_start && j < pick.char_start)
-                        || (i == pick.line_end && j >= pick.char_end)
-                           // 当不保持预设文本原样时，则过滤空白和控制字符
-                        || !keep && (c.is_whitespace() || c.is_control())
-                    {
-                        None
-                    } else {
-                        Some(c)
-                    }
-                })
-                .chain(if keep {
-                    vec!['\n'].into_iter()
-                } else {
-                    vec![].into_iter()
-                })
-                .collect();
-            chars
-        })
-        .flatten()
-        .collect::<Vec<_>>();
-    if keep {
-        lines.pop();
-    }
-    lines
 }
 
 #[cfg(unix)]
@@ -238,6 +105,11 @@ fn create_backend() -> Result<CrosstermBackend<Stdout>, Box<dyn std::error::Erro
     Ok(backend)
 }
 
+// TODO: 实现中间编辑，删除新增
+// TODO: 重构setpending，接续分词，降低复杂性
+// TODO: 数据记录，每次使用时，生成一个时间相关的ID，并在适当的时候将所有的输入记录保存下来
+// TODO: 减少PreRender的计算
+// TODO: resize
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let preset: Option<Vec<char>> = if args.stdin {
@@ -353,8 +225,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame.render_widget(WrappedText::new(pre_render), t_area);
             frame.set_cursor_position(cursor);
 
-            let popup = create_pupup(candidates, t_area, cursor, ctx.get_input().len());
-            if let Some((popup, p_area)) = popup {
+            if let Some(cands) = candidates {
+                let (popup, p_area) = Popup::create(
+                    &cands,
+                    t_area,
+                    cursor,
+                    ctx.get_input().iter().map(|c| c.len_utf8()).sum(),
+                );
                 frame.render_widget(popup, p_area);
             }
 
@@ -377,62 +254,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // io::stdout().write(bs.as_bytes())?;
     // io::stdout().write_all(b"\n")?;
     Ok(())
-}
-
-fn create_pupup(
-    candidates: Option<Vec<CandidateRich>>,
-    root: Rect,
-    cursor: Position,
-    input_len: usize,
-) -> Option<(Popup<'static>, Rect)> {
-    let popup = if let Some(candidates) = candidates {
-        let cand_count = candidates.len();
-        let mut cand_max_width = 0;
-        let mut cand_text: Vec<Line> = vec![];
-        for cand in candidates.into_iter() {
-            let mut cand_line = Line::from("[");
-            cand_line.push_span(Span::from(cand.select_key.to_string()).green());
-            cand_line.push_span("]: ");
-            cand_line.push_span(cand.text);
-            if cand.code.len() > input_len {
-                cand_line.push_span(Span::from(cand.code.clone().split_off(input_len)).red());
-            }
-            cand_max_width = cand_line.width().max(cand_max_width);
-            cand_text.push(cand_line);
-        }
-        let mut p_area = Rect {
-            x: root.x + (cursor.x.max(3) - 2),
-            y: cursor.y + 1,
-            width: (cand_max_width as u16 + 2).min(root.width),
-            height: cand_count as u16 + 2,
-        };
-        if p_area.right() > root.right() {
-            p_area.x -= p_area.right() - root.right();
-        }
-        if p_area.bottom() > root.bottom() {
-            p_area.height -= p_area.bottom() - root.bottom();
-        }
-        // 如果指针下方小于6的空间，则将popup上移至cursor.y + 1并反转
-        if root.bottom() - cursor.y < 6 {
-            p_area.height = (cursor.y - 1 - root.y).min(cand_count as u16 + 2);
-            p_area.y = cursor.y - p_area.height;
-            if p_area.height > 2 {
-                let _ = cand_text.split_off(p_area.height as usize - 2);
-                cand_text.reverse();
-            }
-        }
-
-        Some((
-            Popup::default()
-                .content(cand_text)
-                .style(Style::new().yellow())
-                .border_style(Style::new().red()),
-            p_area,
-        ))
-    } else {
-        None
-    };
-    popup
 }
 
 /// 计量速度.
@@ -520,4 +341,106 @@ impl Display for Measurement {
             self.avg_len,
         )
     }
+}
+
+/// 文本选择范围，左闭右开
+struct PickPreset {
+    /// 开始的行
+    line_start: usize,
+    /// 在开始的行中，字符的起始位置
+    char_start: usize,
+    /// 结束的行
+    line_end: usize,
+    /// 在结束的行中，字符的结束位置
+    char_end: usize,
+}
+
+impl FromStr for PickPreset {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let error =
+            "预设文本选择范围格式应为: 1-10(行一到行十)，或1.3-10.6(行一的第三字到行十的第六字)"
+                .to_string();
+        let split = s.split('-').collect::<Vec<_>>();
+        if split.is_empty() {
+            return Err(error);
+        }
+        let parse = |str: &str| -> Result<(usize, usize), String> {
+            let mut sp = str.split('.');
+            let line = sp
+                .next()
+                .unwrap()
+                .parse()
+                .map_err(|e| format!("{e}\n{error}"))?;
+            let pos = sp
+                .next()
+                .unwrap_or("0")
+                .parse()
+                .map_err(|e| format!("{e}\n{error}"))?;
+            Ok((line, pos))
+        };
+
+        let (start, char_start) = parse(&split[0])?;
+        let (end, char_end) = split
+            .get(1)
+            .map(|sp| parse(*sp))
+            .unwrap_or(Ok((usize::MAX, usize::MAX)))?;
+        Ok(Self {
+            line_start: start.saturating_sub(1),
+            char_start: char_start.saturating_sub(1),
+            line_end: end,
+            char_end: char_end,
+        })
+    }
+}
+
+impl Default for PickPreset {
+    fn default() -> Self {
+        Self {
+            line_start: 0,
+            char_start: 0,
+            line_end: usize::MAX,
+            char_end: usize::MAX,
+        }
+    }
+}
+
+fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> {
+    let pick = pick.unwrap_or(PickPreset::default());
+    let mut lines = str
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            if i < pick.line_start || i >= pick.line_end {
+                return vec![];
+            }
+            let chars = line
+                .chars()
+                .enumerate()
+                .filter_map(|(j, c)| {
+                    if (i == pick.line_start && j < pick.char_start)
+                        || (i == pick.line_end && j >= pick.char_end)
+                           // 当不保持预设文本原样时，则过滤空白和控制字符
+                        || !keep && (c.is_whitespace() || c.is_control())
+                    {
+                        None
+                    } else {
+                        Some(c)
+                    }
+                })
+                .chain(if keep {
+                    vec!['\n'].into_iter()
+                } else {
+                    vec![].into_iter()
+                })
+                .collect();
+            chars
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    if keep {
+        lines.pop();
+    }
+    lines
 }
