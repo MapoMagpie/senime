@@ -12,6 +12,7 @@ use crossterm::terminal::{
 };
 use crossterm::{event, execute};
 use ratatui::Terminal;
+use ratatui::layout::Size;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -109,7 +110,6 @@ fn create_backend() -> Result<CrosstermBackend<Stdout>, Box<dyn std::error::Erro
 // TODO: 重构setpending，接续分词，降低复杂性
 // TODO: 数据记录，每次使用时，生成一个时间相关的ID，并在适当的时候将所有的输入记录保存下来
 // TODO: 减少PreRender的计算
-// TODO: resize
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let preset: Option<Vec<char>> = if args.stdin {
@@ -140,12 +140,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let backend = create_backend()?;
     let mut terminal = Terminal::new(backend)?;
+    let mut area: Rect = terminal.size()?.into();
 
     loop {
         if first {
             first = false;
         } else {
             match event::read()? {
+                Event::Resize(w, h) => {
+                    area = Size::new(w, h).into();
+                }
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                         break;
@@ -200,7 +204,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         // 当应用全屏时与frame.area() 一致，目前是默认的全屏
-        let area: Rect = terminal.size()?.into();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Fill(1), Constraint::Length(5)])
