@@ -1,6 +1,8 @@
 use std::fmt::Display;
+use std::fs::DirBuilder;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -11,6 +13,8 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{event, execute};
+use dirs::data_dir;
+use dirs::state_dir;
 use ratatui::Terminal;
 use ratatui::layout::Size;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
@@ -127,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     });
 
+    let time_id = generate_time_id();
     let dict = Dict::load(args.table);
     // 分词器
     let enc = Looker::new(&dict.candidates);
@@ -156,6 +161,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('x') if key.modifiers == KeyModifiers::CONTROL => {
                         ctx.clear();
+                    }
+                    KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                        let measurement = calc_measurements(ctx.get_recorders(), ctx.preset_len());
+                        let _ = write_input_data(&time_id, &ctx, &measurement);
                     }
                     KeyCode::Esc => {
                         break;
@@ -248,6 +257,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
+    }
+    let measurement = calc_measurements(ctx.get_recorders(), ctx.preset_len());
+    match write_input_data(&time_id, &ctx, &measurement) {
+        Err(err) => {
+            eprintln!("写入输入数据时出错: {:?}", err);
+        }
+        _ => {}
     }
     // let bs = sentence_rec
     //     .iter()
@@ -446,4 +462,104 @@ fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> 
         lines.pop();
     }
     lines
+}
+
+/// 写入输入信息，
+/// 包括：输入文本、
+///       输入记录
+///       预设文本
+///       计量信息
+/// 输出文件：
+///       文件1、输入文本
+///       文件2、chunk_1>计量信息 chunk_2>输入记录 chunk_3预设文本
+fn write_input_data(
+    id: &str,
+    ctx: &Context,
+    measurement: &Measurement,
+) -> Result<(), std::io::Error> {
+    let fire_prefix = format!("sentui_{id}_");
+    let state_dir = match data_dir() {
+        Some(mut dir) => {
+            dir.push("senitui");
+            if !dir.exists() {
+                DirBuilder::new().create(dir.clone())?;
+            }
+            dir
+        }
+        None => ".".into(),
+    };
+    // 找出 当前目录下所有包含此前缀的文件并删除
+    if let Ok(entries) = std::fs::read_dir(&state_dir) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let file_name = entry.file_name();
+                let file_name_str = file_name.to_string_lossy();
+                if file_name_str.starts_with(&fire_prefix) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    let sentence = ctx.get_sentence();
+    if sentence.is_empty() {
+        return Ok(());
+    }
+    // 从sentence中挑出前5个字(is_alphabetic)作为文件后缀
+    let file_suffix = sentence
+        .iter()
+        .filter(|c| c.is_alphabetic())
+        .take(5)
+        .collect::<String>();
+    {
+        let mut path = state_dir.clone();
+        path.push(format!("{}{}.txt", fire_prefix, file_suffix));
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        writeln!(file, "{}", sentence.iter().collect::<String>())?;
+    }
+    {
+        let mut path = state_dir.clone();
+        path.push(format!("{}{}_record.txt", fire_prefix, file_suffix));
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        // chunk 1: 计量信息
+        writeln!(file, "\n# Measurement\n{}", measurement)?;
+        // // chunk 2: 输入记录
+        // writeln!(file, "\n# Records")?;
+        // for rec in ctx.get_recorders() {
+        //     writeln!(
+        //         file,
+        //         "{:?}\t{}\t{:.2?}",
+        //         rec.range,
+        //         rec.origin.iter().collect::<String>(),
+        //         rec.end.elapsed()
+        //     )?;
+        // }
+
+        // // chunk 3: 预设文本
+        // if let Some(preset) = ctx.get_preset() {
+        //     let preset_str: String = preset.iter().collect();
+        //     writeln!(file, "\n# Preset\n{}", preset_str)?;
+        // }
+    }
+    Ok(())
+}
+
+/// 根据时间生成一个ID
+fn generate_time_id() -> String {
+    use chrono::prelude::*;
+    let now: DateTime<Local> = Local::now();
+    now.format("%Y%m%d%H%M%S").to_string()
+}
+
+#[test]
+fn test_generate_id() {
+    let id = generate_time_id();
+    println!("Generated ID: {}", id);
 }
