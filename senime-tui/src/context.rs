@@ -245,6 +245,10 @@ impl<'a> Context<'a> {
         &self.record
     }
 
+    pub fn get_sentence(&self) -> &[char] {
+        &self.sentence
+    }
+
     pub fn preset_len(&self) -> Option<usize> {
         match self.preset.as_ref() {
             Some(preset) => Some(preset.len()),
@@ -338,6 +342,10 @@ impl<'a> Context<'a> {
             self.segment(sen_len..sen_len + end);
         }
     }
+
+    // pub fn get_preset(&self) -> Option<&Vec<char>> {
+    //     self.preset.as_ref()
+    // }
 }
 
 #[derive(Debug)]
@@ -379,18 +387,19 @@ where
     let mut cursor: Option<Position> = None;
     let mut ret: PreRender = vec![];
     let mut first = true;
+    let mut char_wid = 0;
     for (i, c) in content.into_iter().enumerate() {
         let c = *c.borrow();
         if first {
             ret.push(init_line());
             first = false;
         }
-        let wid = c.width().unwrap_or(0);
+        char_wid = c.width().unwrap_or(0);
         // if wid == 0 {
         //     eprintln!("zero width: {c} at {i}");
         //     continue;
         // }
-        if x + wid >= width || c == '\n' {
+        if x + char_wid >= width || c == '\n' {
             y += 1;
             x = 1;
             ret.push(init_line());
@@ -406,14 +415,18 @@ where
                 }
             }
         }
-        if i + wid >= cursor_at && cursor.is_none() {
-            cursor = Some(Position::new(rect.x + (x + wid) as u16, rect.y + y as u16))
+        if i == cursor_at && cursor.is_none() {
+            cursor = Some(Position::new((x + char_wid - 1) as u16, rect.y + y as u16))
         }
-        x += wid;
+        x += char_wid;
     }
+    eprintln!("cursor: {cursor:?}, x: {x}, char wid: {char_wid}");
     (
         ret,
-        cursor.unwrap_or(Position::new(rect.x + x as u16, rect.y + y as u16)),
+        cursor.unwrap_or(Position::new(
+            (x + char_wid.max(1) - 1) as u16,
+            rect.y + y as u16,
+        )),
     )
 }
 
