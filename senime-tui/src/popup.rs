@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Margin, Position, Rect},
     style::{Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Clear, Widget},
+    widgets::{Block, Borders, Widget},
 };
 use senime_lib::input_analyzer::CandidateRich;
 
@@ -22,18 +22,21 @@ impl<'a> Popup<'a> {
         let cand_count = candidates.len();
         let mut cand_max_width = 0;
         let mut cand_text: Vec<Line> = vec![];
-        for cand in candidates.iter() {
+        for (i, cand) in candidates.iter().enumerate() {
             let mut cand_line = Line::from("[");
             cand_line.push_span(Span::from(cand.select_key.to_string()).green());
             cand_line.push_span("]: ");
-            cand_line.push_span(&cand.text);
+            cand_line.push_span(Span::from(&cand.text));
             if cand.code.len() > input_byte_len {
                 cand_line.push_span(Span::from(&cand.code[input_byte_len..]).red());
             }
             cand_max_width = cand_line.width().max(cand_max_width);
+            if i == 0 {
+                cand_line = cand_line.style(Style::new().on_dark_gray());
+            }
             cand_text.push(cand_line);
         }
-        let margin_x = 2;
+        let margin_x = 4;
         let margin_y = 0;
         let mut p_area = Rect {
             x: root_area.x + (cursor.x.max(3) - 2),
@@ -63,8 +66,32 @@ impl<'a> Popup<'a> {
 
 impl Widget for Popup<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Clear.render(area, buf);
-        let t_area = area.inner(Margin::new(1, 0));
+        Background(Style::reset().on_light_green()).render(area, buf);
+        let b_area = area.inner(Margin::new(1, 0));
+        Block::new()
+            .borders(Borders::LEFT | Borders::RIGHT)
+            .render(b_area, buf);
+
+        let t_area = area.inner(Margin::new(2, 0));
         self.content.render(t_area, buf);
+    }
+}
+#[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
+pub struct Background(Style);
+
+impl Widget for Background {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        Widget::render(&self, area, buf);
+    }
+}
+
+impl Widget for &Background {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        for x in area.left()..area.right() {
+            for y in area.top()..area.bottom() {
+                buf[(x, y)].reset();
+                buf[(x, y)].set_style(self.0);
+            }
+        }
     }
 }
