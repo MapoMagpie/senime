@@ -1,5 +1,6 @@
-use std::{borrow::Borrow, ops::Range, time::Instant};
+use std::{borrow::Borrow, mem, ops::Range, time::Instant};
 
+use crossterm::event::KeyCode;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -23,22 +24,369 @@ const COLOR_PALETTE: [Style; 5] = [
 
 #[derive(Debug)]
 pub struct Record {
-    pub range: Range<usize>,
+    pub len: i32,
     pub origin: Vec<char>,
     pub start: Instant,
     pub end: Instant,
 }
 
+use std::iter::Chain;
+use std::slice::Iter;
+type SentenceChars<'a> =
+    Chain<Chain<Chain<Iter<'a, char>, Iter<'a, char>>, Iter<'a, char>>, Iter<'a, char>>;
+
+/// 输入的字符
+/// 在中间插入时，为了避免频繁对Vec中间进行修改影响性能
+/// 故采用多级机制
+/// chars:      输入字符的最终状态，不过一直没有过中间修改的话，pending才是输入字符的最终状态。
+/// append_at: 当进行中间修改时，pending_at将对应char中的某个位置，直到光标再移动到另一位置后，将pending合并到char，并更新pending_at为光标的位置。
+/// appending:    这是在pending_at后，写入的字符，只有在变动pending_at(光标位置)后，才会将pending放入chars对应的位置
+///             一种情况是，如输入的过程中，始终没有进行过中间修改，那么chars会一直是空，真正的输入在pending里，这是正常且符合预期的。
+///             另一种情况便是中间修改，当要修改中间某处时，先将pending归并到chars里，并设置新的pending_at与pending，
+///               这样在中间写入大量的字符时，始终在pending里追加，对性能影响不大。
+/// pending:   未决的输入，在输入时，由于还有其他候选，这段字符变动非常频繁。它的主要作用是参与diff
+#[allow(dead_code)]
+#[derive(Debug)]
+struct Sentence {
+    chars: Vec<char>,
+    appends: Vec<char>,
+    append_at: usize,
+    pending: Vec<char>,
+    pending_origin: Vec<char>,
+}
+
+impl Default for Sentence {
+    fn default() -> Self {
+        Self {
+            chars: Default::default(),
+            appends: Default::default(),
+            append_at: Default::default(),
+            pending: Default::default(),
+            pending_origin: Default::default(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl Sentence {
+    fn len(&self) -> usize {
+        self.chars.len() + self.appends.len() + self.pending.len()
+    }
+
+    /// 到pending的长度
+    fn pending_end(&self) -> usize {
+        self.append_at + self.appends.len() + self.pending.len()
+    }
+    fn append_end(&self) -> usize {
+        self.append_at + self.appends.len()
+    }
+
+    fn get_chars<'a>(&'a self) -> SentenceChars<'a> {
+        self.chars[..self.append_at]
+            .iter()
+            .chain(self.appends.iter())
+            .chain(self.pending.iter())
+            .chain(self.chars[self.append_at..].iter())
+    }
+
+    fn set_append_at(&mut self, at: usize) {
+        if !self.appends.is_empty() {
+            let mut old_append = mem::replace(&mut self.appends, vec![]);
+            if !self.pending.is_empty() {
+                let old_pending = mem::replace(&mut self.pending, vec![]);
+                self.pending_origin.clear();
+                old_append.extend(old_pending);
+            }
+            let _ = self
+                .chars
+                .splice(self.append_at..self.append_at, old_append);
+        }
+        self.append_at = at;
+    }
+
+    fn extend(&mut self, chars: impl IntoIterator<Item = char>) {
+        self.appends.extend(chars);
+    }
+
+    fn clear(&mut self) {
+        self.chars.clear();
+        self.appends.clear();
+        self.append_at = 0;
+    }
+
+    fn pop(&mut self) {
+        if !self.pending.is_empty() {
+            self.pending_origin.pop();
+            if self.pending_origin.is_empty() {
+                self.clear_pending();
+            }
+        } else if !self.appends.is_empty() {
+            self.appends.pop();
+        } else if !self.chars.is_empty() {
+            if self.append_at == 0 {
+                return;
+            }
+            if self.append_at == self.chars.len() {
+                self.chars.pop();
+            } else {
+                // WARN: 影响性能
+                self.chars.remove(self.append_at - 1);
+            }
+            self.append_at -= 1;
+        }
+    }
+
+    fn push_input(&mut self, c: char) {
+        self.pending_origin.push(c);
+    }
+
+    fn set_pending(&mut self, pending: Vec<char>, origin: Vec<char>) {
+        self.pending = pending;
+        self.pending_origin = origin;
+    }
+
+    fn clear_pending(&mut self) {
+        self.pending.clear();
+        self.pending_origin.clear();
+    }
+
+    /// 根据一个宏观的range从chars, appending, pending中先出正确范围的字符
+    /// 情况1：  chars     = ['a', 'b', 'g', 'h'];
+    ///          appending = ['c', 'd']; append_at = 2;
+    ///          pending   = ['e', 'f'];
+    ///        range =  (1..4)时，对应的字符该是 ['b', 'c', 'd']
+    ///          c_range  = (1..2)
+    ///          a_range  = (0..2)
+    ///          p_range  = (0..0)
+    ///          c_range2 = (0..0)
+    /// 情况2：  chars     = ['a', 'b', 'g', 'h'];
+    ///          appending = ['c', 'd']; append_at = 2;
+    ///          pending   = ['e', 'f'];
+    ///        range =  (0..7)时，对应的字符该是 ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    ///          c_range  = (0..2)
+    ///          a_range  = (0..2)
+    ///          p_range  = (0..2)
+    ///          c_range2 = (2..3)
+    fn get_chars_by<'a>(&'a self, range: Range<usize>) -> SentenceChars<'a> {
+        let mut c_range_1 = 0..0;
+        let mut c_range_2 = self.append_at..self.append_at;
+        let mut a_range = 0..self.appends.len();
+        let mut p_range = 0..self.pending.len();
+        // 实际只计算一轮，但中间有可以提早结束的条件
+        loop {
+            if range.start < self.append_at {
+                c_range_1.start = range.start;
+                c_range_1.end = self.append_at;
+                if range.end < self.append_at {
+                    c_range_1.end = range.end;
+                    a_range.end = 0;
+                    p_range.end = 0;
+                    break;
+                }
+            }
+            let append_end = self.append_at + self.appends.len();
+            let pending_end = append_end + self.pending.len();
+
+            if range.end > pending_end {
+                c_range_2.end = self.append_at + (range.end - pending_end);
+                if range.start > pending_end {
+                    c_range_2.start = self.append_at + range.start - pending_end;
+                    a_range.end = 0;
+                    p_range.end = 0;
+                    break;
+                }
+            }
+            if range.start > self.append_at && range.start <= append_end {
+                a_range.start = range.start - self.append_at;
+            }
+            // append_at = 3 range 2..6 期待 a_range = 0..3
+            // append_end = 8
+            // 6 - 3 = 3 range.end - append_at = append_end
+            if range.end < append_end {
+                a_range.end = range.end - self.append_at;
+                p_range.end = 0;
+                break;
+            }
+            if range.start > append_end && range.start <= pending_end {
+                p_range.start = range.start - append_end;
+            }
+            if pending_end > range.end {
+                p_range.end = range.end - append_end;
+            }
+            break;
+        }
+        // eprintln!(
+        //     "append_at: [{}], chars len: [{}], append len: [{}], pending len: [{}]",
+        //     self.append_at,
+        //     self.chars.len(),
+        //     self.appends.len(),
+        //     self.pending.len(),
+        // );
+        // eprintln!(
+        //     "--\nrange: {range:?}, \nc_range_1: {c_range_1:?}\na_range: {a_range:?}\np_range: {p_range:?}\nc_range_2: {c_range_2:?}"
+        // );
+        self.chars[c_range_1]
+            .iter()
+            .chain(self.appends[a_range].iter())
+            .chain(self.pending[p_range].iter())
+            .chain(self.chars[c_range_2].iter())
+    }
+}
+
+#[test]
+fn test_sentence() {
+    let mut sentence = Sentence::default();
+    sentence.extend(vec!['a', 'b', 'c', 'd', 'e']);
+    sentence.set_append_at(3);
+    sentence.extend(vec!['1', '2', '3', '4', '5']);
+    let chars = sentence
+        .get_chars()
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chars,
+        vec!['a', 'b', 'c', '1', '2', '3', '4', '5', 'd', 'e']
+    );
+    let chars = sentence
+        .get_chars_by(2..6)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['c', '1', '2', '3']);
+
+    let chars = sentence
+        .get_chars_by(3..8)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['1', '2', '3', '4', '5']);
+
+    sentence.set_append_at(6);
+    sentence.extend(vec!['A', 'B']);
+    let chars = sentence
+        .get_chars()
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chars,
+        vec!['a', 'b', 'c', '1', '2', '3', 'A', 'B', '4', '5', 'd', 'e']
+    );
+    sentence.set_pending(vec!['你', '好'], vec![]);
+    let chars = sentence
+        .get_chars()
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chars,
+        vec![
+            'a', 'b', 'c', '1', '2', '3', 'A', 'B', '你', '好', '4', '5', 'd', 'e'
+        ]
+    );
+    sentence.set_append_at(6);
+    let chars = sentence
+        .get_chars()
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chars,
+        vec![
+            'a', 'b', 'c', '1', '2', '3', 'A', 'B', '你', '好', '4', '5', 'd', 'e'
+        ]
+    );
+    let chars = sentence
+        .get_chars_by(8..10)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['你', '好']);
+
+    sentence.pop();
+    sentence.pop();
+    let chars = sentence
+        .get_chars_by(8..10)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['4', '5']);
+
+    let chars = sentence
+        .get_chars()
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chars,
+        vec!['a', 'b', 'c', '1', 'A', 'B', '你', '好', '4', '5', 'd', 'e']
+    );
+    sentence.set_append_at(sentence.len());
+    sentence.set_pending(vec!['悬', '决'], vec!['f', 'k', 'w', 'n']);
+    let chars = sentence
+        .get_chars()
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chars,
+        vec![
+            'a', 'b', 'c', '1', 'A', 'B', '你', '好', '4', '5', 'd', 'e', '悬', '决'
+        ]
+    );
+    sentence.pop();
+    let chars = sentence
+        .get_chars_by(10..sentence.len())
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['d', 'e', '悬', '决']);
+    sentence.pop();
+    sentence.pop();
+    sentence.pop();
+    let chars = sentence
+        .get_chars_by(10..sentence.len())
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['d', 'e']);
+    sentence.clear();
+    sentence.extend(vec!['a', 'b', 'c', 'd']);
+    let chars = sentence
+        .get_chars_by(2..4)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['c', 'd']);
+    sentence.clear();
+    sentence.extend(vec!['a', 'b', 'c', 'd']);
+    sentence.set_append_at(2);
+    sentence.extend(vec!['1', '2']);
+    let chars = sentence
+        .get_chars_by(2..sentence.len())
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['1', '2', 'c', 'd']);
+    sentence.set_pending(vec!['你', '好'], vec![]);
+    let chars = sentence
+        .get_chars_by(2..sentence.len())
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['1', '2', '你', '好', 'c', 'd']);
+    let chars = sentence
+        .get_chars_by(2..2)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec![]);
+    sentence.set_append_at(0);
+    sentence.set_pending(vec!['你', '好'], vec![]);
+    let chars = sentence
+        .get_chars_by(1..2)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec!['好']);
+    let chars = sentence
+        .get_chars_by(2..2)
+        .map(|c| c.to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(chars, vec![]);
+}
+
 pub struct Context<'a> {
     preset: Option<Vec<char>>,
-    sentence: Vec<char>,
+    sentence: Sentence,
     styles: Vec<(usize, Option<Style>)>,
-    record: Vec<Record>,
-    pending: Vec<char>,
-    pending_max_len: usize,
-    pending_backup_styles: Vec<(usize, Option<Style>)>,
-    pending_input: Vec<char>,
+    records: Vec<Record>,
     input_start: Instant,
+    before_pending_style: Vec<(usize, Option<Style>)>,
     enc: &'a Looker,
     pre_render: PreRender,
 }
@@ -48,12 +396,9 @@ impl<'a> Context<'a> {
             preset: Default::default(),
             sentence: Default::default(),
             styles: Default::default(),
-            record: Default::default(),
-            pending: Default::default(),
-            pending_max_len: 0,
-            pending_backup_styles: Default::default(),
-            pending_input: Default::default(),
+            records: Default::default(),
             input_start: Instant::now(),
+            before_pending_style: Default::default(),
             pre_render: Default::default(),
             enc,
         }
@@ -80,7 +425,6 @@ impl<'a> Context<'a> {
     pub fn clear(&mut self) {
         self.clear_pending();
         self.sentence.clear();
-        self.record.clear();
         self.segment(0..self.preset.as_ref().map(|p| p.len()).unwrap_or(0));
     }
 
@@ -88,17 +432,17 @@ impl<'a> Context<'a> {
         if let Some(preset) = self.preset.as_ref()
             && range.start < preset.len()
         {
-            let sen_len = self.sentence.len();
-            let pen_len = self.pending.len();
-            let sen_range = range.start.min(sen_len)..range.end.min(sen_len);
-            let pen_range =
-                range.start.saturating_sub(sen_len)..range.end.saturating_sub(sen_len).min(pen_len);
-
-            let chars = (&self.sentence[sen_range])
-                .iter()
-                .chain((&self.pending[pen_range]).iter());
+            // eprintln!("sentence: {:?}, range: {:?}", self.sentence, range);
+            let chars = self.sentence.get_chars_by(range.clone());
             let other = &preset[range.start..range.end.min(preset.len())];
 
+            // let chars = chars.collect::<Vec<_>>();
+            // eprintln!(
+            //     "range: {:?}, \nchars: {}\nother: {}",
+            //     range,
+            //     chars.iter().map(|c| c.to_owned()).collect::<String>(),
+            //     other.iter().collect::<String>(),
+            // );
             let diff_range = diff_sequence(chars, Some(other.iter()))
                 .into_iter()
                 .enumerate()
@@ -161,119 +505,194 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// 添加新的输入结果（汉字）
-    /// 同时维护好输入记录中的索引
+    /// 添加新的输入结果
     /// 如果存在预设文章（赛文用）
     ///     进行当前输入差异比对.
     ///     进行当前索引之后到下一标点符号为止的分词计算
     pub fn push(&mut self, text: impl IntoIterator<Item = char>, origin: Vec<char>) {
-        // eprintln!("push");
         let text: Vec<char> = text.into_iter().collect();
-        let old_len = self.sentence.len();
         let txt_len = text.len();
+        // let old_sen_len = self.sentence.len();
         let record = Record {
-            range: old_len..old_len + txt_len,
-            origin,
+            len: txt_len as i32,
+            origin: origin.clone(),
             start: self.input_start,
             end: Instant::now(),
         };
+        self.records.push(record);
         self.sentence.extend(text);
-        self.record.push(record);
-
-        self.diff(old_len..old_len + txt_len, None);
+        self.sentence.clear_pending();
+        let start_at = self.sentence.append_end() - txt_len;
+        let end = self.sentence.len();
+        let range = start_at..end;
+        if !self.before_pending_style.is_empty() {
+            self.before_pending_style
+                .iter()
+                .enumerate()
+                .for_each(|(i, s)| {
+                    self.styles[range.start + i] = *s;
+                });
+            self.before_pending_style.clear();
+        }
+        // eprintln!(
+        //     "push diff range: {:?}, old len: {}, new len: {}",
+        //     range, old_sen_len, new_sen_len
+        // );
+        self.diff(range.clone(), None);
         if let Some(preset) = self.preset.as_ref()
-            && self.sentence.len() < preset.len()
+            && range.end < preset.len()
         {
-            let end = advance_to_word_boundary(
-                &preset[self.sentence.len()..],
-                self.pending_max_len.saturating_sub(txt_len),
-            );
-            self.segment(self.sentence.len()..self.sentence.len() + end);
+            let end = advance_to_word_boundary(&preset[range.end..], 0);
+            self.segment(range.end..range.end + end);
         }
     }
 
     pub fn set_pending(&mut self, pending: impl IntoIterator<Item = char>, input: Vec<char>) {
-        // eprintln!("set_pending");
         let pending: Vec<char> = pending.into_iter().collect();
-        let range = self.sentence.len()..self.sentence.len() + pending.len();
-        self.pending = pending;
-        self.pending_input = input;
+        let start_at = self.sentence.append_end();
+        let old_pen_end = self.sentence.pending_end();
+        self.sentence.set_pending(pending, input);
+        let new_pen_end = self.sentence.pending_end();
+        let end = self.sentence.len();
+        let range = start_at..end;
 
-        if self.pending.len() > self.pending_max_len {
-            // set_pending时不进行分词，
-            // 但是在diff阶段，上一次过长的候选词会影响后面的字符样式，
-            // 需要恢复其原本的样式
-            if range.end <= self.styles.len() {
-                let pick_range = self.sentence.len() + self.pending_max_len
-                    ..self.sentence.len() + self.pending.len();
-                self.pending_backup_styles
-                    .extend((&self.styles[pick_range]).to_vec());
-                // eprintln!("backup style: {:?}", self.pending_backup_styles);
+        if range.end <= self.styles.len() {
+            if old_pen_end < new_pen_end {
+                self.before_pending_style
+                    .extend((&self.styles[old_pen_end..new_pen_end]).to_vec());
+            } else {
+                self.before_pending_style
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, s)| {
+                        self.styles[range.start + i] = *s;
+                    });
             }
-            self.pending_max_len = self.pending.len();
         }
-        // 恢复上一次过长的pending改变的样式为分词的样式
-        if self.pending.len() < self.pending_max_len
-            && self.sentence.len() + self.pending_max_len <= self.styles.len()
-        {
-            // eprintln!("restore style: {:?}", self.pending_backup_styles);
-            self.pending_backup_styles
-                .iter()
-                .enumerate()
-                .for_each(|(i, style)| {
-                    let i = self.sentence.len() + i;
-                    self.styles[i] = *style;
-                });
-        }
-
         self.diff(range, Some((COLOR_PENDING, None)));
     }
 
     pub fn clear_pending(&mut self) {
-        // eprintln!("clear_pending");
-        self.pending_input.clear();
-        self.pending.clear();
-        self.pending_max_len = 0;
-        self.pending_backup_styles = vec![];
+        self.before_pending_style.clear();
+        self.sentence.clear_pending();
+    }
+
+    pub fn confrim_pending(&mut self) {
+        self.before_pending_style.clear();
+        if !self.sentence.pending.is_empty() {
+            let pending = self.sentence.pending.clone();
+            let pending_origin = self.sentence.pending_origin.clone();
+            let record = Record {
+                len: pending.len() as i32,
+                origin: pending_origin,
+                start: self.input_start,
+                end: Instant::now(),
+            };
+            self.records.push(record);
+            self.sentence.extend(pending);
+            self.sentence.clear_pending();
+        }
+    }
+
+    pub fn push_input(&mut self, c: char) {
+        if self.sentence.pending_origin.is_empty() {
+            self.before_pending_style.clear();
+            self.input_start = Instant::now();
+        }
+        self.sentence.push_input(c);
+    }
+
+    pub fn backspace(&mut self) {
+        if !self.before_pending_style.is_empty() {
+            self.before_pending_style.clear();
+        }
+        if self.sentence.len() > 0 {
+            self.sentence.pop();
+            let record = Record {
+                len: -1,
+                origin: vec![],
+                start: Instant::now(),
+                end: Instant::now(),
+            };
+            self.records.push(record);
+        }
+        // 需要diff
+        if self.sentence.append_at != self.sentence.len() {
+            let start = self.sentence.pending_end();
+            let end = self.sentence.len();
+            self.diff(start..end, None);
+        }
+        if let Some(preset) = self.preset.as_ref() {
+            let sen_len = self.sentence.len();
+            if sen_len < preset.len() {
+                let end = advance_to_word_boundary(&preset[sen_len..], 0);
+                self.segment(sen_len..sen_len + end);
+            }
+        }
+    }
+
+    /// 移动指针
+    pub fn move_cursor(&mut self, action: Movement) {
+        self.confrim_pending();
+        self.sentence.set_append_at(self.sentence.pending_end());
+        // eprintln!(
+        //     "sentence len:[{}] append_at:[{}] appends: {:?}",
+        //     self.sentence.len(),
+        //     self.sentence.append_at,
+        //     self.sentence.appends
+        // );
+        match action {
+            Movement::Left => {
+                if self.sentence.append_at > 0 {
+                    self.sentence.append_at -= 1;
+                }
+            }
+            Movement::Right => {
+                if self.sentence.append_at < self.sentence.len() {
+                    self.sentence.append_at += 1;
+                }
+            }
+            _ => {
+                panic!(" 未实现 ");
+            } // Movement::Up => self.sentence.append_at -= 1,
+              // Movement::Down => self.sentence.append_at -= 1,
+        }
     }
 
     pub fn get_input(&self) -> &[char] {
-        &self.pending_input
+        &self.sentence.pending_origin
     }
 
     pub fn get_recorders(&self) -> &[Record] {
-        &self.record
+        &self.records
     }
 
-    pub fn get_sentence(&self) -> &[char] {
-        &self.sentence
+    pub fn get_sentence(&'a self) -> SentenceChars<'a> {
+        self.sentence.get_chars()
     }
 
-    pub fn preset_len(&self) -> Option<usize> {
-        match self.preset.as_ref() {
-            Some(preset) => Some(preset.len()),
-            None => None,
-        }
+    pub fn sentence_len(&self) -> usize {
+        self.sentence.len()
     }
 
     // TODO: 缓存结果
     pub fn calc_pre_render(&mut self, area: Rect) -> (PreRender, Position) {
-        let preset_start = self.sentence.len() + self.pending.len();
+        let cursor_at = self.sentence.pending_end();
+        let preset_at = self.sentence.len();
         let chars = self
             .sentence
-            .iter()
-            .chain(self.pending.iter())
+            .get_chars()
             .chain({
                 if let Some(preset) = self.preset.as_ref()
-                    && preset_start < preset.len()
+                    && preset_at < preset.len()
                 {
-                    preset[preset_start..].iter()
+                    preset[preset_at..].iter()
                 } else {
                     Default::default()
                 }
             })
             .map(|c| *c);
-        let (pre_render, mut cursor) = calc_pre_render(chars, &self.styles, area, preset_start);
+        let (pre_render, mut cursor) = calc_pre_render(chars, &self.styles, area, cursor_at);
         self.pre_render = pre_render;
         // 根据cursor.y计算切片窗口，cursor.y 从向下2行开始向上倒止t_area.height，并最终修正cursor.y到t_area内
         let mut l_end = cursor.y as usize + 1;
@@ -284,68 +703,28 @@ impl<'a> Context<'a> {
         (slice, cursor)
     }
 
-    pub fn confrim_pending(&mut self) {
-        if !self.pending.is_empty() {
-            let pending = self.pending.clone();
-            let input = self.pending_input.clone();
-            self.push(pending, input);
-            self.clear_pending();
-        }
-    }
-
-    pub fn push_input(&mut self, c: char) {
-        if self.pending_input.is_empty() {
-            self.input_start = Instant::now();
-        }
-        self.pending_input.push(c);
-    }
-
-    pub fn backspace(&mut self) {
-        let mut splice_len = 0;
-        if self.pending_input.is_empty() {
-            self.clear_pending();
-            // eprintln!("backspace: remote record");
-            // 有一种情况，range(text)为empty，chars非empry，通常为空格顶字
-            // 当text为empty，继续修改下一个，直到非空并从中删除一个char
-            // 注意：所谓的删除，是修改record中的range，使其-1,
-            // record仍在self.record里面，而range对应的self.sentence确实删除了一个char
-            // 这是为了更多的统计信息，比如回改次数
-            for i in (0..self.record.len()).rev() {
-                let last = &mut self.record[i];
-                last.end = Instant::now();
-                if last.range.is_empty() {
-                    continue;
-                }
-                last.range.end -= 1;
-                self.sentence.pop();
-                if last.range.is_empty() && i > 0 {
-                    self.record[i - 1].end = Instant::now();
-                }
-                break;
-            }
-        } else {
-            // eprintln!("backspace: clear_pending");
-            // FIXME
-            splice_len = self.pending_max_len;
-            self.pending_input.pop();
-            if self.pending_input.is_empty() {
-                self.clear_pending();
-            }
-        }
-        // 如果删除的是中间，需要重新diff，但目前不支持从中间删除，因此 TODO:diff
-        // 重新分词
-        let sen_len = self.sentence.len();
-        if let Some(preset) = self.preset.as_ref()
-            && sen_len < preset.len()
-        {
-            let end = advance_to_word_boundary(&preset[sen_len..], splice_len);
-            self.segment(sen_len..sen_len + end);
-        }
-    }
-
     // pub fn get_preset(&self) -> Option<&Vec<char>> {
     //     self.preset.as_ref()
     // }
+}
+
+pub enum Movement {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl From<KeyCode> for Movement {
+    fn from(value: KeyCode) -> Self {
+        match value {
+            KeyCode::Left => Movement::Left,
+            KeyCode::Right => Movement::Right,
+            KeyCode::Up => Movement::Up,
+            KeyCode::Down => Movement::Down,
+            _ => unreachable!("movement from other keycodes"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -420,7 +799,7 @@ where
         }
         x += char_wid;
     }
-    eprintln!("cursor: {cursor:?}, x: {x}, char wid: {char_wid}");
+    // eprintln!("cursor: {cursor:?}, x: {x}, char wid: {char_wid}");
     (
         ret,
         cursor.unwrap_or(Position::new(

@@ -8,13 +8,13 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use clap::{ArgAction, Parser};
+use crossterm::cursor::SetCursorStyle;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{event, execute};
 use dirs::data_dir;
-use dirs::state_dir;
 use ratatui::Terminal;
 use ratatui::layout::Size;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
@@ -87,6 +87,8 @@ where
 
 #[cfg(unix)]
 fn create_backend() -> Result<CrosstermBackend<File>, Box<dyn std::error::Error>> {
+    use crossterm::cursor::SetCursorStyle;
+
     let mut stdout = OpenOptions::new()
         .read(false)
         .write(true)
@@ -97,15 +99,16 @@ fn create_backend() -> Result<CrosstermBackend<File>, Box<dyn std::error::Error>
                 format!("无法打开 /dev/tty {:?}", err),
             )
         })?;
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     Ok(backend)
 }
 
 #[cfg(not(unix))]
 fn create_backend() -> Result<CrosstermBackend<Stdout>, Box<dyn std::error::Error>> {
+    use std::io;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     Ok(backend)
 }
@@ -139,6 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let an = InputAnalyzer::new(dict);
     // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
     let mut ctx = Context::new(&enc);
+    let mut measurement = Measurement::new().with_preset(preset.as_ref().map(|p| p.len()));
     ctx.set_preset(preset);
 
     let mut first = true;
@@ -163,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ctx.clear();
                     }
                     KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
-                        let measurement = calc_measurements(ctx.get_recorders(), ctx.preset_len());
+                        measurement.calc(ctx.get_recorders(), ctx.sentence_len());
                         let _ = write_input_data(&time_id, &ctx, &measurement);
                     }
                     KeyCode::Esc => {
@@ -175,6 +179,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Backspace => {
                         ctx.backspace();
+                    }
+                    KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                        ctx.move_cursor(key.code.into());
                     }
                     KeyCode::Char(c) => {
                         ctx.push_input(c);
@@ -200,13 +207,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             segments.into_iter().for_each(|(text, origin)| {
                 ctx.push(text.chars(), origin);
             });
-            ctx.clear_pending();
         }
         if let Some((text, chars)) = poped {
             // 会出现text为空，而chars为 ' '(空格)
             let text_chars: Vec<char> = text.chars().collect();
             if candidates.is_none() && text_chars != chars {
-                ctx.clear_pending();
                 ctx.push(text_chars, chars);
             } else {
                 ctx.set_pending(text_chars, chars);
@@ -223,7 +228,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t_area = b_area.inner(Margin::new(1, 1));
         let (pre_render, cursor) = ctx.calc_pre_render(t_area);
 
-        let measurement = calc_measurements(ctx.get_recorders(), ctx.preset_len());
+        measurement.calc(ctx.get_recorders(), ctx.sentence_len());
 
         let draw_duration = draw_start.elapsed();
         // candidates
@@ -255,10 +260,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     disable_raw_mode()?;
     {
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            SetCursorStyle::DefaultUserShape
+        )?;
         terminal.show_cursor()?;
     }
-    let measurement = calc_measurements(ctx.get_recorders(), ctx.preset_len());
+    measurement.calc(ctx.get_recorders(), ctx.sentence_len());
     match write_input_data(&time_id, &ctx, &measurement) {
         Err(err) => {
             eprintln!("写入输入数据时出错: {:?}", err);
@@ -275,74 +284,96 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 计量速度.
-/// 需要的信息:
-///   开始时间-结束时间
-///   总字数
-///   总输入
-///   码长
-///   顶字次数?
-///   空格次数?
-///   回退次数?
-fn calc_measurements(records: &[Record], preset_wc: Option<usize>) -> Measurement {
-    let (start, end) = if let (Some(first), Some(last)) = (records.first(), records.last()) {
-        (first.start, last.end)
-    } else {
-        (Instant::now(), Instant::now())
-    };
-    let pause_assert = Duration::from_secs(5);
-    let (text_wc, code_cc, _space_times, pause_duration, _last_time) = records.iter().fold(
-        (0, 0, 0, Duration::from_millis(0), Instant::now()),
-        |(total_text, total_code, space_times, pause_time, last_time), rec| {
-            if rec.range.is_empty() {
-                return (total_text, total_code, space_times, pause_time, last_time);
-            }
-            // 计算暂停时间，如果两个record之间间隔了5秒，则认为这是暂停
-            let mut pause_dur = Duration::from_secs(0);
-            if last_time < rec.start {
-                let dur = rec.start - last_time;
-                if dur > pause_assert {
-                    pause_dur = dur;
-                }
-            }
-            (
-                total_text + rec.range.len(),
-                total_code + rec.origin.len(),
-                space_times,
-                pause_time + pause_dur,
-                rec.end,
-            )
-        },
-    );
-
-    let duration = end.duration_since(start) - pause_duration;
-    let wpm = text_wc as f32 / (duration.as_secs_f32() / 60.0);
-    let kps = code_cc as f32 / duration.as_secs_f32();
-    let avg_len = code_cc as f32 / text_wc as f32;
-
-    Measurement {
-        duration,
-        pause_duration,
-        text_wc,
-        code_cc,
-        preset_wc,
-        wpm,
-        kps,
-        avg_len,
-    }
+struct Measurement {
+    // 总时长
+    duration: Duration,
+    // 暂停时间
+    pause_duration: Duration,
+    // 字符数
+    text_wc: usize,
+    // 原始输入字符数
+    code_cc: usize,
+    // 预设文本数量
+    preset_wc: Option<usize>,
+    // 每秒键数，根据code_cc计算
+    kps: f32,
+    // 每分字数，根据text_wc计算
+    wpm: f32,
+    // 平均码长
+    avg_len: f32,
+    // context中的records始终为追加，也不会修改已有的record，因此记录已经计算过的records，下次计算时从此处开始
+    // 一个例外是，records变为空的话，说明context清空了所有输入的数据，因此Measurement也重置
+    counted: usize,
+    // 回退次数
+    bs_times: usize,
 }
 
-struct Measurement {
-    // start: Instant,
-    // end: Instant,
-    duration: Duration,
-    pause_duration: Duration,
-    text_wc: usize,
-    code_cc: usize,
-    preset_wc: Option<usize>,
-    kps: f32,
-    wpm: f32,
-    avg_len: f32,
+impl Measurement {
+    fn new() -> Self {
+        Measurement {
+            duration: Duration::from_secs(0),
+            pause_duration: Duration::from_secs(0),
+            text_wc: 0,
+            code_cc: 0,
+            preset_wc: None,
+            kps: 0.0,
+            wpm: 0.0,
+            avg_len: 0.0,
+            counted: 0,
+            bs_times: 0,
+        }
+    }
+
+    fn with_preset(mut self, preset_wc: Option<usize>) -> Self {
+        self.preset_wc = preset_wc;
+        self
+    }
+    /// 计量速度.
+    /// 需要的信息:
+    ///   开始时间-结束时间
+    ///   总字数
+    ///   总输入
+    ///   码长
+    ///   顶字次数?
+    ///   空格次数?
+    ///   回退次数?
+    fn calc(&mut self, records: &[Record], text_wc: usize) {
+        if records.is_empty() {
+            return;
+        }
+        if self.counted == records.len() {
+            return;
+        }
+        // 暂停判断，5秒
+        let pause_assert = Duration::from_secs(5);
+
+        let start = records[0].start;
+        let mut end = if self.counted == 0 {
+            records[0].end
+        } else {
+            records[self.counted - 1].end
+        };
+        for rec in &records[self.counted..] {
+            if rec.len < 0 {
+                self.bs_times += 1;
+            }
+            self.code_cc += rec.origin.len();
+            if end < rec.start {
+                let dur = rec.start - end;
+                if dur > pause_assert {
+                    self.pause_duration += dur;
+                }
+            }
+            end = rec.end;
+        }
+        self.counted = records.len();
+        self.text_wc = text_wc;
+
+        self.duration = end.duration_since(start) - self.pause_duration;
+        self.wpm = self.text_wc as f32 / (self.duration.as_secs_f32() / 60.0);
+        self.kps = self.code_cc as f32 / self.duration.as_secs_f32();
+        self.avg_len = self.code_cc as f32 / text_wc as f32;
+    }
 }
 
 impl Display for Measurement {
@@ -500,36 +531,41 @@ fn write_input_data(
             }
         }
     }
-    let sentence = ctx.get_sentence();
-    if sentence.is_empty() {
-        return Ok(());
-    }
-    // 从sentence中挑出前5个字(is_alphabetic)作为文件后缀
-    let file_suffix = sentence
-        .iter()
-        .filter(|c| c.is_alphabetic())
-        .take(5)
-        .collect::<String>();
+    let mut sentence = ctx.get_sentence();
+    let mut suffix = String::new();
+    let mut suffix_chars = 0;
+    let mut taked = vec![];
+    while let Some(c) = sentence.next()
+        && suffix_chars < 5
     {
+        taked.push(c);
+        if c.is_alphanumeric() {
+            suffix.push(*c);
+            suffix_chars += 1;
+        }
+    }
+    {
+        // 从sentence中选出前5个字符做为文件的标识
         let mut path = state_dir.clone();
-        path.push(format!("{}{}.txt", fire_prefix, file_suffix));
+        path.push(format!("{}{}.txt", fire_prefix, suffix.clone()));
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(path)?;
-        writeln!(file, "{}", sentence.iter().collect::<String>())?;
+        let str = taked.into_iter().chain(sentence).collect::<String>();
+        writeln!(file, "{}", str)?;
     }
     {
         let mut path = state_dir.clone();
-        path.push(format!("{}{}_record.txt", fire_prefix, file_suffix));
+        path.push(format!("{}{}_record.txt", fire_prefix, suffix));
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(path)?;
         // chunk 1: 计量信息
-        writeln!(file, "\n# Measurement\n{}", measurement)?;
+        writeln!(file, "# Measurement\n{}", measurement)?;
         // // chunk 2: 输入记录
         // writeln!(file, "\n# Records")?;
         // for rec in ctx.get_recorders() {
