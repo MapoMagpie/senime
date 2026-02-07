@@ -16,6 +16,7 @@ use crossterm::terminal::{
 use crossterm::{event, execute};
 use dirs::data_dir;
 use ratatui::Terminal;
+use ratatui::layout::Position;
 use ratatui::layout::Size;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::prelude::CrosstermBackend;
@@ -226,9 +227,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let b_area = chunks[0];
         let m_area = chunks[1];
         let t_area = b_area.inner(Margin::new(1, 1));
-        let (pre_render, cursor) = ctx.calc_pre_render(t_area);
-
         measurement.calc(ctx.get_recorders(), ctx.sentence_len());
+
+        ctx.calc_pre_render(t_area);
+
+        let (pre_render, Position { x, y }) = ctx.get_pre_render_lines(t_area.height);
+        let cursor = Position::new(t_area.x + x, t_area.y + y);
 
         let draw_duration = draw_start.elapsed();
         // candidates
