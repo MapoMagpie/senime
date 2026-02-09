@@ -1,8 +1,10 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 use dashmap::DashMap;
 use log::LevelFilter;
 use ropey::Rope;
-use senime_lib::{AnalysisResult, Dict, InputAnalyzer};
+use senime_lib::{AnalysisResult, Dict, InputAnalyzer, secondary_dict_path};
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -353,8 +355,16 @@ async fn main() {
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let dict = Dict::load(args.table);
-    let engine = InputAnalyzer::new(dict);
+    let dict = Dict::load(&args.table);
+    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
+        let hint = PathBuf::from(path)
+            .file_name()
+            .map(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+            .flatten()
+            .unwrap_or("反".to_string());
+        (Dict::load(secondary_dict_path(&args.table, path)), hint)
+    });
+    let engine = InputAnalyzer::new(dict, reverse_dict);
     let doc_map = DashMap::default();
     let state = RwLock::new(State { completion: true });
     let (service, socket) = LspService::new(|_client| Backend {

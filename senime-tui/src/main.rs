@@ -4,6 +4,7 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::prelude::CrosstermBackend;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use senime_lib::secondary_dict_path;
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer, Looker};
 
 use crate::context::{Context, Record, WrappedText};
@@ -136,11 +138,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let time_id = generate_time_id();
-    let dict = Dict::load(args.table);
+    let dict = Dict::load(&args.table);
+    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
+        let hint = PathBuf::from(path)
+            .file_name()
+            .map(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+            .flatten()
+            .unwrap_or("反".to_string());
+        (Dict::load(secondary_dict_path(&args.table, path)), hint)
+    });
+    let reverse_key = dict.config().reverse_key.clone().unwrap();
     // 分词器
     let enc = Looker::new(&dict.candidates);
     // 输入解析器 aka.输入法核心
-    let an = InputAnalyzer::new(dict);
+    let an = InputAnalyzer::new(dict, reverse_dict);
     // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
     let mut ctx = Context::new(&enc);
     let mut measurement = Measurement::new().with_preset(preset.as_ref().map(|p| p.len()));
@@ -247,12 +258,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame.set_cursor_position(cursor);
 
             if let Some(cands) = candidates {
-                let (popup, p_area) = Popup::create(
-                    &cands,
-                    t_area,
-                    cursor,
-                    ctx.get_input().iter().map(|c| c.len_utf8()).sum(),
-                );
+                let input = ctx.get_input();
+                let input_len = if !input.is_empty() && input[0] == reverse_key {
+                    input[1..].iter().map(|c| c.len_utf8()).sum()
+                } else {
+                    input.iter().map(|c| c.len_utf8()).sum()
+                };
+                let (popup, p_area) = Popup::create(&cands, t_area, cursor, input_len);
                 frame.render_widget(popup, p_area);
             }
 

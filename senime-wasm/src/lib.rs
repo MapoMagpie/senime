@@ -9,7 +9,7 @@ static IME: Mutex<Option<InputAnalyzer>> = Mutex::new(None);
 pub fn init_ime(bs: &[u8]) {
     let mut ime = IME.lock().unwrap();
     let dict = Dict::try_from((0, bs)).unwrap();
-    ime.replace(InputAnalyzer::new(dict));
+    ime.replace(InputAnalyzer::new(dict, None));
 }
 
 #[wasm_bindgen]

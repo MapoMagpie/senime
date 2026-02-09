@@ -129,7 +129,7 @@ impl Prism {
     }
 }
 
-const VERSION: usize = 5;
+const VERSION: usize = 6;
 
 // Dict 结构
 #[derive(Debug, Decode, Encode)]
@@ -212,6 +212,8 @@ impl FromStr for Dict {
                 selection_keys,
                 punctuations,
                 escape_pair,
+                reverse_key,
+                reverse_dict,
             } = toml::from_str(&toml_content).map_err(|e| format!("无法从码表中解析配置: {e}"))?;
             let mut patched_punc = default_punctuations();
             patched_punc.extend(punctuations);
@@ -219,6 +221,8 @@ impl FromStr for Dict {
                 selection_keys,
                 punctuations: patched_punc,
                 escape_pair,
+                reverse_key,
+                reverse_dict,
             }
         };
         candidates.sort();
@@ -310,8 +314,8 @@ impl Dict {
     pub fn count(&self) -> usize {
         self.candidates.len()
     }
-    pub fn config(&self) -> Config {
-        self.config.clone()
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 }
 
@@ -363,6 +367,9 @@ pub struct Config {
     pub punctuations: HashMap<char, Vec<String>>,
     #[serde(default = "default_escape_pair")]
     pub escape_pair: Option<[char; 2]>,
+    #[serde(default = "default_reverse_key")]
+    pub reverse_key: Option<char>,
+    pub reverse_dict: Option<String>,
 }
 
 impl Default for Config {
@@ -370,7 +377,9 @@ impl Default for Config {
         Self {
             selection_keys: default_selection_keys(),
             punctuations: default_punctuations(),
-            escape_pair: Some(['`', '`']),
+            escape_pair: default_escape_pair(),
+            reverse_key: default_reverse_key(),
+            reverse_dict: None,
         }
     }
 }
@@ -439,6 +448,9 @@ fn default_punctuations() -> HashMap<char, Vec<String>> {
 
 fn default_escape_pair() -> Option<[char; 2]> {
     Some(['`', '`'])
+}
+fn default_reverse_key() -> Option<char> {
+    Some('@')
 }
 
 // https://github.com/rime/librime/blob/47033202f986f4dced82eceb90440285fcb9501e/src/rime/gear/charset_filter.cc#L18

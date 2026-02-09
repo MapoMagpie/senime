@@ -550,7 +550,7 @@ impl<'a> Context<'a> {
         // self.abs_cursor永远出现在视图内，
         //    当其y值大于area.height时，会在下方留下一行的空间
         //    当其y值小于area.height时，则直接相减
-        let left_lines = if line_idx > area.height as usize {
+        let left_lines = if line_idx + 1 >= area.height as usize {
             3 // 当前光标前一行 + 当前光标行 + 留空一行 = 3行
         } else {
             area.height as usize - line_idx
@@ -818,7 +818,7 @@ mod tests {
             .get_chars_by(0..0)
             .map(|c| c.to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(chars, vec![]);
+        assert_eq!(chars, Vec::<char>::new());
 
         let chars = sentence
             .get_chars_by(3..8)
@@ -932,7 +932,7 @@ mod tests {
             .get_chars_by(2..2)
             .map(|c| c.to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(chars, vec![]);
+        assert_eq!(chars, Vec::<char>::new());
         sentence.set_append_at(0);
         sentence.set_pending(vec!['你', '好'], vec![]);
         let chars = sentence
@@ -944,7 +944,7 @@ mod tests {
             .get_chars_by(2..2)
             .map(|c| c.to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(chars, vec![]);
+        assert_eq!(chars, Vec::<char>::new());
         let chars = sentence
             .get_chars_by(0..sentence.len())
             .map(|c| c.to_owned())
@@ -957,7 +957,7 @@ mod tests {
             .get_chars_by(10..sentence.len())
             .map(|c| c.to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(chars, vec![]);
+        assert_eq!(chars, Vec::<char>::new());
     }
 
     // use crate::context::diff_sequence;
