@@ -90,10 +90,7 @@ impl InputAnalyzer {
         for (i, (codes, tag)) in segments.into_iter().enumerate() {
             let at_last = i == segment_len - 1;
             let get_count = if at_last { 9 } else { 1 };
-            let use_secondary_dict = match tag {
-                Tag::Secondary | Tag::SelectionForSecondary(_) => true,
-                _ => false,
-            };
+            let use_secondary_dict = matches!(tag, Tag::Secondary | Tag::SelectionForSecondary(_));
             match tag {
                 Tag::Normal | Tag::Secondary => {
                     if let Some((cands, unique)) =
@@ -194,7 +191,7 @@ impl InputAnalyzer {
         let (dict, codes) = if use_secondary_dict {
             (self.secondary_dict.as_ref()?, &code[1..])
         } else {
-            (&self.dict, &code[..])
+            (&self.dict, code)
         };
         if use_secondary_dict && codes.is_empty() {
             return self

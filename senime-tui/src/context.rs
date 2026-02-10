@@ -45,8 +45,7 @@ type SentenceChars<'a> =
 ///             另一种情况便是中间修改，当要修改中间某处时，先将pending归并到chars里，并设置新的pending_at与pending，
 ///               这样在中间写入大量的字符时，始终在pending里追加，对性能影响不大。
 /// pending:   未决的输入，在输入时，由于还有其他候选，这段字符变动非常频繁。它的主要作用是参与diff
-#[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Sentence {
     chars: Vec<char>,
     appends: Vec<char>,
@@ -55,19 +54,6 @@ struct Sentence {
     pending_origin: Vec<char>,
 }
 
-impl Default for Sentence {
-    fn default() -> Self {
-        Self {
-            chars: Default::default(),
-            appends: Default::default(),
-            append_at: Default::default(),
-            pending: Default::default(),
-            pending_origin: Default::default(),
-        }
-    }
-}
-
-#[allow(dead_code)]
 impl Sentence {
     fn len(&self) -> usize {
         self.chars.len() + self.appends.len() + self.pending.len()
@@ -91,9 +77,9 @@ impl Sentence {
 
     fn set_append_at(&mut self, at: usize) {
         if !self.appends.is_empty() {
-            let mut old_append = mem::replace(&mut self.appends, vec![]);
+            let mut old_append = mem::take(&mut self.appends);
             if !self.pending.is_empty() {
-                let old_pending = mem::replace(&mut self.pending, vec![]);
+                let old_pending = mem::take(&mut self.pending);
                 self.pending_origin.clear();
                 old_append.extend(old_pending);
             }
@@ -171,63 +157,39 @@ impl Sentence {
         if range.start > range.end {
             panic!("the range's start > range's end");
         }
-        let mut c_range_1 = 0..0;
-        let mut c_range_2 = self.append_at..self.append_at;
-        let mut a_range = 0..self.appends.len();
-        let mut p_range = 0..self.pending.len();
-        // 实际只计算一轮，但中间有可以提早结束的条件
-        loop {
-            if range.start < self.append_at {
-                c_range_1.start = range.start;
-                c_range_1.end = self.append_at;
-                if range.end < self.append_at {
-                    c_range_1.end = range.end;
-                    a_range.end = 0;
-                    p_range.end = 0;
-                    break;
-                }
-            }
-            let append_end = self.append_at + self.appends.len();
-            let pending_end = append_end + self.pending.len();
+        // 定义四个物理分段在“宏观空间”中的起止位置
+        let c1_len = self.append_at;
+        let a_len = self.appends.len();
+        let p_len = self.pending.len();
 
-            if range.end > pending_end {
-                c_range_2.end = self.append_at + (range.end - pending_end);
-                if range.start > pending_end {
-                    c_range_2.start = self.append_at + range.start - pending_end;
-                    a_range.end = 0;
-                    p_range.end = 0;
-                    break;
-                }
-            }
-            if range.start > self.append_at && range.start <= append_end {
-                a_range.start = range.start - self.append_at;
-            }
-            // append_at = 3 range 2..6 期待 a_range = 0..3
-            // append_end = 8
-            // 6 - 3 = 3 range.end - append_at = append_end
-            if range.end < append_end {
-                a_range.end = range.end - self.append_at;
-                p_range.end = 0;
-                break;
-            }
-            if range.start > append_end && range.start <= pending_end {
-                p_range.start = range.start - append_end;
-            }
-            if pending_end > range.end {
-                p_range.end = range.end - append_end;
-            }
-            break;
-        }
-        // eprintln!(
-        //     "append_at: [{}], chars len: [{}], append len: [{}], pending len: [{}]",
-        //     self.append_at,
-        //     self.chars.len(),
-        //     self.appends.len(),
-        //     self.pending.len(),
-        // );
-        // eprintln!(
-        //     "--\nrange: {range:?}, \nc_range_1: {c_range_1:?}\na_range: {a_range:?}\np_range: {p_range:?}\nc_range_2: {c_range_2:?}"
-        // );
+        // 宏观布局：
+        // [0 .. c1_len] -> self.chars[0..append_at]
+        // [c1_len .. c1_len + a_len] -> self.appends
+        // [c1_len + a_len .. c1_len + a_len + p_len] -> self.pending
+        // [c1_len + a_len + p_len .. total] -> self.chars[append_at..]
+
+        let seg_a_start = c1_len;
+        let seg_p_start = seg_a_start + a_len;
+        let seg_c2_start = seg_p_start + p_len;
+
+        // 计算宏观 range 与某个分段 [seg_start, seg_end) 的交集
+        // 返回值是相对于该分段起始位置的本地索引
+        let intersect = |seg_start: usize, seg_len: usize| -> Range<usize> {
+            let seg_end = seg_start + seg_len;
+            let overlap_start = range.start.max(seg_start).min(seg_end);
+            let overlap_end = range.end.max(seg_start).min(seg_end);
+            (overlap_start - seg_start)..(overlap_end - seg_start)
+        };
+
+        // 直接计算四个本地 range
+        let c_range_1 = intersect(0, c1_len);
+        let a_range = intersect(seg_a_start, a_len);
+        let p_range = intersect(seg_p_start, p_len);
+
+        // c_range_2 对应的是 self.chars 的后半部分，其本地起始索引是 self.append_at
+        let c2_local = intersect(seg_c2_start, self.chars.len() - self.append_at);
+        let c_range_2 = (c2_local.start + self.append_at)..(c2_local.end + self.append_at);
+
         self.chars[c_range_1]
             .iter()
             .chain(self.appends[a_range].iter())
@@ -417,7 +379,7 @@ impl<'a> Context<'a> {
         if range.end <= self.styles.len() {
             if old_pen_end < new_pen_end {
                 self.before_pending_style
-                    .extend((&self.styles[old_pen_end..new_pen_end]).to_vec());
+                    .extend((self.styles[old_pen_end..new_pen_end]).to_vec());
             } else {
                 self.before_pending_style
                     .iter()
@@ -574,13 +536,13 @@ impl<'a> Context<'a> {
                     Default::default()
                 }
             })
-            .map(|c| *c);
+            .copied();
 
         let (pre_render, mut abs_cursor) = calc_pre_render(
             chars,
             &self.styles,
             area.width as usize,
-            left_lines as usize,
+            left_lines,
             cursor_at,
             start,
         );
@@ -596,7 +558,7 @@ impl<'a> Context<'a> {
         let mut end = cursor.y + 2;
         let start = end.saturating_sub(height);
         end = (start + height).min(self.pre_render.len() as u16);
-        cursor.y = cursor.y - start as u16;
+        cursor.y -= start;
         let slice = &self.pre_render[start as usize..end as usize];
         (slice, cursor)
     }
@@ -655,13 +617,10 @@ impl<'a> WrappedText<'a> {
 }
 impl<'a> Widget for WrappedText<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        self.pre_render
-            .into_iter()
-            .enumerate()
-            .for_each(|(i, line)| {
-                let y = area.y + i as u16;
-                line.iter().for_each(|cell| cell.render(area.x, y, buf));
-            });
+        self.pre_render.iter().enumerate().for_each(|(i, line)| {
+            let y = area.y + i as u16;
+            line.iter().for_each(|cell| cell.render(area.x, y, buf));
+        });
     }
 }
 pub fn calc_pre_render<C>(
@@ -700,8 +659,10 @@ where
         // }
         if x + char_wid >= width || c == '\n' {
             y += 1;
-            if cursor.is_some() && y > lines {
-                return (ret, cursor.expect("cursor should exist"));
+            if let Some(cursor) = cursor
+                && y > lines
+            {
+                return (ret, cursor);
             }
             x = 1;
             ret.push(init_line(i + idx_offset));

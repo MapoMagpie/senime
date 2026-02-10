@@ -142,12 +142,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
         let hint = PathBuf::from(path)
             .file_name()
-            .map(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-            .flatten()
+            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
             .unwrap_or("反".to_string());
         (Dict::load(secondary_dict_path(&args.table, path)), hint)
     });
-    let reverse_key = dict.config().reverse_key.clone().unwrap();
+    let reverse_key = dict.config().reverse_key.unwrap();
     // 分词器
     let enc = Looker::new(&dict.candidates);
     // 输入解析器 aka.输入法核心
@@ -284,11 +283,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         terminal.show_cursor()?;
     }
     measurement.calc(ctx.get_recorders(), ctx.sentence_len());
-    match write_input_data(&time_id, &ctx, &measurement) {
-        Err(err) => {
-            eprintln!("写入输入数据时出错: {:?}", err);
-        }
-        _ => {}
+    if let Err(err) = write_input_data(&time_id, &ctx, &measurement) {
+        eprintln!("写入输入数据时出错: {:?}", err);
     }
     // let bs = sentence_rec
     //     .iter()
@@ -447,16 +443,16 @@ impl FromStr for PickPreset {
             Ok((line, pos))
         };
 
-        let (start, char_start) = parse(&split[0])?;
-        let (end, char_end) = split
+        let (start, char_start) = parse(split[0])?;
+        let (line_end, char_end) = split
             .get(1)
-            .map(|sp| parse(*sp))
+            .map(|sp| parse(sp))
             .unwrap_or(Ok((usize::MAX, usize::MAX)))?;
         Ok(Self {
             line_start: start.saturating_sub(1),
             char_start: char_start.saturating_sub(1),
-            line_end: end,
-            char_end: char_end,
+            line_end,
+            char_end,
         })
     }
 }
@@ -473,16 +469,15 @@ impl Default for PickPreset {
 }
 
 fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> {
-    let pick = pick.unwrap_or(PickPreset::default());
+    let pick = pick.unwrap_or_default();
     let mut lines = str
         .lines()
         .enumerate()
-        .map(|(i, line)| {
+        .flat_map(|(i, line)| {
             if i < pick.line_start || i >= pick.line_end {
                 return vec![];
             }
-            let chars = line
-                .chars()
+            line.chars()
                 .enumerate()
                 .filter_map(|(j, c)| {
                     if (i == pick.line_start && j < pick.char_start)
@@ -500,10 +495,8 @@ fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> 
                 } else {
                     vec![].into_iter()
                 })
-                .collect();
-            chars
+                .collect()
         })
-        .flatten()
         .collect::<Vec<_>>();
     if keep {
         lines.pop();
@@ -537,13 +530,11 @@ fn write_input_data(
     };
     // 找出 当前目录下所有包含此前缀的文件并删除
     if let Ok(entries) = std::fs::read_dir(&state_dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let file_name = entry.file_name();
-                let file_name_str = file_name.to_string_lossy();
-                if file_name_str.starts_with(&fire_prefix) {
-                    let _ = std::fs::remove_file(entry.path());
-                }
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let file_name_str = file_name.to_string_lossy();
+            if file_name_str.starts_with(&fire_prefix) {
+                let _ = std::fs::remove_file(entry.path());
             }
         }
     }

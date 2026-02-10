@@ -359,8 +359,7 @@ async fn main() {
     let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
         let hint = PathBuf::from(path)
             .file_name()
-            .map(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-            .flatten()
+            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
             .unwrap_or("反".to_string());
         (Dict::load(secondary_dict_path(&args.table, path)), hint)
     });
