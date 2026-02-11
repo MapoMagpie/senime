@@ -1,6 +1,5 @@
 use std::fmt::Display;
 use std::fs::DirBuilder;
-use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -89,6 +88,8 @@ where
 }
 
 #[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
 fn create_backend() -> Result<CrosstermBackend<File>, Box<dyn std::error::Error>> {
     use crossterm::cursor::SetCursorStyle;
 
@@ -108,9 +109,10 @@ fn create_backend() -> Result<CrosstermBackend<File>, Box<dyn std::error::Error>
 }
 
 #[cfg(not(unix))]
+use std::io::{Stdout, stdout};
+#[cfg(not(unix))]
 fn create_backend() -> Result<CrosstermBackend<Stdout>, Box<dyn std::error::Error>> {
-    use std::io;
-    let mut stdout = io::stdout();
+    let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
     let backend = CrosstermBackend::new(stdout);
     Ok(backend)
@@ -119,7 +121,6 @@ fn create_backend() -> Result<CrosstermBackend<Stdout>, Box<dyn std::error::Erro
 // TODO: 实现中间编辑，删除新增
 // TODO: 重构setpending，接续分词，降低复杂性
 // TODO: 数据记录，每次使用时，生成一个时间相关的ID，并在适当的时候将所有的输入记录保存下来
-// TODO: 减少PreRender的计算
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let preset: Option<Vec<char>> = if args.stdin {
