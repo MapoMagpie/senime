@@ -61,17 +61,14 @@ impl InputAnalyzer {
             selection_keys,
         }
     }
-}
-#[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
-enum Tag {
-    Normal,
-    Selection(usize),
-    Punctuation,
-    SelectionForPunc(usize),
-    Escape((char, char)),
-    Secondary,
-    SelectionForSecondary(usize),
-    Unknown,
+
+    pub fn get_dict(&self) -> &Dict {
+        &self.dict
+    }
+
+    pub fn get_sec_dict(&self) -> Option<&Dict> {
+        self.secondary_dict.as_ref()
+    }
 }
 
 impl InputAnalyzer {
@@ -417,6 +414,18 @@ fn compact_vec(v: &[char]) -> Vec<(char, usize)> {
     }
     result.push((last_char, count));
     result
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
+enum Tag {
+    Normal,
+    Selection(usize),
+    Punctuation,
+    SelectionForPunc(usize),
+    Escape((char, char)),
+    Secondary,
+    SelectionForSecondary(usize),
+    Unknown,
 }
 
 #[derive(Debug)]

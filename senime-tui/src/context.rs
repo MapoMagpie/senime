@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, mem, ops::Range, time::Instant};
+use std::{borrow::Borrow, char, mem, ops::Range, time::Instant};
 
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -97,6 +97,7 @@ impl Sentence {
     fn clear(&mut self) {
         self.chars.clear();
         self.appends.clear();
+        self.pending.clear();
         self.append_at = 0;
     }
 
@@ -198,21 +199,23 @@ impl Sentence {
     }
 }
 
-pub struct Context<'a> {
+pub struct Context {
     preset: Option<Vec<char>>,
+    preset_first_code: Option<String>,
     sentence: Sentence,
     styles: Vec<(usize, Option<Style>)>,
     records: Vec<Record>,
     input_start: Instant,
     before_pending_style: Vec<(usize, Option<Style>)>,
-    enc: &'a Looker,
+    enc: Looker,
     pre_render: PreRender,
     abs_cursor: Position,
 }
-impl<'a> Context<'a> {
-    pub fn new(enc: &'a Looker) -> Self {
+impl Context {
+    pub fn new(enc: Looker) -> Self {
         Self {
             preset: Default::default(),
+            preset_first_code: Default::default(),
             sentence: Default::default(),
             styles: Default::default(),
             records: Default::default(),
@@ -230,6 +233,11 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// 获取剩余的预设文本的首个编码提示
+    pub fn get_preset_segment_hint(&self) -> Option<&str> {
+        self.preset_first_code.as_ref().map(String::as_str)
+    }
+
     fn set_style(&mut self, i: usize, style: Option<(usize, Option<Style>)>) {
         // 扩容
         if i + 1 > self.styles.len() {
@@ -243,8 +251,13 @@ impl<'a> Context<'a> {
     }
 
     pub fn clear(&mut self) {
-        self.clear_pending();
+        self.before_pending_style.clear();
         self.sentence.clear();
+        self.records.clear();
+        self.styles.clear();
+        self.input_start = Instant::now();
+        self.pre_render.clear();
+        self.abs_cursor = Default::default();
         self.segment(0..self.preset.as_ref().map(|p| p.len()).unwrap_or(0));
     }
 
@@ -288,6 +301,15 @@ impl<'a> Context<'a> {
         if let Some(preset) = self.preset.as_ref() {
             // 找到重新分词计算的范围
             let ret = self.enc.analyze(&preset[range.clone()]);
+            self.preset_first_code = ret.first().map(|seg| {
+                let mut code = seg.code.to_vec();
+                if seg.pos > 0 {
+                    code.extend(seg.pos.to_string().chars());
+                } else if !seg.auto_select {
+                    code.push('_');
+                }
+                code.iter().collect()
+            });
             let mut iter = ret.into_iter().map(|seg| seg.simple()).collect::<Vec<_>>(); //.collect::<Vec<_>>();
             // 从后向前，在patch_style中会根据i扩容，先用最大数避免多次扩容
             iter.reverse();
@@ -296,7 +318,7 @@ impl<'a> Context<'a> {
             // 如果range.end 小于 preset.len，表示局部小范围分词，
             // 从preset[range.end]上找到COLOR_PALETTE所在的位置，如1
             // 那么preset[range.end]所在的group idx % COLOR_SEG_LEN后 该为0
-            // 由于要递减，所以选一般较大的固定基数，并且是偶数
+            // 由于要递减，所以选一个较大的固定基数，并且是偶数
             let mut group_idx = if range.end < preset.len() {
                 // eprintln!(
                 //     "next char: [{}]{}, style: {:?}",
@@ -392,11 +414,6 @@ impl<'a> Context<'a> {
         self.diff(range, Some((COLOR_PENDING, None)));
     }
 
-    pub fn clear_pending(&mut self) {
-        self.before_pending_style.clear();
-        self.sentence.clear_pending();
-    }
-
     pub fn confrim_pending(&mut self) {
         self.before_pending_style.clear();
         if !self.sentence.pending.is_empty() {
@@ -455,12 +472,6 @@ impl<'a> Context<'a> {
     pub fn move_cursor(&mut self, action: Movement) {
         self.confrim_pending();
         self.sentence.set_append_at(self.sentence.pending_end());
-        // eprintln!(
-        //     "sentence len:[{}] append_at:[{}] appends: {:?}",
-        //     self.sentence.len(),
-        //     self.sentence.append_at,
-        //     self.sentence.appends
-        // );
         match action {
             Movement::Left => {
                 if self.sentence.append_at > 0 {
@@ -487,7 +498,7 @@ impl<'a> Context<'a> {
         &self.records
     }
 
-    pub fn get_sentence(&'a self) -> SentenceChars<'a> {
+    pub fn get_sentence<'a>(&'a self) -> SentenceChars<'a> {
         self.sentence.get_chars()
     }
 
@@ -495,6 +506,9 @@ impl<'a> Context<'a> {
         self.sentence.len()
     }
 
+    pub fn resize(&mut self) {
+        self.abs_cursor = Default::default();
+    }
     /// 根据宽度进行折行计算
     /// 为了提高计算效率，对于光标所在行之前的行不再计算
     pub fn calc_pre_render(&mut self, area: Rect) {
@@ -562,28 +576,6 @@ impl<'a> Context<'a> {
         let slice = &self.pre_render[start as usize..end as usize];
         (slice, cursor)
     }
-    // let dbg_render = pre_render
-    //     .iter()
-    //     .map(|l| {
-    //         l.iter()
-    //             .filter_map(|c| c.char.as_ref().map(|c| *c))
-    //             // .map(|c| c.sentence_i.to_string())
-    //             .collect::<String>()
-    //     })
-    //     .collect::<Vec<_>>()
-    //     .join("\n");
-
-    // eprintln!("calc_pre_render pre_render:\n{}", dbg_render);
-
-    // eprintln!(
-    //     "calc_pre_render _early_fin: [{}] pre_render_len: [{}]",
-    //     _early_fin,
-    //     pre_render.len()
-    // );
-
-    // pub fn get_preset(&self) -> Option<&Vec<char>> {
-    //     self.preset.as_ref()
-    // }
 }
 
 pub enum Movement {

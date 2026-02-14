@@ -55,12 +55,12 @@ pub struct Args {
     pub pick: Option<String>,
 
     /// 将标准输入流中的内容作为预设文本，与--preset功能一样
-    #[arg(short, long, action = ArgAction::SetTrue)]
+    #[arg(long, action = ArgAction::SetTrue)]
     pub stdin: bool,
 
     /// 使用标准输出流做出界面绘制区
     /// 默认使用/dev/tty做为界面绘制区，若无法打开/dev/tty或其不存在，可使用--stdout解决此问题
-    #[arg(short, long, action = ArgAction::SetTrue)]
+    #[arg(long, action = ArgAction::SetTrue)]
     pub stdout: bool,
 }
 
@@ -139,21 +139,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let time_id = generate_time_id();
-    let dict = Dict::load(&args.table);
-    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
-        let hint = PathBuf::from(path)
-            .file_name()
-            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-            .unwrap_or("反".to_string());
-        (Dict::load(secondary_dict_path(&args.table, path)), hint)
-    });
-    let reverse_key = dict.config().reverse_key.unwrap();
+    // 输入法引擎
+    let (ime, reverse_key) = {
+        let dict = Dict::load(&args.table);
+        let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
+            let hint = PathBuf::from(path)
+                .file_name()
+                .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+                .unwrap_or("反".to_string());
+            (Dict::load(secondary_dict_path(&args.table, path)), hint)
+        });
+        let reverse_key = dict.config().reverse_key.unwrap();
+        (InputAnalyzer::new(dict, reverse_dict), reverse_key)
+    };
+
     // 分词器
-    let enc = Looker::new(&dict.candidates);
-    // 输入解析器 aka.输入法核心
-    let an = InputAnalyzer::new(dict, reverse_dict);
+    let encoder = Looker::new(&ime.get_dict().candidates);
     // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
-    let mut ctx = Context::new(&enc);
+    let mut ctx = Context::new(encoder);
     let mut measurement = Measurement::new().with_preset(preset.as_ref().map(|p| p.len()));
     ctx.set_preset(preset);
 
@@ -170,6 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match event::read()? {
                 Event::Resize(w, h) => {
                     area = Size::new(w, h).into();
+                    ctx.resize();
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
@@ -192,7 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Backspace => {
                         ctx.backspace();
                     }
-                    KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                    KeyCode::Left | KeyCode::Right => {
                         ctx.move_cursor(key.code.into());
                     }
                     KeyCode::Char(c) => {
@@ -208,11 +212,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        let draw_start = Instant::now();
+        let calc_start = Instant::now();
         let AnalysisResult {
             candidates,
             mut segments,
-        } = an.analyze(ctx.get_input());
+        } = ime.analyze(ctx.get_input());
 
         let poped = segments.pop();
         if !segments.is_empty() {
@@ -240,18 +244,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t_area = b_area.inner(Margin::new(1, 1));
         measurement.calc(ctx.get_recorders(), ctx.sentence_len());
 
+        // 折行计算
         ctx.calc_pre_render(t_area);
 
         let (pre_render, Position { x, y }) = ctx.get_pre_render_lines(t_area.height);
         let cursor = Position::new(t_area.x + x, t_area.y + y);
 
-        let draw_duration = draw_start.elapsed();
+        let calc_duration = calc_start.elapsed();
         // candidates
         terminal.draw(|frame| {
             let block = Block::default().borders(Borders::ALL).title(format!(
-                "输入中: [{}] 计算时间: [{:?}]",
+                "输入中: [{}]{} 计算耗时: [{:?}]",
                 ctx.get_input().iter().collect::<String>(),
-                draw_duration
+                ctx.get_preset_segment_hint()
+                    .map_or_else(|| String::new(), |hint| format!(" 提示: [{hint}]")),
+                calc_duration
             ));
             frame.render_widget(block, b_area);
             frame.render_widget(WrappedText::new(pre_render), t_area);

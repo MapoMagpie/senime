@@ -14,7 +14,7 @@ use ahash::AHashMap;
 use crate::dict::Candidate;
 
 #[derive(Debug, Clone)]
-struct CodePos(Vec<char>, usize);
+struct CodePos(Vec<char>, u16);
 
 pub struct Looker {
     map: AHashMap<Vec<char>, Vec<CodePos>>,
@@ -200,13 +200,13 @@ pub struct Segment<'a> {
     pub range: Range<usize>,
     pub text: &'a [char],
     pub code: &'a [char],
-    pub pos: usize,
+    pub pos: u16,
     pub auto_select: bool,
     pub cost: usize,
 }
 
 impl<'a> Segment<'a> {
-    pub fn simple(&self) -> (Range<usize>, usize, bool) {
+    pub fn simple(&self) -> (Range<usize>, u16, bool) {
         (self.range.clone(), self.pos, self.auto_select)
     }
 }
@@ -229,7 +229,7 @@ impl<'a> Segment<'a> {
         range: Range<usize>,
         text: &'a [char],
         code: &'a [char],
-        pos: usize,
+        pos: u16,
         auto_select: bool,
         cost: usize,
     ) -> Self {

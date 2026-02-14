@@ -90,7 +90,7 @@ fn main() {
                 str += "_";
             } else if seg.pos > 0 {
                 use_candidate_times += 1;
-                str += select_pos_map[(seg.pos).min(select_pos_map.len() - 1)];
+                str += select_pos_map[(seg.pos as usize).min(select_pos_map.len() - 1)];
             }
             str
         })
