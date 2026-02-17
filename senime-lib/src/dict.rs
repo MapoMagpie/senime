@@ -129,7 +129,7 @@ impl Prism {
     }
 }
 
-const VERSION: usize = 6;
+const VERSION: usize = 7;
 
 // Dict 结构
 #[derive(Debug, Decode, Encode)]
@@ -427,7 +427,7 @@ fn default_punctuations() -> HashMap<char, Vec<String>> {
         ('.', vec!["。", ".", "……"]),
         ('!', vec!["！", "!"]),
         ('/', vec!["？", "/"]),
-        (';', vec!["：", "；", ";"]),
+        (';', vec!["；", "：", ";"]),
         ('[', vec!["「", "“", "[", "【"]),
         (']', vec!["」", "”", "]", "】"]),
         ('\\', vec!["、", "\\"]),
@@ -435,7 +435,8 @@ fn default_punctuations() -> HashMap<char, Vec<String>> {
         ('_', vec!["——", "_"]),
         ('<', vec!["《", "<"]),
         ('>', vec!["》", ">"]),
-        ('~', vec!["～", "~", "~~~"]),
+        ('\'', vec!["‘", "’"]),
+        ('~', vec!["~", "～", "~~~"]),
         ('(', vec!["（", "(", "『"]),
         (')', vec!["）", ")", "』"]),
     ];
