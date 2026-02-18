@@ -1,11 +1,10 @@
-use std::fmt::Display;
 use std::fs::DirBuilder;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use clap::{ArgAction, Parser};
 use crossterm::cursor::SetCursorStyle;
@@ -20,16 +19,22 @@ use ratatui::layout::Position;
 use ratatui::layout::Size;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::prelude::CrosstermBackend;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Clear;
+use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, Borders};
 
 use senime_lib::secondary_dict_path;
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer, Looker};
 
-use crate::context::{Context, Record, WrappedText};
+use crate::context::{Context, WrappedText};
 use crate::popup::Popup;
 
 mod context;
+mod measurement;
 mod popup;
+mod sentence;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -157,7 +162,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encoder = Looker::new(&ime.get_dict().candidates);
     // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
     let mut ctx = Context::new(encoder);
-    let mut measurement = Measurement::new().with_preset(preset.as_ref().map(|p| p.len()));
     ctx.set_preset(preset);
 
     let mut first = true;
@@ -176,15 +180,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ctx.resize();
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                        break;
-                    }
+                    // KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                    //     break;
+                    // }
                     KeyCode::Char('x') if key.modifiers == KeyModifiers::CONTROL => {
                         ctx.clear();
                     }
                     KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
-                        measurement.calc(ctx.get_recorders(), ctx.sentence_len());
-                        let _ = write_input_data(&time_id, &ctx, &measurement);
+                        ctx.calc_measurement();
+                        let _ = write_input_data(&time_id, &ctx);
                     }
                     KeyCode::Esc => {
                         break;
@@ -233,6 +237,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ctx.set_pending(text_chars, chars);
             }
         }
+        ctx.calc_measurement();
+
         // 当应用全屏时与frame.area() 一致，目前是默认的全屏
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -242,7 +248,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let b_area = chunks[0];
         let m_area = chunks[1];
         let t_area = b_area.inner(Margin::new(1, 1));
-        measurement.calc(ctx.get_recorders(), ctx.sentence_len());
 
         // 折行计算
         ctx.calc_pre_render(t_area);
@@ -257,7 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "输入中: [{}]{} 计算耗时: [{:?}]",
                 ctx.get_input().iter().collect::<String>(),
                 ctx.get_preset_segment_hint()
-                    .map_or_else(|| String::new(), |hint| format!(" 提示: [{hint}]")),
+                    .map_or_else(String::new, |hint| format!(" 提示: [{hint}]")),
                 calc_duration
             ));
             frame.render_widget(block, b_area);
@@ -274,10 +279,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (popup, p_area) = Popup::create(&cands, t_area, cursor, input_len);
                 frame.render_widget(popup, p_area);
             }
-
-            let measurement_widget = Paragraph::new(measurement.to_string())
-                .block(Block::default().borders(Borders::ALL).title("计量"));
-            frame.render_widget(measurement_widget, m_area);
+            frame.render_widget(Block::default().borders(Borders::ALL).title("计量"), m_area);
+            let m_inner_area = m_area.inner(Margin::new(1, 1));
+            frame.render_widget(WrappedSpans::from_iter(ctx.measure().spans()), m_inner_area);
         })?;
     }
 
@@ -290,8 +294,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         terminal.show_cursor()?;
     }
-    measurement.calc(ctx.get_recorders(), ctx.sentence_len());
-    if let Err(err) = write_input_data(&time_id, &ctx, &measurement) {
+    if let Err(err) = write_input_data(&time_id, &ctx) {
         eprintln!("写入输入数据时出错: {:?}", err);
     }
     // let bs = sentence_rec
@@ -304,112 +307,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-struct Measurement {
-    // 总时长
-    duration: Duration,
-    // 暂停时间
-    pause_duration: Duration,
-    // 字符数
-    text_wc: usize,
-    // 原始输入字符数
-    code_cc: usize,
-    // 预设文本数量
-    preset_wc: Option<usize>,
-    // 每秒键数，根据code_cc计算
-    kps: f32,
-    // 每分字数，根据text_wc计算
-    wpm: f32,
-    // 平均码长
-    avg_len: f32,
-    // context中的records始终为追加，也不会修改已有的record，因此记录已经计算过的records，下次计算时从此处开始
-    // 一个例外是，records变为空的话，说明context清空了所有输入的数据，因此Measurement也重置
-    counted: usize,
-    // 回退次数
-    bs_times: usize,
+struct WrappedSpans<'a> {
+    spans: Vec<Span<'a>>,
 }
 
-impl Measurement {
-    fn new() -> Self {
-        Measurement {
-            duration: Duration::from_secs(0),
-            pause_duration: Duration::from_secs(0),
-            text_wc: 0,
-            code_cc: 0,
-            preset_wc: None,
-            kps: 0.0,
-            wpm: 0.0,
-            avg_len: 0.0,
-            counted: 0,
-            bs_times: 0,
-        }
+impl<'a, T> FromIterator<T> for WrappedSpans<'a>
+where
+    T: Into<Span<'a>>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let spans = iter.into_iter().map(Into::into).collect::<Vec<_>>();
+        Self { spans }
     }
+}
 
-    fn with_preset(mut self, preset_wc: Option<usize>) -> Self {
-        self.preset_wc = preset_wc;
-        self
-    }
-    /// 计量速度.
-    /// 需要的信息:
-    ///   开始时间-结束时间
-    ///   总字数
-    ///   总输入
-    ///   码长
-    ///   顶字次数?
-    ///   空格次数?
-    ///   回退次数?
-    fn calc(&mut self, records: &[Record], text_wc: usize) {
-        if records.is_empty() {
-            return;
-        }
-        if self.counted == records.len() {
-            return;
-        }
-        // 暂停判断，5秒
-        let pause_assert = Duration::from_secs(5);
-
-        let start = records[0].start;
-        let mut end = if self.counted == 0 {
-            records[0].end
-        } else {
-            records[self.counted - 1].end
-        };
-        for rec in &records[self.counted..] {
-            if rec.len < 0 {
-                self.bs_times += 1;
-            }
-            self.code_cc += rec.origin.len();
-            if end < rec.start {
-                let dur = rec.start - end;
-                if dur > pause_assert {
-                    self.pause_duration += dur;
+impl Widget for WrappedSpans<'_> {
+    fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+        Clear.render(area, buf);
+        let mut y = 0;
+        let mut line = Line::default();
+        let mut line_width = 0;
+        for span in self.spans {
+            let span_width = span.width() + 1;
+            if line_width + span_width > area.width as usize {
+                buf.set_line(area.x, area.y + y, &line, area.width);
+                y += 1;
+                if y >= area.height {
+                    break;
                 }
+                line = Line::default();
+                line_width = span_width;
+                line.push_span(span);
+                line.push_span(" ");
+            } else {
+                line.push_span(span);
+                line.push_span(" ");
+                line_width += span_width;
             }
-            end = rec.end;
         }
-        self.counted = records.len();
-        self.text_wc = text_wc;
-
-        self.duration = end.duration_since(start) - self.pause_duration;
-        self.wpm = self.text_wc as f32 / (self.duration.as_secs_f32() / 60.0);
-        self.kps = self.code_cc as f32 / self.duration.as_secs_f32();
-        self.avg_len = self.code_cc as f32 / text_wc as f32;
-    }
-}
-
-impl Display for Measurement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "  耗时: [{:.2?}] 速度: [{:.2}], 击键: [{:.2}] \n  暂停: [{:.2?}] 字数: [{}{}] 键数: [{}]\n  码长: [{:.2}]",
-            self.duration,
-            self.wpm,
-            self.kps,
-            self.pause_duration,
-            self.text_wc,
-            self.preset_wc.map_or("".to_string(), |pw| format!("/{pw}")),
-            self.code_cc,
-            self.avg_len,
-        )
+        buf.set_line(area.x, area.y + y, &line, area.width);
     }
 }
 
@@ -520,11 +456,7 @@ fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> 
 /// 输出文件：
 ///       文件1、输入文本
 ///       文件2、chunk_1>计量信息 chunk_2>输入记录 chunk_3预设文本
-fn write_input_data(
-    id: &str,
-    ctx: &Context,
-    measurement: &Measurement,
-) -> Result<(), std::io::Error> {
+fn write_input_data(id: &str, ctx: &Context) -> Result<(), std::io::Error> {
     let fire_prefix = format!("sentui_{id}_");
     let state_dir = match data_dir() {
         Some(mut dir) => {
@@ -580,18 +512,18 @@ fn write_input_data(
             .truncate(true)
             .open(path)?;
         // chunk 1: 计量信息
-        writeln!(file, "# Measurement\n{}", measurement)?;
+        writeln!(file, "# Measurement\n{}", ctx.measure())?;
         // // chunk 2: 输入记录
-        // writeln!(file, "\n# Records")?;
-        // for rec in ctx.get_recorders() {
-        //     writeln!(
-        //         file,
-        //         "{:?}\t{}\t{:.2?}",
-        //         rec.range,
-        //         rec.origin.iter().collect::<String>(),
-        //         rec.end.elapsed()
-        //     )?;
-        // }
+        writeln!(file, "# Records")?;
+        for rec in &ctx.measure().records {
+            // instant to time
+            writeln!(
+                file,
+                "{:?}\t{}",
+                rec.len,
+                rec.origin.iter().collect::<String>(),
+            )?;
+        }
 
         // // chunk 3: 预设文本
         // if let Some(preset) = ctx.get_preset() {
