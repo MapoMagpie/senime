@@ -1701,6 +1701,7 @@ dependencies = [
  "log",
  "ropey",
  "senime-lib",
+ "serde",
  "serde_json",
  "simple-logging",
  "tokio",

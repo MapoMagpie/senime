@@ -5,6 +5,7 @@ use dashmap::DashMap;
 use log::LevelFilter;
 use ropey::Rope;
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer, secondary_dict_path};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -16,18 +17,62 @@ struct State {
     completion: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct Config {
+    // 触发补全的字符，如 [a-z, A-Z, 空格]
+    #[serde(default = "default_trigger_characters", rename = "trigger-characters")]
+    trigger_characters: String,
+    // 行首注释，如 [//, --, #]
+    #[serde(default = "default_comment_prefixes", rename = "comment-prefixes")]
+    comment_prefixes: Vec<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            trigger_characters: default_trigger_characters(),
+            comment_prefixes: default_comment_prefixes(),
+        }
+    }
+}
+
+fn default_trigger_characters() -> String {
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,.".to_string()
+}
+
+fn default_comment_prefixes() -> Vec<String> {
+    vec![]
+}
+
 #[derive(Debug)]
 struct Backend {
     // client: Client,
     engine: InputAnalyzer,
     doc_map: DashMap<String, Rope>,
     state: RwLock<State>,
+    config: RwLock<Config>,
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
-        log::info!("initialize");
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        log::info!("initialize: {:?}", params.initialization_options);
+        if let Some(value) = params.initialization_options {
+            match serde_json::from_value::<Config>(value) {
+                Ok(new_config) => {
+                    let mut config = self.config.write().await;
+                    *config = new_config;
+                    log::info!("update config: {:?}", config);
+                }
+                Err(err) => {
+                    log::info!("deserialize config err: {:?}", err);
+                }
+            }
+        };
+        let trigger_characters = {
+            let config = self.config.read().await;
+            config.trigger_characters.clone()
+        };
         return Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "senimels".to_string(),
@@ -50,10 +95,7 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: Some(
-                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,."
-                            .chars()
-                            .map(|c| c.to_string())
-                            .collect(),
+                        trigger_characters.chars().map(|c| c.to_string()).collect(),
                     ),
                     ..CompletionOptions::default()
                 }),
@@ -62,6 +104,10 @@ impl LanguageServer for Backend {
         });
     }
 
+    // 为了避免影响正常编码，需要让中文补全只在注释或字符串中生效
+    // 最好的办法是使用tree-sitter等语法解析器来判断光标位置的上下文，这能精确识别当前是在注释中还是在字符串中，不过暂时不采用
+    // 目前只简单的支持单行注释，当前行的前缀与config.comment_prefixes中的元素匹配的话，则在此行启用补全
+    // 如果config.comment_prefixes为空（即默认）则启用补全
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         log::info!("completion start");
         let st = self.state.read().await;
@@ -76,17 +122,42 @@ impl LanguageServer for Backend {
         };
 
         let line_chars: Vec<char> = rope.line(position.line as usize).chars().collect();
-        let end = position.character as usize;
-        if let Some(char) = line_chars.get(end)
-            && (*char == '\t' || *char == ' ')
-        {
-            return Ok(None);
+        let is_invoked = params.context.as_ref().map_or(false, |ctx| {
+            ctx.trigger_kind == CompletionTriggerKind::INVOKED
+        });
+        let mut start_at = 0;
+        // 如果触发类型是自动的（非手动），则继续判断行首是否有注释前缀
+        if !is_invoked {
+            let config = self.config.read().await;
+            if !config.comment_prefixes.is_empty() {
+                let prefix_start = line_chars
+                    .iter()
+                    .position(|c| !c.is_ascii_whitespace())
+                    .unwrap_or(0);
+                let matched = config.comment_prefixes.iter().find_map(|prefix| {
+                    prefix
+                        .chars()
+                        .zip(line_chars[prefix_start..].iter())
+                        .all(|(a, b)| a == *b)
+                        .then_some(prefix.chars().count())
+                });
+                match matched {
+                    Some(len) => {
+                        start_at = prefix_start + len + 1;
+                    }
+                    None => {
+                        log::info!("comment prefix not matched, disable completion");
+                        return Ok(None);
+                    }
+                }
+            }
         }
+        let end = position.character as usize;
         let mut start = end;
         for i in (0..end).rev() {
             let char = line_chars[i];
             // log::info!("completion char {}", char);
-            if char.is_ascii() && !char.is_control() {
+            if start >= start_at && char.is_ascii() && !char.is_control() {
                 // 连续空格
                 if i > 0 && char.is_ascii_whitespace() && line_chars[i - 1].is_ascii_whitespace() {
                     break;
@@ -99,10 +170,9 @@ impl LanguageServer for Backend {
         if start >= end {
             log::info!("completion empty");
             return Ok(None);
+            // } else {
+            //     log::info!("completion chars: {:?}", &line_chars[start..end]);
         }
-        let reduce_first_space = start > 0
-            && line_chars[start].is_ascii_whitespace()
-            && !line_chars[start - 1].is_whitespace();
         let mut filter_text_start = start;
         for i in (0..start).rev() {
             let char = line_chars[i];
@@ -116,7 +186,7 @@ impl LanguageServer for Backend {
             segments,
             candidates,
         } = self.engine.analyze(&line_chars[start..end]);
-        let (mut sentence, _) = segments.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
+        let (sentence, _) = segments.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
         // 编辑器在收到补全后，全根据fiter_text进行过滤，比如helix会用[向前到后一个字..当前光标]这个范围的字符去搜索，如果搜索的分数太低就会丢弃
         // 所谓的字，就是英文字母、汉字、等其他非标点符号的字
         // 设置fiter_text最简单的方式是从当前行的首位开始也就是0，到当前光标的位置
@@ -128,10 +198,6 @@ impl LanguageServer for Backend {
         //     end,
         //     filter_text
         // );
-        if reduce_first_space {
-            log::info!("reduce_first_space: {}", sentence[0]);
-            sentence[0] = sentence[0].trim_start().to_string();
-        }
         let sentence = sentence.join("");
         if sentence.trim().is_empty() {
             return Ok(None);
@@ -335,6 +401,13 @@ mod tests {
         let char = '\n';
         assert!(char.is_ascii_whitespace());
     }
+
+    #[test]
+    fn test_prefix_match() {
+        let prefix = "..";
+        let line: Vec<char> = "..asdald".chars().collect();
+        assert!(prefix.chars().zip(line.iter()).all(|(a, b)| a == *b));
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -366,10 +439,12 @@ async fn main() {
     let engine = InputAnalyzer::new(dict, reverse_dict);
     let doc_map = DashMap::default();
     let state = RwLock::new(State { completion: true });
+    let config = RwLock::new(Config::default());
     let (service, socket) = LspService::new(|_client| Backend {
         engine,
         doc_map,
         state,
+        config,
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
