@@ -108,7 +108,11 @@ fn create_backend() -> Result<CrosstermBackend<File>, Box<dyn std::error::Error>
                 format!("无法打开 /dev/tty {:?}", err),
             )
         })?;
-    execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        SetCursorStyle::DefaultUserShape
+    )?;
     let backend = CrosstermBackend::new(stdout);
     Ok(backend)
 }

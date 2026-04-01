@@ -19,10 +19,10 @@ const COLOR_SEG_LEN: usize = 2;
 const COLOR_NORMAL: usize = 3;
 const COLOR_PENDING: usize = 4;
 const COLOR_PALETTE: [Style; 5] = [
-    Style::new().on_blue().white().bold(),
-    Style::new().on_dark_gray().white().bold(),
+    Style::new().on_light_cyan().black().bold(),
+    Style::new().on_light_blue().black().bold(),
     Style::new().on_light_red().crossed_out().white(),
-    Style::new(),
+    Style::new().on_green().black(),
     Style::new().magenta().underlined(),
 ];
 
