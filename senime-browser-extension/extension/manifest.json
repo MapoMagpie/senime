@@ -1,0 +1,39 @@
+{
+  "manifest_version": 2,
+  "name": "Senibe",
+  "version": "0.0.1",
+  "description": "Firefox-first Senime browser extension powered by senime-wasm.",
+  "icons": {
+    "48": "icons/senibe.svg",
+    "96": "icons/senibe.svg"
+  },
+  "permissions": [
+    "storage",
+    "<all_urls>"
+  ],
+  "background": {
+    "page": "background.html",
+    "persistent": true
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true,
+    "browser_style": false
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "senibe@senime.local"
+    }
+  }
+}
