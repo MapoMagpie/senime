@@ -18,30 +18,25 @@ struct State {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
 struct Config {
     // 触发补全的字符，如 [a-z, A-Z, 空格]
-    #[serde(default = "default_trigger_characters", rename = "trigger-characters")]
     trigger_characters: String,
     // 行首注释，如 [//, --, #]
-    #[serde(default = "default_comment_prefixes", rename = "comment-prefixes")]
     comment_prefixes: Vec<String>,
+    // 忽略INVOKED, CompletionTriggerKind::INVOKED 会在双引号""时触发，即使该行不是注释
+    ignore_invoked: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            trigger_characters: default_trigger_characters(),
-            comment_prefixes: default_comment_prefixes(),
+            trigger_characters: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,."
+                .to_string(),
+            comment_prefixes: vec![],
+            ignore_invoked: false,
         }
     }
-}
-
-fn default_trigger_characters() -> String {
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,.".to_string()
-}
-
-fn default_comment_prefixes() -> Vec<String> {
-    vec![]
 }
 
 #[derive(Debug)]
@@ -122,13 +117,18 @@ impl LanguageServer for Backend {
         };
 
         let line_chars: Vec<char> = rope.line(position.line as usize).chars().collect();
-        let is_invoked = params.context.as_ref().map_or(false, |ctx| {
-            ctx.trigger_kind == CompletionTriggerKind::INVOKED
-        });
+        let config = self.config.read().await;
+        let is_invoked = if config.ignore_invoked {
+            false
+        } else {
+            params.context.as_ref().map_or(false, |ctx| {
+                ctx.trigger_kind == CompletionTriggerKind::INVOKED
+            })
+        };
         let mut start_at = 0;
         // 如果触发类型是自动的（非手动），则继续判断行首是否有注释前缀
+        // log::info!("completion is invoked: {}", is_invoked,);
         if !is_invoked {
-            let config = self.config.read().await;
             if !config.comment_prefixes.is_empty() {
                 let prefix_start = line_chars
                     .iter()
