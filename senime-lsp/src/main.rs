@@ -153,6 +153,7 @@ impl LanguageServer for Backend {
             }
         }
         let end = position.character as usize;
+        let mut reduce_first_whitespace = false;
         let mut start = end;
         for i in (0..end).rev() {
             let char = line_chars[i];
@@ -164,6 +165,16 @@ impl LanguageServer for Backend {
                 }
                 start = i;
             } else {
+                // 检查当前`char`是否是`cjk`
+                reduce_first_whitespace = line_chars[start].is_whitespace()
+                    && !char.is_ascii_alphanumeric()
+                    && char.is_alphanumeric();
+                // log::info!(
+                //     "completion char, start: {}:{}, cjk_before_start: {}",
+                //     start,
+                //     char,
+                //     reduce_first_whitespace
+                // );
                 break;
             }
         }
@@ -182,10 +193,15 @@ impl LanguageServer for Backend {
                 break;
             }
         }
+        let analysis_chars = if reduce_first_whitespace {
+            &line_chars[start + 1..end]
+        } else {
+            &line_chars[start..end]
+        };
         let AnalysisResult {
             segments,
             candidates,
-        } = self.engine.analyze(&line_chars[start..end]);
+        } = self.engine.analyze(analysis_chars);
         let (sentence, _) = segments.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
         // 编辑器在收到补全后，全根据fiter_text进行过滤，比如helix会用[向前到后一个字..当前光标]这个范围的字符去搜索，如果搜索的分数太低就会丢弃
         // 所谓的字，就是英文字母、汉字、等其他非标点符号的字
@@ -257,9 +273,11 @@ impl LanguageServer for Backend {
             vec![]
         };
         log::info!(
-            "completion result: {}, candidates: {}",
+            "completion result: {}, candidates: {}, analyzer_chars: [{}], reduce first whitespace: {}",
             sentence,
-            cand_items.len()
+            cand_items.len(),
+            analysis_chars.iter().collect::<String>(),
+            reduce_first_whitespace,
         );
         Ok(Some(CompletionResponse::List(CompletionList {
             is_incomplete: true,
