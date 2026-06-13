@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use ahash::AHashMap;
+
 use crate::dict::{Candidate, Config, Dict};
 
 #[derive(Debug)]
@@ -13,9 +15,15 @@ enum InputType {
 
 #[derive(Debug)]
 pub struct InputAnalyzer {
+    // 主码表
     dict: Dict,
+    // 反查码表
     secondary_dict: Option<Dict>,
+    // 反查提示符
     secondary_hint: Option<Vec<Candidate>>,
+    // 单字对应编码，来自主码表，当反查时，根据单字从这里找对应的编码
+    reverse_code_map: Option<AHashMap<char, Vec<String>>>,
+    // 键位，除 26 个小写字母外，设定其他键位对应的功能：选择候选、标点符号、触发反查、原始输入标记
     key_map: HashMap<char, InputType>,
     selection_keys: [char; 9],
 }
@@ -42,16 +50,28 @@ impl InputAnalyzer {
         if let Some(char) = reverse_key {
             key_map.insert(char, InputType::Secondary);
         }
-        let (secondary_dict, secondary_hint) = match secondary {
+        let (secondary_dict, secondary_hint, reverse_code_map) = match secondary {
             Some((sec_dict, hint)) => {
                 let hint = vec![Candidate {
                     code: "r".to_string(),
                     text: format!(":({hint})"),
                     weight: 0,
                 }];
-                (Some(sec_dict), Some(hint))
+                let mut single_text_code_map = AHashMap::<char, Vec<String>>::new();
+                // 从dict.candidates中筛选单字，存入该单字的编码
+                dict.candidates
+                    .iter()
+                    .filter(|cand| cand.text.chars().count() == 1)
+                    .for_each(|cand| {
+                        let ch = cand.text.chars().next().unwrap();
+                        single_text_code_map
+                            .entry(ch)
+                            .or_insert_with(Vec::new)
+                            .push(cand.code.clone());
+                    });
+                (Some(sec_dict), Some(hint), Some(single_text_code_map))
             }
-            _ => (None, None),
+            _ => (None, None, None),
         };
         Self {
             dict,
@@ -59,6 +79,7 @@ impl InputAnalyzer {
             secondary_hint,
             key_map,
             selection_keys,
+            reverse_code_map,
         }
     }
 
@@ -184,24 +205,54 @@ impl InputAnalyzer {
         index: usize,
         count: usize,
         use_secondary_dict: bool,
-    ) -> Option<(&[Candidate], bool)> {
+    ) -> Option<(Vec<Candidate>, bool)> {
+        // codes为空（排除反查触发字符后)时，展示反查提示（通常为码表名)
+        if use_secondary_dict && code.len() <= 1 {
+            return self
+                .secondary_hint
+                .as_ref()
+                .map(|hint| (hint.clone(), false));
+        }
         let (dict, codes) = if use_secondary_dict {
             (self.secondary_dict.as_ref()?, &code[1..])
         } else {
             (&self.dict, code)
         };
-        if use_secondary_dict && codes.is_empty() {
-            return self
-                .secondary_hint
-                .as_ref()
-                .map(|hint| (hint.as_slice(), false));
-        }
         dict.search(codes).map(|c| {
-            if index == 0 {
+            let (slice, unique) = if index == 0 {
                 (&c[0..c.len().min(count)], c.len() == 1)
             } else {
+                // index非0，表示已确认选字词，只返回选择的字词
                 let index = if index >= c.len() { 0 } else { index };
                 (&c[index..index + 1], true)
+            };
+            if use_secondary_dict {
+                let reverse_map = self.reverse_code_map.as_ref().unwrap();
+                let cands = slice
+                    .iter()
+                    .map(|cand| {
+                        let mut code = String::new();
+                        for (i, ch) in cand.text.chars().enumerate() {
+                            if i > 0 {
+                                code.push(' ');
+                            }
+                            let part = reverse_map
+                                .get(&ch)
+                                .and_then(|codes| codes.first())
+                                .map(String::as_str)
+                                .unwrap_or("_");
+                            code.push_str(part);
+                        }
+                        Candidate {
+                            code,
+                            text: cand.text.clone(),
+                            weight: cand.weight,
+                        }
+                    })
+                    .collect();
+                (cands, false)
+            } else {
+                (slice.to_vec(), unique)
             }
         })
     }

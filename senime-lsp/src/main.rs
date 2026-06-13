@@ -242,7 +242,7 @@ impl LanguageServer for Backend {
             ..Default::default()
         };
         let cand_items: Vec<CompletionItem> = if let Some(cands) = candidates
-            && cands.len() > 1
+            && !cands.is_empty()
         {
             cands
                 .into_iter()
