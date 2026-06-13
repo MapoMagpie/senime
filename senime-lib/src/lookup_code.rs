@@ -145,7 +145,7 @@ impl Looker {
                 panic!(
                     "分词时出现错误: [{}] in [{}]",
                     chars[i.min(char_len - 1)],
-                    chars[(i - 10).max(0)..(i + 10).min(char_len - 1)]
+                    chars[(i - 10)..(i + 10).min(char_len - 1)]
                         .iter()
                         .collect::<String>()
                 )

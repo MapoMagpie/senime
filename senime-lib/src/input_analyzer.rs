@@ -66,7 +66,7 @@ impl InputAnalyzer {
                         let ch = cand.text.chars().next().unwrap();
                         single_text_code_map
                             .entry(ch)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(cand.code.clone());
                     });
                 (Some(sec_dict), Some(hint), Some(single_text_code_map))

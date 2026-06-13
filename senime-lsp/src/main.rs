@@ -121,34 +121,33 @@ impl LanguageServer for Backend {
         let is_invoked = if config.ignore_invoked {
             false
         } else {
-            params.context.as_ref().map_or(false, |ctx| {
-                ctx.trigger_kind == CompletionTriggerKind::INVOKED
-            })
+            params
+                .context
+                .as_ref()
+                .is_some_and(|ctx| ctx.trigger_kind == CompletionTriggerKind::INVOKED)
         };
         let mut start_at = 0;
         // 如果触发类型是自动的（非手动），则继续判断行首是否有注释前缀
         // log::info!("completion is invoked: {}", is_invoked,);
-        if !is_invoked {
-            if !config.comment_prefixes.is_empty() {
-                let prefix_start = line_chars
-                    .iter()
-                    .position(|c| !c.is_ascii_whitespace())
-                    .unwrap_or(0);
-                let matched = config.comment_prefixes.iter().find_map(|prefix| {
-                    prefix
-                        .chars()
-                        .zip(line_chars[prefix_start..].iter())
-                        .all(|(a, b)| a == *b)
-                        .then_some(prefix.chars().count())
-                });
-                match matched {
-                    Some(len) => {
-                        start_at = prefix_start + len + 1;
-                    }
-                    None => {
-                        log::info!("comment prefix not matched, disable completion");
-                        return Ok(None);
-                    }
+        if !is_invoked && !config.comment_prefixes.is_empty() {
+            let prefix_start = line_chars
+                .iter()
+                .position(|c| !c.is_ascii_whitespace())
+                .unwrap_or(0);
+            let matched = config.comment_prefixes.iter().find_map(|prefix| {
+                prefix
+                    .chars()
+                    .zip(line_chars[prefix_start..].iter())
+                    .all(|(a, b)| a == *b)
+                    .then_some(prefix.chars().count())
+            });
+            match matched {
+                Some(len) => {
+                    start_at = prefix_start + len + 1;
+                }
+                None => {
+                    log::info!("comment prefix not matched, disable completion");
+                    return Ok(None);
                 }
             }
         }
