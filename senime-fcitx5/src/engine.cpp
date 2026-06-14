@@ -1,12 +1,10 @@
 #include "engine.h"
 
-#include <algorithm>
-#include <cctype>
-#include <fcitx-utils/capabilityflags.h>
 #include <fcitx-utils/log.h>
 #include <fcitx/event.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/userinterface.h>
+#include <memory>
 
 namespace fcitx {
 
@@ -17,38 +15,25 @@ std::string lastError() {
     return error ? std::string(error) : std::string();
 }
 
-bool isAsciiInput(uint32_t c) {
-    return c >= 0x20 && c <= 0x7e;
-}
-
-void eraseLastUtf8(std::string &value) {
-    if (value.empty()) {
-        return;
-    }
-    auto pos = value.size() - 1;
-    while (pos > 0 && (static_cast<unsigned char>(value[pos]) & 0xc0) == 0x80) {
-        --pos;
-    }
-    value.erase(pos);
-}
-
 class SenimeCandidateWord : public CandidateWord {
 public:
-    SenimeCandidateWord(SenimeEngine *engine, size_t index, std::string text,
-                        std::string code)
-        : CandidateWord(Text(std::move(text))), engine_(engine), index_(index) {
-        if (!code.empty()) {
-            setComment(Text(std::move(code)));
+    SenimeCandidateWord(std::string text, std::string code, std::string selectKey, InputContext *ic)
+        : CandidateWord(Text(text)), ic_(ic), text_(std::move(text)) {
+            if (!code.empty()) {
+                setComment(Text(std::move(code)));
+            }
+            if (!selectKey.empty()) {
+                setCustomLabel(Text(std::move(selectKey)));
+            }
         }
-    }
 
-    void select(InputContext *inputContext) const override {
-        engine_->state(inputContext)->select(index_);
+    void select(InputContext *) const override {
+        ic_->commitString(text_);
     }
 
 private:
-    SenimeEngine *engine_;
-    size_t index_;
+    InputContext *ic_;
+    std::string text_;
 };
 
 } // namespace
@@ -56,70 +41,12 @@ private:
 SenimeState::SenimeState(SenimeEngine *engine, InputContext *ic)
     : engine_(engine), ic_(ic) {}
 
-SenimeState::~SenimeState() { clearAnalysis(); }
-
-void SenimeState::clearAnalysis() {
-    if (analysis_) {
-        senime_analysis_free(analysis_);
-        analysis_ = nullptr;
-    }
-}
-
-KeyList SenimeState::selectionKeyList() const {
-    KeyList keys;
-    size_t len = 0;
-    const char *sk = senime_engine_selection_keys(engine_->engine(), &len);
-    if (sk) {
-        for (size_t i = 0; i < len; i++) {
-            keys.emplace_back(static_cast<KeySym>(sk[i]));
-        }
-    }
-    return keys;
-}
-
-bool SenimeState::isSelectionKey(const Key &key, size_t *index) const {
-    auto keys = selectionKeyList();
-    auto idx = key.keyListIndex(keys);
-    if (idx < 0) {
-        return false;
-    }
-    if (index) {
-        *index = static_cast<size_t>(idx);
-    }
-    return true;
-}
-
-bool SenimeState::appendKey(KeySym sym) {
-    auto utf8 = Key::keySymToUTF8(sym);
-    if (utf8.empty()) {
-        return false;
-    }
-    auto unicode = Key::keySymToUnicode(sym);
-    if (!isAsciiInput(unicode)) {
-        return false;
-    }
-    input_ += utf8;
-    return true;
-}
-
 void SenimeState::keyEvent(KeyEvent &event) {
-    if (event.isRelease()) {
-        return;
-    }
-    if (!engine_->engine()) {
+    if (event.isRelease() || !engine_->engine()) {
         return;
     }
 
     const auto &key = event.key();
-
-    // Selection keys must be checked before modifier handling,
-    // so that Shift+number keys work for candidate selection.
-    size_t selection = 0;
-    if (!input_.empty() && isSelectionKey(key, &selection)) {
-        select(selection);
-        event.filterAndAccept();
-        return;
-    }
 
     if (key.hasModifier() && !key.states().test(KeyState::Shift)) {
         if (!input_.empty()) {
@@ -137,14 +64,19 @@ void SenimeState::keyEvent(KeyEvent &event) {
 
     if (key.check(FcitxKey_BackSpace)) {
         if (!input_.empty()) {
-            eraseLastUtf8(input_);
+            // Remove last UTF-8 character.
+            auto pos = input_.size() - 1;
+            while (pos > 0 && (static_cast<unsigned char>(input_[pos]) & 0xc0) == 0x80) {
+                --pos;
+            }
+            input_.erase(pos);
             update();
             event.filterAndAccept();
         }
         return;
     }
 
-    if (key.check(FcitxKey_Return) || key.check(FcitxKey_space)) {
+    if (key.check(FcitxKey_Return)) {
         if (!input_.empty()) {
             commit();
             event.filterAndAccept();
@@ -152,7 +84,18 @@ void SenimeState::keyEvent(KeyEvent &event) {
         return;
     }
 
-    if (appendKey(key.sym())) {
+    // When input is empty, space should be committed directly.
+    if (key.check(FcitxKey_space) && input_.empty()) {
+        ic_->commitString(" ");
+        event.filterAndAccept();
+        return;
+    }
+
+    // Let the engine handle everything else (letters, numbers, selection keys,
+    // space, punctuation, etc.).
+    auto utf8 = Key::keySymToUTF8(key.sym());
+    if (!utf8.empty()) {
+        input_ += utf8;
         update();
         event.filterAndAccept();
     }
@@ -160,89 +103,68 @@ void SenimeState::keyEvent(KeyEvent &event) {
 
 void SenimeState::reset() {
     input_.clear();
-    clearAnalysis();
-    updatePreedit();
+    ic_->inputPanel().reset();
+    ic_->updatePreedit();
+    ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
 }
 
 void SenimeState::commit() {
-    if (input_.empty() || !engine_->engine()) {
-        reset();
-        return;
-    }
-    // Use stored analysis if available, otherwise analyze now.
-    if (!analysis_) {
-        analysis_ = senime_engine_analyze(engine_->engine(), input_.c_str());
-    }
-    if (analysis_ && analysis_->text && analysis_->text[0] != '\0') {
-        ic_->commitString(analysis_->text);
-    } else {
-        ic_->commitString(input_);
-    }
-    input_.clear();
-    clearAnalysis();
-    updatePreedit();
-}
-
-void SenimeState::select(size_t index) {
     if (input_.empty()) {
         return;
     }
-    // Ensure we have an analysis result.
-    if (!analysis_ && engine_->engine()) {
-        analysis_ = senime_engine_analyze(engine_->engine(), input_.c_str());
-    }
-    if (!analysis_ || index >= analysis_->candidate_count) {
-        return;
-    }
-    const auto &candidate = analysis_->candidates[index];
-    if (candidate.text && candidate.text[0] != '\0') {
-        ic_->commitString(candidate.text);
+    SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), input_.c_str());
+    if (analysis) {
+        const char *text = analysis->text ? analysis->text : "";
+        ic_->commitString(text);
+        senime_analysis_free(analysis);
     }
     input_.clear();
-    clearAnalysis();
-    updatePreedit();
-}
-
-void SenimeState::updatePreedit() {
     ic_->inputPanel().reset();
-    Text preedit(input_);
-    preedit.setCursor(input_.size());
-    if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-        ic_->inputPanel().setClientPreedit(preedit);
-    } else {
-        ic_->inputPanel().setPreedit(preedit);
-    }
     ic_->updatePreedit();
     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
 }
 
 void SenimeState::update() {
     ic_->inputPanel().reset();
-    clearAnalysis();
 
-    if (input_.empty() || !engine_->engine()) {
-        updatePreedit();
+    if (input_.empty()) {
+        ic_->updatePreedit();
+        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
         return;
     }
 
-    analysis_ = senime_engine_analyze(engine_->engine(), input_.c_str());
-    if (!analysis_) {
+    SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), input_.c_str());
+    if (!analysis) {
         FCITX_WARN() << "Senime analyze failed: " << lastError();
-        updatePreedit();
+        ic_->updatePreedit();
+        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
         return;
     }
 
-    const char *text = analysis_->text ? analysis_->text : "";
+    const char *text = analysis->text ? analysis->text : "";
 
-    // All codes resolved to unique matches (no candidates), auto-commit.
-    if (analysis_->candidate_count == 0 && input_ != text) {
-        ic_->commitString(text);
-        input_.clear();
-        clearAnalysis();
-        updatePreedit();
+    // No candidates — everything resolved (unique codes, punctuation, etc.), commit.
+    if (analysis->candidate_count == 0) {
+        if (input_ != text) {
+            ic_->commitString(text);
+            input_.clear();
+        } else {
+            // Show input as preedit.
+            Text preedit(text);
+            preedit.setCursor(preedit.toString().size());
+            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
+                ic_->inputPanel().setClientPreedit(preedit);
+            } else {
+                ic_->inputPanel().setPreedit(preedit);
+            }
+        }
+        senime_analysis_free(analysis);
+        ic_->updatePreedit();
+        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
         return;
     }
 
+    // Show preedit and candidate list.
     Text preedit(text);
     preedit.setCursor(preedit.toString().size());
     if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
@@ -250,22 +172,21 @@ void SenimeState::update() {
     } else {
         ic_->inputPanel().setPreedit(preedit);
     }
-
-    if (analysis_->candidate_count > 0) {
-        auto candidates = std::make_unique<CommonCandidateList>();
-        candidates->setSelectionKey(selectionKeyList());
-        candidates->setPageSize(engine_->instance()->globalConfig().defaultPageSize());
-        candidates->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
-        for (size_t i = 0; i < analysis_->candidate_count; i++) {
-            const auto &candidate = analysis_->candidates[i];
-            candidates->append<SenimeCandidateWord>(
-                engine_, i, candidate.text ? candidate.text : "",
-                candidate.code ? candidate.code : "");
-        }
-        candidates->setGlobalCursorIndex(0);
-        ic_->inputPanel().setCandidateList(std::move(candidates));
+    auto candidates = std::make_unique<CommonCandidateList>();
+    candidates->setPageSize(engine_->instance()->globalConfig().defaultPageSize());
+    candidates->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
+    for (size_t i = 0; i < analysis->candidate_count; i++) {
+        const auto &candidate = analysis->candidates[i];
+        candidates->append<SenimeCandidateWord>(
+            std::string(candidate.text ? candidate.text : ""),
+            candidate.code ? candidate.code : "",
+            candidate.select_key ? std::string(1, static_cast<char>(candidate.select_key)) + ": " : std::string(),
+            ic_);
     }
+    candidates->setGlobalCursorIndex(0);
+    ic_->inputPanel().setCandidateList(std::move(candidates));
 
+    senime_analysis_free(analysis);
     ic_->updatePreedit();
     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
 }

@@ -31,25 +31,17 @@ class SenimeEngine;
 class SenimeState : public InputContextProperty {
 public:
     SenimeState(SenimeEngine *engine, InputContext *ic);
-    ~SenimeState();
 
     void keyEvent(KeyEvent &event);
     void reset();
     void commit();
-    void select(size_t index);
 
 private:
     void update();
-    void updatePreedit();
-    void clearAnalysis();
-    bool appendKey(KeySym sym);
-    bool isSelectionKey(const Key &key, size_t *index) const;
-    KeyList selectionKeyList() const;
 
     SenimeEngine *engine_;
     InputContext *ic_;
     std::string input_;
-    ::SenimeAnalysis *analysis_ = nullptr;
 };
 
 class SenimeEngine : public InputMethodEngine {
