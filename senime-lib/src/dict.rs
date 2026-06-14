@@ -235,9 +235,10 @@ impl FromStr for Dict {
     }
 }
 
-// #[cfg(unix)]
-fn get_mtime(path: &Path) -> i64 {
-    let metadata = path.metadata().expect("无法读取码表文件元信息");
+fn get_mtime_or(path: &Path, default: i64) -> i64 {
+    let Ok(metadata) = path.metadata() else {
+        return default;
+    };
     if let Ok(modi) = metadata.modified() {
         let duration = modi.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);
         duration.as_millis() as i64
@@ -256,47 +257,62 @@ impl Dict {
     where
         P: Into<PathBuf>,
     {
+        Self::try_load(path).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    pub fn try_load<P>(path: P) -> Result<Self, String>
+    where
+        P: Into<PathBuf>,
+    {
         let path = path.into();
         let filename = path
             .file_name()
-            .expect("无效的码表文件路径")
+            .ok_or("无效的码表文件路径")?
             .to_str()
-            .unwrap();
-        let mtime = get_mtime(&path);
+            .ok_or("码表文件名包含非法字符")?;
+        let mtime = get_mtime_or(&path, 0);
         let file_dir = path
             .parent()
-            .expect("码表文件需要在某个文件夹内")
+            .ok_or("码表文件需要在某个文件夹内")?
             .to_str()
-            .unwrap();
+            .ok_or("码表目录路径包含非法字符")?;
         let bin_path = format!("{}/{}.bin", file_dir, filename);
-        File::open(&bin_path)
-            .and_then(|mut file| {
-                let mut buf: Vec<u8> = vec![];
-                {
-                    file.read_to_end(&mut buf)?;
-                }
-                Self::try_from((mtime, buf.as_slice()))
-            })
-            .unwrap_or_else(|err| {
+        match File::open(&bin_path).and_then(|mut file| {
+            let mut buf: Vec<u8> = vec![];
+            file.read_to_end(&mut buf)?;
+            Self::try_from((mtime, buf.as_slice()))
+        }) {
+            Ok(dict) => Ok(dict),
+            Err(err) => {
                 println!("打开码表二进制文件: {}", err);
-                let mut file = File::open(path).expect("无法读取码表文件");
+                let mut file = File::open(&path)
+                    .map_err(|e| format!("无法读取码表文件 {:?}: {e}", path))?;
                 let mut content = String::new();
                 file.read_to_string(&mut content)
-                    .expect("无法从码表中读取内容");
-                let mut dict_bin = File::create(bin_path).unwrap();
+                    .map_err(|e| format!("无法从码表中读取内容: {e}"))?;
+                let mut dict_bin = File::create(&bin_path)
+                    .map_err(|e| format!("无法创建二进制缓存: {e}"))?;
                 let meta = DictMeta {
                     head: ['s', 'e', 'n', 'i', 'm', 'e'],
                     ver: VERSION,
                     mtime,
                 };
                 let mut head = [0; 20];
-                bincode::encode_into_slice(meta, &mut head, config::standard()).unwrap();
-                dict_bin.write_all(&head).unwrap();
-                let dict = Self::from_str(&content).unwrap();
-                let encoded = bincode::encode_to_vec(&dict, config::standard()).unwrap();
-                dict_bin.write_all(&encoded).unwrap();
-                dict
-            })
+                bincode::encode_into_slice(meta, &mut head, config::standard())
+                    .map_err(|e| format!("编码头信息失败: {e}"))?;
+                dict_bin
+                    .write_all(&head)
+                    .map_err(|e| format!("写入头信息失败: {e}"))?;
+                let dict = Self::from_str(&content)
+                    .map_err(|e| format!("解析码表失败: {e}"))?;
+                let encoded = bincode::encode_to_vec(&dict, config::standard())
+                    .map_err(|e| format!("编码码表失败: {e}"))?;
+                dict_bin
+                    .write_all(&encoded)
+                    .map_err(|e| format!("写入码表失败: {e}"))?;
+                Ok(dict)
+            }
+        }
     }
 
     pub fn reachable(&self, chars: &[char]) -> bool {
