@@ -12,6 +12,7 @@ members = [
   "senime-wasm",
   "senime-encode",
   "senime-browser-extension",
+  "senime-fcitx5",
 ]
 default-member = [
   "senime-tui"

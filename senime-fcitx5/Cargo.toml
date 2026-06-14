@@ -1,0 +1,12 @@
+[package]
+name = "senime-fcitx5"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+name = "senime_fcitx5"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+senime-lib = { path = "../senime-lib" }

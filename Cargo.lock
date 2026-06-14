@@ -1687,6 +1687,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "senime-fcitx5"
+version = "0.0.1"
+dependencies = [
+ "senime-lib",
+]
+
+[[package]]
 name = "senime-lib"
 version = "0.0.1"
 dependencies = [
