@@ -6,21 +6,23 @@ use std::{fs::File, io::Read, time::Instant};
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
-    /// 码表文件，其结构应为: 字词<TAB>编码<TAB>权重(可选) 每行
-    /// 当没有权重时则以行的顺序判断编码对应的字词的首选还是候选
-    #[arg(short, long)]
+    /// 码表文件或配置文件
+    /// 如果指定的是配置文件，则需要在配置中指定码表文件。
+    /// 如果指定的是码表文件，其结构应为: 字词<TAB>编码<TAB>权重(可选) 每行，当没有权重时则以行的顺序判断编码对应的字词的首选还是候选。
+    /// 同时，还可以直接指定二进制格式的码表文件，它是由本程序编译码表后产生的bin文件。
+    #[arg(short, long, verbatim_doc_comment)]
     pub table: String,
 
     /// 文本文件，纯文本
-    #[arg(short, long)]
+    #[arg(short, long, verbatim_doc_comment)]
     pub input: String,
 
     /// 输出颜色，如果启用则会给每段分词添加色彩，适用于终端
-    #[arg(short, long)]
+    #[arg(short, long, verbatim_doc_comment)]
     pub color: bool,
 
     /// 输出时包含字词，将与编码拼接在一起
-    #[arg(short, long)]
+    #[arg(short, long, verbatim_doc_comment)]
     pub with_text: bool,
 }
 

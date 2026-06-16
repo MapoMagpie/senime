@@ -31,6 +31,7 @@ pub struct InputAnalyzer {
 impl InputAnalyzer {
     pub fn new(dict: Dict, secondary: Option<(Dict, String)>) -> Self {
         let Config {
+            dict: _,
             selection_keys,
             punctuations,
             escape_pair,
@@ -518,23 +519,13 @@ pub struct AnalysisResult {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+
+    use crate::test_utils::gen_test_config;
 
     use super::*;
 
-    fn gen_table() -> String {
-        let raw = r#"
-```toml
-selection_keys = ["U","I","O","H","J","K","B","N","M"]
-[punctuations]
-',' = ["，", ",", "……"]
-'.' = ["。", ".", "……"]
-'!' = ["！", "!"]
-'/' = ["？", "/"]
-';' = ["：", "；", ";"]
-'[' = ["「", "“", "[", "【"]
-']' = ["」", "”", "]", "】"]
-```
+    fn gen_entries() -> String {
+        r#"
 ahb 来 1
 ahc 麦克 1
 ahcg 疲惫不堪 1
@@ -546,12 +537,18 @@ cb 不 1
 z 可 1
 z 可以 1
 zk 可能 1
-zkc 射 1"#;
-        raw.replace(" ", "\t")
+zkc 射 1"#
+            .replace(' ', "\t")
     }
+
+    fn test_config() -> Config {
+        let raw = &gen_test_config();
+        toml::from_str(raw).unwrap()
+    }
+
     #[test]
     fn test_analyzer() {
-        let dict = Dict::from_str(&gen_table()).unwrap();
+        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
         let analyzer = InputAnalyzer::new(dict, None);
         let input = "a cIzk";
         let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
@@ -612,7 +609,7 @@ zkc 射 1"#;
 
     #[test]
     fn test_segments() {
-        let trie = Dict::from_str(&gen_table()).unwrap();
+        let trie = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
         let analyzer = InputAnalyzer::new(trie, None);
         let samples: Vec<(&str, Vec<&str>, Vec<Tag>)> = vec![
             (

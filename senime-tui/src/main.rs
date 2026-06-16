@@ -39,33 +39,35 @@ mod sentence;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Args {
-    /// 码表文件，其结构应为: 字词<TAB>编码<TAB>权重(可选) 每行
-    /// 当没有权重时则以行的顺序判断编码对应的字词的首选还是候选
-    #[arg(short, long)]
+    /// 码表文件或配置文件
+    /// 如果指定的是配置文件，则需要在配置中指定码表文件。
+    /// 如果指定的是码表文件，其结构应为: 字词<TAB>编码<TAB>权重(可选) 每行，当没有权重时则以行的顺序判断编码对应的字词的首选还是候选。
+    /// 同时，还可以直接指定二进制格式的码表文件，它是由本程序编译码表后产生的bin文件。
+    #[arg(short, long, verbatim_doc_comment)]
     pub table: String,
 
     /// 将此文件中的内容作为预设文本
     /// 此功能类似赛码器，将以灰色的文本展示这些预设文本
-    #[arg(short, long)]
+    #[arg(short, long, verbatim_doc_comment)]
     pub preset: Option<String>,
 
     /// 保持预设文本的格式，默认False
     /// 不设置此项时，默认移除预设文本中的空格、换行符
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub keep: bool,
 
     /// 选择预设文本的范围
     /// 格式为: 1-10 (行一到行十)，1.3-10.6 (行一的第三字到行十的第六字)
-    #[arg(long)]
+    #[arg(long, verbatim_doc_comment)]
     pub pick: Option<String>,
 
     /// 将标准输入流中的内容作为预设文本，与--preset功能一样
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub stdin: bool,
 
     /// 使用标准输出流做出界面绘制区
     /// 默认使用/dev/tty做为界面绘制区，若无法打开/dev/tty或其不存在，可使用--stdout解决此问题
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub stdout: bool,
 }
 

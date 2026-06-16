@@ -246,7 +246,7 @@ impl<'a> Segment<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::{Dict, dict::Candidate, lookup_code::Looker};
+    use crate::{dict::Candidate, lookup_code::Looker};
 
     fn create_candidates() -> Vec<Candidate> {
         let data = vec![
@@ -319,35 +319,35 @@ mod test {
         ];
         assert_eq!(ranges, expected);
     }
-    #[test]
-    fn test_with_file_analyze_segments() {
-        let dict = Dict::load("../test/虎码码表.txt");
-        let looker = Looker::new(&dict.candidates);
-        let text = r#"奶煺妫约词鼓阋丫龉攀笫伲灰褂行俺嘧又摹保部梢愿吒咝诵说目吹"#;
-        // let text = r#"噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦"#;
-        // let text = r#"Ｋ纳贸ぶΓ匀皇窃谑闱榈氖坏庖黄窦涔适率渌凳录＜蚱樱闯渎哦"#;
-        // let text = "当第一片梧桐叶染上金黄，当清晨的风带上丝丝凉意，当枝头的果实缀满枝头，我们便知道，秋，悄无声息地来了。秋天没有春天的姹紫嫣红，没有夏天的热烈奔放，没有冬天的银装素裹，却有着独属于自己的温柔与厚重，像一杯陈年的酒，越品越有滋味，像一首悠远的诗，越读越有深意。秋日的清晨，薄雾缭绕，天地间仿佛蒙上了一层轻纱，朦胧而美好。路边的草木褪去了盛夏的翠绿，换上了五彩的盛装，金黄的银杏、火红的枫叶、深褐的松柏，交织在一起，构成了一幅绚丽多彩的画卷。踩在铺满落叶的小路上，脚下发出“沙沙”的声响，那是秋天的私语，是岁月的回响。午后的阳光变得格外温柔，不再像盛夏那样刺眼，透过枝叶的缝隙洒下来，在地上投下斑驳的光影。坐在院子里，晒着太阳，看着落叶随风飘落，心中没有丝毫的伤感，反而多了一份从容与淡然。秋天是收获的季节，田埂上，金黄的稻田随风起伏，像一片金色的海洋；果园里，红彤彤的苹果、黄澄澄的梨子、沉甸甸的葡萄，挂满了枝头，散发着诱人的香气，那是汗水浇灌的成果，是岁月馈赠的惊喜。秋天也是沉淀的季节，褪去了盛夏的浮躁，人心也变得沉静下来。我们开始复盘过往，整理心情，放下不必要的执念，珍藏那些温暖的回忆，为接下来的日子积蓄力量。秋意渐浓，岁月沉香，愿我们能在这温柔的秋日里，收获成长，珍藏美好，不负时光，不负自己。"
-        let text = text.chars().collect::<Vec<_>>();
-        let segments = looker.analyze(text.as_slice());
-        let ranges = segments
-            .iter()
-            .map(|seg| {
-                format!(
-                    "{}{}{}",
-                    seg.text.iter().collect::<String>(),
-                    seg.code.iter().collect::<String>(),
-                    if seg.pos > 0 {
-                        seg.pos.to_string()
-                    } else if seg.auto_select {
-                        "".to_string()
-                    } else {
-                        "_".to_string()
-                    }
-                )
-            })
-            .collect::<Vec<_>>();
-        println!("{ranges:?}");
-    }
+    // #[test]
+    // fn test_with_file_analyze_segments() {
+    //     let dict = Dict::load("../test/虎码码表.txt");
+    //     let looker = Looker::new(&dict.candidates);
+    //     let text = r#"奶煺妫约词鼓阋丫龉攀笫伲灰褂行俺嘧又摹保部梢愿吒咝诵说目吹"#;
+    //     // let text = r#"噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦噼里啪啦"#;
+    //     // let text = r#"Ｋ纳贸ぶΓ匀皇窃谑闱榈氖坏庖黄窦涔适率渌凳录＜蚱樱闯渎哦"#;
+    //     // let text = "当第一片梧桐叶染上金黄，当清晨的风带上丝丝凉意，当枝头的果实缀满枝头，我们便知道，秋，悄无声息地来了。秋天没有春天的姹紫嫣红，没有夏天的热烈奔放，没有冬天的银装素裹，却有着独属于自己的温柔与厚重，像一杯陈年的酒，越品越有滋味，像一首悠远的诗，越读越有深意。秋日的清晨，薄雾缭绕，天地间仿佛蒙上了一层轻纱，朦胧而美好。路边的草木褪去了盛夏的翠绿，换上了五彩的盛装，金黄的银杏、火红的枫叶、深褐的松柏，交织在一起，构成了一幅绚丽多彩的画卷。踩在铺满落叶的小路上，脚下发出“沙沙”的声响，那是秋天的私语，是岁月的回响。午后的阳光变得格外温柔，不再像盛夏那样刺眼，透过枝叶的缝隙洒下来，在地上投下斑驳的光影。坐在院子里，晒着太阳，看着落叶随风飘落，心中没有丝毫的伤感，反而多了一份从容与淡然。秋天是收获的季节，田埂上，金黄的稻田随风起伏，像一片金色的海洋；果园里，红彤彤的苹果、黄澄澄的梨子、沉甸甸的葡萄，挂满了枝头，散发着诱人的香气，那是汗水浇灌的成果，是岁月馈赠的惊喜。秋天也是沉淀的季节，褪去了盛夏的浮躁，人心也变得沉静下来。我们开始复盘过往，整理心情，放下不必要的执念，珍藏那些温暖的回忆，为接下来的日子积蓄力量。秋意渐浓，岁月沉香，愿我们能在这温柔的秋日里，收获成长，珍藏美好，不负时光，不负自己。"
+    //     let text = text.chars().collect::<Vec<_>>();
+    //     let segments = looker.analyze(text.as_slice());
+    //     let ranges = segments
+    //         .iter()
+    //         .map(|seg| {
+    //             format!(
+    //                 "{}{}{}",
+    //                 seg.text.iter().collect::<String>(),
+    //                 seg.code.iter().collect::<String>(),
+    //                 if seg.pos > 0 {
+    //                     seg.pos.to_string()
+    //                 } else if seg.auto_select {
+    //                     "".to_string()
+    //                 } else {
+    //                     "_".to_string()
+    //                 }
+    //             )
+    //         })
+    //         .collect::<Vec<_>>();
+    //     println!("{ranges:?}");
+    // }
 }
 
 mod trie {
