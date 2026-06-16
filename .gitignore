@@ -3,3 +3,4 @@ test
 dist
 node_modules
 senime-fcitx5/build
+.cache
