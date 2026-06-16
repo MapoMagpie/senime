@@ -35,6 +35,8 @@ public:
     void keyEvent(KeyEvent &event);
     void reset();
     void commit();
+    bool chineseMode() const { return chineseMode_; }
+    void setChineseMode(bool mode) { chineseMode_ = mode; }
 
 private:
     void update();
@@ -42,9 +44,10 @@ private:
     SenimeEngine *engine_;
     InputContext *ic_;
     std::string input_;
+    bool chineseMode_ = false;
 };
 
-class SenimeEngine : public InputMethodEngine {
+class SenimeEngine : public InputMethodEngineV2 {
 public:
     explicit SenimeEngine(Instance *instance);
 
@@ -55,12 +58,16 @@ public:
     const Configuration *getConfig() const override { return &config_; }
     void setConfig(const RawConfig &rawConfig) override;
 
+    std::string subModeIconImpl(const InputMethodEntry &entry,
+                                InputContext &ic) override;
+    std::string subModeLabelImpl(const InputMethodEntry &entry,
+                                 InputContext &ic) override;
+
     SenimeState *state(InputContext *ic);
     ::SenimeEngine *engine() const { return engine_.get(); }
     Instance *instance() const { return instance_; }
     const SenimeConfig &config() const { return config_; }
     void reloadEngine();
-
 private:
     using EnginePtr = std::unique_ptr<::SenimeEngine, decltype(&senime_engine_free)>;
 

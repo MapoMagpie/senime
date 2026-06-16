@@ -55,5 +55,7 @@ set_target_properties(senime PROPERTIES
     OUTPUT_NAME "senime")
 
 install(TARGETS senime DESTINATION "${FCITX_INSTALL_LIBDIR}/fcitx5")
-install(FILES data/addon/senime.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
-install(FILES data/inputmethod/senime.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/inputmethod")
+install(FILES data/fcitx5/addon/senime.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
+install(FILES data/fcitx5/inputmethod/senime.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/inputmethod")
+install(FILES data/fcitx5/icon/fcitx-senime-cn.svg data/icon/fcitx-senime-en.svg
+        DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/scalable/apps")

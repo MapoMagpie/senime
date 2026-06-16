@@ -47,6 +47,38 @@ void SenimeState::keyEvent(KeyEvent &event) {
     }
 
     const auto &key = event.key();
+    // FCITX_INFO() << "Senime keyEvent: sym=" << key.sym()
+    //              << " states=" << key.states()
+    //              << " isRelease=" << event.isRelease()
+    //              << " chineseMode=" << chineseMode();
+
+    // Alt+I: 切换中文模式
+    if (key.sym() == FcitxKey_I && key.states() == KeyState::Alt) {
+        if (chineseMode()) {
+            commit();
+            setChineseMode(false);
+            FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> OFF";
+        } else {
+            setChineseMode(true);
+            FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> ON";
+            Text preedit(":(中)");
+            preedit.setCursor(preedit.toString().size());
+            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
+                ic_->inputPanel().setClientPreedit(preedit);
+            } else {
+                ic_->inputPanel().setPreedit(preedit);
+            }
+            ic_->updatePreedit();
+            ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+        }
+        ic_->updateUserInterface(UserInterfaceComponent::StatusArea);
+        event.filterAndAccept();
+        return;
+    }
+    // 英文模式下直接透传
+    if (!chineseMode()) {
+        return;
+    }
 
     if (key.hasModifier() && !key.states().test(KeyState::Shift)) {
         if (!input_.empty()) {
@@ -102,22 +134,20 @@ void SenimeState::keyEvent(KeyEvent &event) {
 }
 
 void SenimeState::reset() {
+    commit();
     input_.clear();
+    chineseMode_ = false;
     ic_->inputPanel().reset();
     ic_->updatePreedit();
     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+    ic_->updateUserInterface(UserInterfaceComponent::StatusArea);
 }
 
 void SenimeState::commit() {
     if (input_.empty()) {
         return;
     }
-    SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), input_.c_str());
-    if (analysis) {
-        const char *text = analysis->text ? analysis->text : "";
-        ic_->commitString(text);
-        senime_analysis_free(analysis);
-    }
+    ic_->commitString(input_);
     input_.clear();
     ic_->inputPanel().reset();
     ic_->updatePreedit();
@@ -189,6 +219,18 @@ void SenimeState::update() {
     senime_analysis_free(analysis);
     ic_->updatePreedit();
     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+}
+
+std::string SenimeEngine::subModeIconImpl(const InputMethodEntry &,
+                                          InputContext &ic) {
+    auto *st = ic.propertyFor(&factory_);
+    return st->chineseMode() ? "fcitx-senime-cn" : "fcitx-senime-en";
+}
+
+std::string SenimeEngine::subModeLabelImpl(const InputMethodEntry &,
+                                           InputContext &ic) {
+    auto *st = ic.propertyFor(&factory_);
+    return st->chineseMode() ? "中" : "En";
 }
 
 SenimeEngine::SenimeEngine(Instance *instance)
