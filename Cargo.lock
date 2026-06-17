@@ -1825,9 +1825,11 @@ dependencies = [
 name = "senime-lsp"
 version = "0.0.1"
 dependencies = [
+ "arc-swap",
  "clap",
  "dashmap 6.1.0",
  "log",
+ "notify",
  "ropey",
  "senime-lib",
  "serde",

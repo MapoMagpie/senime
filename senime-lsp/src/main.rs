@@ -1,10 +1,16 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use clap::Parser;
 use dashmap::DashMap;
 use log::LevelFilter;
+use notify::{RecursiveMode, Watcher};
 use ropey::Rope;
-use senime_lib::{AnalysisResult, Dict, InputAnalyzer, secondary_dict_path};
+use senime_lib::{secondary_dict_path, AnalysisResult, Dict, InputAnalyzer};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -42,7 +48,7 @@ impl Default for Config {
 #[derive(Debug)]
 struct Backend {
     // client: Client,
-    engine: InputAnalyzer,
+    engine: Arc<ArcSwap<InputAnalyzer>>,
     doc_map: DashMap<String, Rope>,
     state: RwLock<State>,
     config: RwLock<Config>,
@@ -200,7 +206,7 @@ impl LanguageServer for Backend {
         let AnalysisResult {
             segments,
             candidates,
-        } = self.engine.analyze(analysis_chars);
+        } = self.engine.load().analyze(analysis_chars);
         let (sentence, _) = segments.into_iter().unzip::<_, _, Vec<_>, Vec<_>>();
         // 编辑器在收到补全后，全根据fiter_text进行过滤，比如helix会用[向前到后一个字..当前光标]这个范围的字符去搜索，如果搜索的分数太低就会丢弃
         // 所谓的字，就是英文字母、汉字、等其他非标点符号的字
@@ -438,6 +444,88 @@ pub struct Args {
     pub table: String,
 }
 
+/// Build a new InputAnalyzer from the given table path.
+fn build_engine(table_path: &str) -> std::result::Result<InputAnalyzer, String> {
+    let dict = Dict::try_load(table_path)?;
+    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
+        let hint = PathBuf::from(path)
+            .file_name()
+            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+            .unwrap_or("反".to_string());
+        (Dict::load(secondary_dict_path(table_path, path)), hint)
+    });
+    Ok(InputAnalyzer::new(dict, reverse_dict))
+}
+
+/// Collect all file paths that should be watched for changes.
+fn collect_watch_paths(table_path: &str, dict: &Dict) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let table = PathBuf::from(table_path);
+    paths.push(table.clone());
+
+    // If loaded from .toml, also watch the resolved .txt path
+    if let Some(dict_name) = &dict.config().dict {
+        let resolved = secondary_dict_path(table_path, dict_name);
+        if resolved != table {
+            paths.push(resolved);
+        }
+    }
+
+    // Watch reverse dict if configured
+    if let Some(sec_name) = &dict.config().reverse_dict {
+        let resolved = secondary_dict_path(table_path, sec_name);
+        if resolved != table {
+            paths.push(resolved);
+        }
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Spawn a background file watcher that rebuilds the engine on changes.
+fn spawn_watcher(
+    engine: Arc<ArcSwap<InputAnalyzer>>,
+    table_path: String,
+    watch_paths: Vec<PathBuf>,
+) -> notify::Result<notify::RecommendedWatcher> {
+    // Collect the parent directories to watch (handles vim-style atomic replace via rename).
+    let watch_dirs: HashSet<PathBuf> = watch_paths
+        .iter()
+        .filter_map(|p| p.parent().map(PathBuf::from))
+        .collect();
+
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(tx)?;
+
+    for dir in &watch_dirs {
+        watcher.watch(dir, RecursiveMode::NonRecursive)?;
+    }
+
+    // Debounce thread: drain events, wait, then rebuild.
+    std::thread::spawn(move || {
+        while rx.recv().is_ok() {
+            // Drain any queued events (batch rapid-fire notifications).
+            while rx.try_recv().is_ok() {}
+
+            std::thread::sleep(Duration::from_millis(200));
+
+            match build_engine(&table_path) {
+                Ok(new_engine) => {
+                    engine.swap(Arc::new(new_engine));
+                    log::info!("[senime] hot-reload succeeded");
+                }
+                Err(e) => {
+                    log::warn!("[senime] hot-reload failed: {e}");
+                }
+            }
+        }
+    });
+
+    Ok(watcher)
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -447,15 +535,17 @@ async fn main() {
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let dict = Dict::load(&args.table);
-    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
-        let hint = PathBuf::from(path)
-            .file_name()
-            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-            .unwrap_or("反".to_string());
-        (Dict::load(secondary_dict_path(&args.table, path)), hint)
-    });
-    let engine = InputAnalyzer::new(dict, reverse_dict);
+
+    let engine = build_engine(&args.table).expect("failed to load dict");
+    let dict_ref = engine.get_dict();
+    let watch_paths = collect_watch_paths(&args.table, dict_ref);
+    let engine = Arc::new(ArcSwap::from_pointee(engine));
+
+    // Spawn file watcher — failure is non-fatal.
+    let _watcher = spawn_watcher(engine.clone(), args.table.clone(), watch_paths)
+        .map_err(|e| log::warn!("[senime] file watcher init failed: {e}"))
+        .ok();
+
     let doc_map = DashMap::default();
     let state = RwLock::new(State { completion: true });
     let config = RwLock::new(Config::default());

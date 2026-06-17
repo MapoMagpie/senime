@@ -12,8 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 senime-lib = { path = "../senime-lib" }
+arc-swap = "1"
 clap = { version = "4.5.35", features = ["derive"] }
 dashmap = "6.1.0"
+notify = "7"
 ropey = "1.6.1"
 tower-lsp = "0.20.0"
 tokio = { version = "1.49.0", features = [
