@@ -16,12 +16,8 @@ thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
-struct SenimeEngineInner {
-    analyzer: InputAnalyzer,
-}
-
 pub struct SenimeEngine {
-    inner: Arc<ArcSwap<SenimeEngineInner>>,
+    inner: Arc<ArcSwap<InputAnalyzer>>,
     _watcher: Option<notify::RecommendedWatcher>,
 }
 
@@ -75,7 +71,7 @@ fn into_c_string(value: String) -> *mut c_char {
 }
 
 /// Build a new engine inner from the given table path.
-fn build_engine_inner(table_path: &str) -> Result<SenimeEngineInner, String> {
+fn build_engine(table_path: &str) -> Result<InputAnalyzer, String> {
     let dict = Dict::try_load(table_path)?;
     let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
         let hint = PathBuf::from(path)
@@ -84,9 +80,7 @@ fn build_engine_inner(table_path: &str) -> Result<SenimeEngineInner, String> {
             .unwrap_or("反".to_string());
         (Dict::load(secondary_dict_path(table_path, path)), hint)
     });
-    Ok(SenimeEngineInner {
-        analyzer: InputAnalyzer::new(dict, reverse_dict),
-    })
+    Ok(InputAnalyzer::new(dict, reverse_dict))
 }
 
 /// Collect all file paths that should be watched for changes.
@@ -118,7 +112,7 @@ fn collect_watch_paths(table_path: &str, dict: &Dict) -> Vec<PathBuf> {
 
 /// Spawn a background file watcher that rebuilds the engine on changes.
 fn spawn_watcher(
-    inner: Arc<ArcSwap<SenimeEngineInner>>,
+    inner: Arc<ArcSwap<InputAnalyzer>>,
     table_path: String,
     watch_paths: Vec<PathBuf>,
 ) -> notify::Result<notify::RecommendedWatcher> {
@@ -153,7 +147,7 @@ fn spawn_watcher(
             // Re-read the filter: events may have been for unrelated files.
             // Since we watch narrow directories (parents of our files),
             // just rebuild unconditionally — it's fast enough.
-            match build_engine_inner(&table_path) {
+            match build_engine(&table_path) {
                 Ok(new_inner) => {
                     inner.swap(Arc::new(new_inner));
                 }
@@ -174,12 +168,12 @@ pub extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEng
         return ptr::null_mut();
     };
     let result: Result<Box<SenimeEngine>, String> = (|| {
-        let engine_inner = build_engine_inner(table_path)?;
-        let watch_paths = collect_watch_paths(table_path, engine_inner.analyzer.get_dict());
-        let inner = Arc::new(ArcSwap::from_pointee(engine_inner));
+        let engine = build_engine(table_path)?;
+        let watch_paths = collect_watch_paths(table_path, engine.get_dict());
+        let engine = Arc::new(ArcSwap::from_pointee(engine));
 
         // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
-        let watcher = spawn_watcher(inner.clone(), table_path.to_string(), watch_paths)
+        let watcher = spawn_watcher(engine.clone(), table_path.to_string(), watch_paths)
             .map_err(|e| {
                 eprintln!("[senime] file watcher init failed: {e}");
                 e
@@ -187,7 +181,7 @@ pub extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEng
             .ok();
 
         Ok(Box::new(SenimeEngine {
-            inner,
+            inner: engine,
             _watcher: watcher,
         }))
     })();
@@ -230,7 +224,7 @@ pub extern "C" fn senime_engine_analyze(
         let AnalysisResult {
             segments,
             candidates,
-        } = guard.analyzer.analyze(chars.as_slice());
+        } = guard.analyze(chars.as_slice());
         let text = segments
             .into_iter()
             .map(|(text, _)| text)
