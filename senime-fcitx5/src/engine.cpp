@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "fcitx-utils/keysym.h"
 
 #include <fcitx-utils/log.h>
 #include <fcitx/event.h>
@@ -52,17 +53,18 @@ void SenimeState::keyEvent(KeyEvent &event) {
     //              << " isRelease=" << event.isRelease()
     //              << " chineseMode=" << chineseMode();
 
-    // Alt+I: 切换中文模式
-    if (key.sym() == FcitxKey_I && key.states() == KeyState::Alt) {
+    // Alt+J: 切换中文模式
+    if (key.check(FcitxKey_J, KeyState::Alt)) {
+    // if (key.check(FcitxKey_Shift_R, KeyState::NoState)) {
         if (chineseMode()) {
             commit();
             setChineseMode(false);
-            FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> OFF";
+            // FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> OFF";
         } else {
             setChineseMode(true);
-            FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> ON";
+            // FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> ON";
             Text preedit(":(中)");
-            preedit.setCursor(preedit.toString().size());
+            // preedit.setCursor(preedit.toString().size());
             if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
                 ic_->inputPanel().setClientPreedit(preedit);
             } else {
@@ -80,10 +82,11 @@ void SenimeState::keyEvent(KeyEvent &event) {
         return;
     }
 
-    if (key.hasModifier() && !key.states().test(KeyState::Shift)) {
+    // Non-Shift modifier (Ctrl, Alt, Super...) → commit pending input, forward key to application.
+    auto nonShiftMods = key.states() & ~(KeyStates(KeyState::Shift) | KeyState::CapsLock | KeyState::NumLock);
+    if (nonShiftMods) {
         if (!input_.empty()) {
             commit();
-            event.filterAndAccept();
         }
         return;
     }
@@ -111,6 +114,8 @@ void SenimeState::keyEvent(KeyEvent &event) {
     if (key.check(FcitxKey_Return)) {
         if (!input_.empty()) {
             commit();
+        }
+        if (key.states().test(KeyState::Shift)) {
             event.filterAndAccept();
         }
         return;
