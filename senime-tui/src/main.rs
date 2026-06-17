@@ -165,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 分词器
-    let encoder = Looker::new(&ime.get_dict().candidates);
+    let encoder = Looker::new(ime.get_dict().candidates_iter());
     // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
     let mut ctx = Context::new(encoder);
     ctx.set_preset(preset);

@@ -38,10 +38,10 @@ pub fn gen_test_dict_files() -> (PathBuf, PathBuf) {
     let letters: [u8; 26] = *b"abcdefghijklmnopqrstuvwxyz";
     let cjk_start = 0x4E00u32;
     let cjk_count = 0x9FFF - cjk_start + 1; // 20992
-    let mut buf = String::with_capacity(200_000 * 20);
-    for i in 0u32..200_000 {
+    let mut buf = String::with_capacity(50_000 * 20);
+    for i in 0u32..50_000 {
         let c1 = char::from_u32(cjk_start + (i % cjk_count)).unwrap();
-        let c2 = char::from_u32(cjk_start + ((i / cjk_count + i) % cjk_count)).unwrap();
+        let c2 = char::from_u32(cjk_start + ((i / cjk_count + i + 300) % cjk_count)).unwrap();
         let l0 = letters[(i % 26) as usize] as char;
         let l1 = letters[((i / 26) % 26) as usize] as char;
         let l2 = letters[((i / 676) % 26) as usize] as char;

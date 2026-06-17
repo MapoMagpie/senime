@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ahash::AHashMap;
 
-use crate::dict::{Candidate, Config, Dict};
+use crate::dict::{CandidateView, Config, Dict};
 
 #[derive(Debug)]
 enum InputType {
@@ -19,10 +19,10 @@ pub struct InputAnalyzer {
     dict: Dict,
     // 反查码表
     secondary_dict: Option<Dict>,
-    // 反查提示符
-    secondary_hint: Option<Vec<Candidate>>,
+    // 反查提示符 (code, text, weight)
+    secondary_hint: Option<(String, String, i32)>,
     // 单字对应编码，来自主码表，当反查时，根据单字从这里找对应的编码
-    reverse_code_map: Option<AHashMap<char, Vec<String>>>,
+    reverse_code_map: Option<AHashMap<char, String>>,
     // 键位，除 26 个小写字母外，设定其他键位对应的功能：选择候选、标点符号、触发反查、原始输入标记
     key_map: HashMap<char, InputType>,
     selection_keys: [char; 9],
@@ -53,24 +53,23 @@ impl InputAnalyzer {
         }
         let (secondary_dict, secondary_hint, reverse_code_map) = match secondary {
             Some((sec_dict, hint)) => {
-                let hint = vec![Candidate {
-                    code: "r".to_string(),
-                    text: format!(":({hint})"),
-                    weight: 0,
-                }];
-                let mut single_text_code_map = AHashMap::<char, Vec<String>>::new();
-                // 从dict.candidates中筛选单字，存入该单字的编码
-                dict.candidates
-                    .iter()
-                    .filter(|cand| cand.text.chars().count() == 1)
-                    .for_each(|cand| {
+                let hint_tuple = ("r".to_string(), format!(":({hint})"), 0i32);
+                let mut single_text_code_map = AHashMap::<char, String>::new();
+                // 从dict.candidates中筛选单字，存入该单字的最长编码
+                for cand in dict.candidates_iter() {
+                    if cand.text.chars().count() == 1 {
                         let ch = cand.text.chars().next().unwrap();
-                        single_text_code_map
-                            .entry(ch)
-                            .or_default()
-                            .push(cand.code.clone());
-                    });
-                (Some(sec_dict), Some(hint), Some(single_text_code_map))
+                        let code = cand.code.to_string();
+                        if let Some(existing) = single_text_code_map.get_mut(&ch) {
+                            if code.len() > existing.len() {
+                                *existing = code;
+                            }
+                        } else {
+                            single_text_code_map.insert(ch, code);
+                        }
+                    }
+                }
+                (Some(sec_dict), Some(hint_tuple), Some(single_text_code_map))
             }
             _ => (None, None, None),
         };
@@ -116,13 +115,15 @@ impl InputAnalyzer {
                         self.search_candidates(&codes, 0, get_count, use_secondary_dict)
                     {
                         reduce_space = !unique;
-                        segments_ret.push((cands[0].text.clone(), codes.clone()));
+                        segments_ret.push((cands[0].text.to_string(), codes.clone()));
                         // candidates
                         if at_last && !unique {
-                            let to_rich = |(i, cand): (usize, &Candidate)| -> CandidateRich {
+                            let to_rich = |(i, cand): (usize, &CandidateView)| -> CandidateRich {
                                 let select_key = self.selection_keys.get(i).copied().unwrap_or(' ');
                                 CandidateRich::new(
-                                    cand.clone(),
+                                    cand.code.to_string(),
+                                    cand.text.to_string(),
+                                    cand.weight,
                                     codes.to_vec(),
                                     i,
                                     select_key,
@@ -142,7 +143,7 @@ impl InputAnalyzer {
                         get_count,
                         use_secondary_dict,
                     ) {
-                        segments_ret.push((cands[0].text.clone(), codes));
+                        segments_ret.push((cands[0].text.to_string(), codes));
                     }
                 }
                 Tag::Punctuation | Tag::SelectionForPunc(_) => {
@@ -200,62 +201,60 @@ impl InputAnalyzer {
         }
     }
 
-    fn search_candidates(
-        &self,
+    /// 搜索候选。普通模式返回 CandidateView 切片（借用 arena），反查模式返回 owned 的 CandidateRich。
+    fn search_candidates<'a>(
+        &'a self,
         code: &[char],
         index: usize,
         count: usize,
         use_secondary_dict: bool,
-    ) -> Option<(Vec<Candidate>, bool)> {
+    ) -> Option<(Vec<CandidateView<'a>>, bool)> {
         // codes为空（排除反查触发字符后)时，展示反查提示（通常为码表名)
         if use_secondary_dict && code.len() <= 1 {
-            return self
-                .secondary_hint
-                .as_ref()
-                .map(|hint| (hint.clone(), false));
+            return self.secondary_hint.as_ref().map(|(code, text, weight)| {
+                (vec![CandidateView { code, text, weight: *weight }], false)
+            });
         }
         let (dict, codes) = if use_secondary_dict {
             (self.secondary_dict.as_ref()?, &code[1..])
         } else {
             (&self.dict, code)
         };
-        dict.search(codes).map(|c| {
-            let (slice, unique) = if index == 0 {
-                (&c[0..c.len().min(count)], c.len() == 1)
-            } else {
-                // index非0，表示已确认选字词，只返回选择的字词
-                let index = if index >= c.len() { 0 } else { index };
-                (&c[index..index + 1], true)
-            };
-            if use_secondary_dict {
-                let reverse_map = self.reverse_code_map.as_ref().unwrap();
-                let cands = slice
-                    .iter()
-                    .map(|cand| {
-                        let mut code = String::new();
-                        for (i, ch) in cand.text.chars().enumerate() {
-                            if i > 0 {
-                                code.push(' ');
-                            }
-                            let part = reverse_map
-                                .get(&ch)
-                                .and_then(|codes| codes.first())
-                                .map(String::as_str)
-                                .unwrap_or("_");
-                            code.push_str(part);
+        let c = dict.search(codes)?;
+        let (slice, unique) = if index == 0 {
+            (&c[0..c.len().min(count)], c.len() == 1)
+        } else {
+            let index = if index >= c.len() { 0 } else { index };
+            (&c[index..index + 1], true)
+        };
+        if use_secondary_dict {
+            // 反查时需要从 reverse_code_map 构建新的 code
+            let reverse_map = self.reverse_code_map.as_ref()?;
+            let cands: Vec<CandidateView<'a>> = slice
+                .iter()
+                .map(|cand| {
+                    let mut code = String::new();
+                    for (i, ch) in cand.text.chars().enumerate() {
+                        if i > 0 {
+                            code.push(' ');
                         }
-                        Candidate {
-                            code,
-                            text: cand.text.clone(),
-                            weight: cand.weight,
-                        }
-                    })
-                    .collect();
-                (cands, false)
-            } else {
-                (slice.to_vec(), unique)
-            }
-        })
+                        let part = reverse_map.get(&ch).map(String::as_str).unwrap_or("_");
+                        code.push_str(part);
+                    }
+                    // 由于 code 是动态生成的，需要泄漏字符串以获得 'a 生命周期
+                    // 这里只在反查时发生，数量很少，可以接受
+                    let code: &'a str = Box::leak(code.into_boxed_str());
+                    CandidateView {
+                        code,
+                        text: cand.text,
+                        weight: cand.weight,
+                    }
+                })
+                .collect();
+            Some((cands, false))
+        } else {
+            Some((slice.to_vec(), unique))
+        }
     }
 
     fn segments(&self, input: &[char]) -> Vec<(Vec<char>, Tag)> {
@@ -493,13 +492,14 @@ pub struct CandidateRich {
 
 impl CandidateRich {
     pub fn new(
-        cand: Candidate,
+        code: String,
+        text: String,
+        weight: i32,
         origin: Vec<char>,
         order: usize,
         select_key: char,
         unique: bool,
     ) -> Self {
-        let Candidate { code, text, weight } = cand;
         Self {
             code,
             text,

@@ -31,7 +31,7 @@ fn main() {
     let start = Instant::now();
     let dict = Dict::load(args.table);
     // let looker_new = Instant::now();
-    let looker = Looker::new(&dict.candidates);
+    let looker = Looker::new(dict.candidates_iter());
     // println!("初始化looker耗时: {:?}", looker_new.elapsed());
     let load_table_time = Instant::now().duration_since(start);
     println!(

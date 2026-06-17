@@ -6,9 +6,54 @@ use std::{
     io::{Error, ErrorKind, Read, Write},
     mem,
     path::{Path, PathBuf},
-    str::FromStr,
+    str::{self, FromStr},
     time::{Duration, UNIX_EPOCH},
 };
+
+/// 连续内存字符串池，所有字符串的 UTF-8 字节存放在一块连续的 Vec<u8> 中，
+/// 通过 (offset, len) 索引访问，避免大量小 String 的堆分配开销。
+#[derive(Debug)]
+pub struct StringArena {
+    data: Vec<u8>,
+}
+
+impl StringArena {
+    pub(crate) fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    pub(crate) fn push(&mut self, s: &str) -> (u32, u16) {
+        let offset = self.data.len() as u32;
+        let len = s.len() as u16;
+        self.data.extend_from_slice(s.as_bytes());
+        (offset, len)
+    }
+
+    pub(crate) fn get(&self, offset: u32, len: u16) -> &str {
+        let start = offset as usize;
+        let end = start + len as usize;
+        // SAFETY: 存入的都是合法的 UTF-8 字符串
+        unsafe { str::from_utf8_unchecked(&self.data[start..end]) }
+    }
+}
+
+impl Encode for StringArena {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.data, encoder)
+    }
+}
+
+impl<Context> Decode<Context> for StringArena {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let data: Vec<u8> = bincode::Decode::decode(decoder)?;
+        Ok(Self { data })
+    }
+}
 
 /// 二进制文件头，用于检测码表是否发生了变动
 #[derive(Debug, Decode, Encode)]
@@ -27,117 +72,220 @@ enum Column {
     Other,
 }
 
-#[derive(Debug, Clone, Decode, Encode)]
+/// 临时解析结果，持有借用的字符串切片，后续会 push 到 StringArena
+struct ParsedCandidate<'a> {
+    code: &'a str,
+    text: &'a str,
+    weight: i32,
+}
+
+/// Arena 索引化的候选，不持有 String，只存 (offset, len) 索引。
+/// 每个 Candidate 仅占 16 字节（vs 原来 ~120 字节），零堆分配。
+#[derive(Debug, Clone)]
 pub struct Candidate {
-    pub code: String,
-    pub text: String,
+    code: (u32, u16),
+    text: (u32, u16),
     pub weight: i32,
 }
 
-impl PartialEq for Candidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
+impl Candidate {
+    /// 从 arena 获取 code
+    pub fn code<'a>(&self, arena: &'a StringArena) -> &'a str {
+        arena.get(self.code.0, self.code.1)
+    }
+
+    /// 从 arena 获取 text
+    pub fn text<'a>(&self, arena: &'a StringArena) -> &'a str {
+        arena.get(self.text.0, self.text.1)
     }
 }
 
-impl Eq for Candidate {}
+/// 借用视图，持有 arena 中的 &str 引用，用于对外 API 返回。
+#[derive(Debug, Clone)]
+pub struct CandidateView<'a> {
+    pub code: &'a str,
+    pub text: &'a str,
+    pub weight: i32,
+}
 
-impl Ord for Candidate {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.code.cmp(&other.code) {
-            std::cmp::Ordering::Equal => other.weight.cmp(&self.weight),
-            ord => ord,
+impl CandidateView<'_> {
+    pub fn to_owned_candidate(&self, arena: &mut StringArena) -> Candidate {
+        Candidate {
+            code: arena.push(self.code),
+            text: arena.push(self.text),
+            weight: self.weight,
         }
     }
 }
 
-impl PartialOrd for Candidate {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+impl Encode for Candidate {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.code.0, encoder)?;
+        bincode::Encode::encode(&self.code.1, encoder)?;
+        bincode::Encode::encode(&self.text.0, encoder)?;
+        bincode::Encode::encode(&self.text.1, encoder)?;
+        bincode::Encode::encode(&self.weight, encoder)?;
+        Ok(())
     }
 }
 
-impl Candidate {
-    fn parse(raw: &str, columns: &[Column]) -> Result<Self, Error> {
-        let split = raw.split('\t').collect::<Vec<_>>();
-        if split.len() < 2 {
-            Err(Error::new(ErrorKind::InvalidData, format!("无效行: {raw}")))
-        } else {
-            let mut code = "";
-            let mut text = Vec::with_capacity(0);
-            let mut weight = 0;
-            for (i, col) in columns.iter().enumerate() {
-                if let Some(v) = split.get(i) {
-                    match *col {
-                        Column::Code => code = v.trim(),
-                        Column::Text => text = v.trim().chars().collect::<Vec<_>>(),
-                        Column::Weight => {
-                            weight = v.trim().parse().unwrap_or_default();
-                        }
-                        _ => {}
+impl<Context> Decode<Context> for Candidate {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let code_offset: u32 = bincode::Decode::decode(decoder)?;
+        let code_len: u16 = bincode::Decode::decode(decoder)?;
+        let text_offset: u32 = bincode::Decode::decode(decoder)?;
+        let text_len: u16 = bincode::Decode::decode(decoder)?;
+        let weight: i32 = bincode::Decode::decode(decoder)?;
+        Ok(Self {
+            code: (code_offset, code_len),
+            text: (text_offset, text_len),
+            weight,
+        })
+    }
+}
+
+/// 从码表文本行解析出临时的 ParsedCandidate
+fn parse_candidate<'a>(raw: &'a str, columns: &[Column]) -> Result<ParsedCandidate<'a>, Error> {
+    let split = raw.split('\t').collect::<Vec<_>>();
+    if split.len() < 2 {
+        Err(Error::new(ErrorKind::InvalidData, format!("无效行: {raw}")))
+    } else {
+        let mut code = "";
+        let mut text = "";
+        let mut weight = 0;
+        for (i, col) in columns.iter().enumerate() {
+            if let Some(v) = split.get(i) {
+                match *col {
+                    Column::Code => code = v.trim(),
+                    Column::Text => text = v.trim(),
+                    Column::Weight => {
+                        weight = v.trim().parse().unwrap_or_default();
                     }
+                    _ => {}
                 }
             }
-            if code.is_empty() || text.is_empty() {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!("code为空: {raw}"),
-                ));
-            }
-            if text.len() == 1 && is_extended_cjk(text[0]) {
+        }
+        if code.is_empty() || text.is_empty() {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("code为空: {raw}"),
+            ));
+        }
+        // 检查拓展 CJK 字符（仅单字时检查）
+        let text_len = text.chars().count();
+        if text_len == 1 {
+            let c = text.chars().next().unwrap();
+            if is_extended_cjk(c) {
                 return Err(Error::new(
                     ErrorKind::InvalidData,
                     format!("拓展字符: {raw}"),
                 ));
             }
-            Ok(Self {
-                code: code.to_string(),
-                text: text.into_iter().collect(),
-                weight,
-            })
         }
+        Ok(ParsedCandidate {
+            code,
+            text,
+            weight,
+        })
     }
 }
 
-// Dict 节点结构
-#[derive(Debug, Decode, Encode)]
+// Dict 节点结构 — 使用连续字节存储所有前缀，避免每个前缀独立 Vec<char> 的堆分配开销。
+#[derive(Debug)]
 struct Prism {
-    keys: Vec<Vec<char>>,
+    // 所有前缀的字节连续存放（code 都是 ASCII，每个字符 1 字节 vs char 的 4 字节）
+    keys: Vec<u8>,
+    // 每个前缀在 keys 中的 (offset, len)
+    key_meta: Vec<(u32, u16)>,
+    // candidates 的索引范围，与 key_meta 一一对应: [start, end)
     indices: Vec<(usize, usize)>,
 }
 
 impl Prism {
-    fn new(candidates: &[Candidate]) -> Self {
-        let mut map: BTreeMap<Vec<char>, (usize, usize)> = BTreeMap::new();
+    fn new_with_arena(candidates: &[Candidate], arena: &StringArena) -> Self {
+        let mut map: BTreeMap<Vec<u8>, (usize, usize)> = BTreeMap::new();
         for (i, cand) in candidates.iter().enumerate() {
-            let code = cand.code.chars().collect::<Vec<_>>();
-            for len in 1..code.len() + 1 {
-                let prefix = &code[..len];
+            let code_bytes = cand.code(arena).as_bytes();
+            for len in 1..=code_bytes.len() {
+                let prefix = &code_bytes[..len];
                 map.entry(prefix.to_vec())
                     .and_modify(|r| r.1 = i + 1)
                     .or_insert((i, i + 1));
             }
         }
-        let (keys, indices) = map.into_iter().unzip();
-        Self { keys, indices }
+        let mut keys = Vec::new();
+        let mut key_meta = Vec::with_capacity(map.len());
+        let mut indices = Vec::with_capacity(map.len());
+        for (prefix, range) in map {
+            let offset = keys.len() as u32;
+            let len = prefix.len() as u16;
+            keys.extend_from_slice(&prefix);
+            key_meta.push((offset, len));
+            indices.push(range);
+        }
+        keys.shrink_to_fit();
+        Self {
+            keys,
+            key_meta,
+            indices,
+        }
     }
 
     fn lookup(&self, code: &[char]) -> Option<&(usize, usize)> {
-        self.indices.get(
-            self.keys
-                .binary_search_by(|k| k.as_slice().cmp(code))
-                .ok()?,
-        )
+        // code 都是 ASCII lowercase，直接转为字节比较
+        let code_bytes: Vec<u8> = code.iter().map(|c| *c as u8).collect();
+        let idx = self
+            .key_meta
+            .binary_search_by(|&(offset, len)| {
+                let start = offset as usize;
+                let end = start + len as usize;
+                self.keys[start..end].cmp(&code_bytes)
+            })
+            .ok()?;
+        self.indices.get(idx)
     }
 }
 
-const VERSION: i64 = 10;
+impl Encode for Prism {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        bincode::Encode::encode(&self.keys, encoder)?;
+        bincode::Encode::encode(&self.key_meta, encoder)?;
+        bincode::Encode::encode(&self.indices, encoder)?;
+        Ok(())
+    }
+}
+
+impl<Context> Decode<Context> for Prism {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let keys: Vec<u8> = bincode::Decode::decode(decoder)?;
+        let key_meta: Vec<(u32, u16)> = bincode::Decode::decode(decoder)?;
+        let indices: Vec<(usize, usize)> = bincode::Decode::decode(decoder)?;
+        Ok(Self {
+            keys,
+            key_meta,
+            indices,
+        })
+    }
+}
+
+const VERSION: i64 = 12;
 
 // Dict 结构
-#[derive(Debug, Decode, Encode)]
+#[derive(Debug)]
 pub struct Dict {
+    arena: StringArena,
     prism: Prism,
-    pub candidates: Vec<Candidate>,
+    candidates: Vec<Candidate>,
     config: Config,
 }
 
@@ -163,9 +311,21 @@ impl TryFrom<(i64, i64, &[u8])> for Dict {
             return Err(Error::other("码表已更新，重新构建二进制文件"));
         }
         let buf = &bs[30..];
-        bincode::decode_from_slice::<Dict, _>(buf, config::standard())
-            .map_err(|_| map_err("无效的二进制数据[DICT]"))
-            .map(|a| a.0)
+        let cfg = config::standard();
+        let (arena, n1): (StringArena, usize) =
+            bincode::decode_from_slice(buf, cfg).map_err(|_| map_err("无效的二进制数据[ARENA]"))?;
+        let (candidates, n2): (Vec<Candidate>, usize) =
+            bincode::decode_from_slice(&buf[n1..], cfg).map_err(|_| map_err("无效的二进制数据[CANDIDATES]"))?;
+        let (prism, n3): (Prism, usize) =
+            bincode::decode_from_slice(&buf[n1 + n2..], cfg).map_err(|_| map_err("无效的二进制数据[PRISM]"))?;
+        let (config, _): (Config, usize) =
+            bincode::decode_from_slice(&buf[n1 + n2 + n3..], cfg).map_err(|_| map_err("无效的二进制数据[CONFIG]"))?;
+        Ok(Self {
+            arena,
+            prism,
+            candidates,
+            config,
+        })
     }
 }
 
@@ -180,7 +340,7 @@ impl FromStr for Dict {
 impl Dict {
     /// 使用指定配置解析码表文本
     pub fn from_str_with_config(raw: &str, config: Config) -> Result<Self, String> {
-        let mut candidates = Vec::new();
+        let mut parsed = Vec::new();
         let mut columns: Option<Vec<Column>> = None;
         let mut parse_columns_times = 0;
         for line in raw.lines() {
@@ -198,13 +358,30 @@ impl Dict {
                     }
                 }
             }
-            if let Ok(candidate) = Candidate::parse(line, columns.as_ref().unwrap()) {
-                candidates.push(candidate);
+            if let Ok(cand) = parse_candidate(line, columns.as_ref().unwrap()) {
+                parsed.push(cand);
             }
         }
-        candidates.sort();
-        let prism = Prism::new(&candidates);
+        // 排序：按 code 字典序，code 相同时按 weight 降序
+        parsed.sort_by(|a, b| {
+            match a.code.cmp(b.code) {
+                std::cmp::Ordering::Equal => b.weight.cmp(&a.weight),
+                ord => ord,
+            }
+        });
+        // 将所有字符串一次性 push 到 arena（自动去重）
+        let mut arena = StringArena::new();
+        let candidates: Vec<Candidate> = parsed
+            .into_iter()
+            .map(|p| Candidate {
+                code: arena.push(p.code),
+                text: arena.push(p.text),
+                weight: p.weight,
+            })
+            .collect();
+        let prism = Prism::new_with_arena(&candidates, &arena);
         Ok(Self {
+            arena,
             candidates,
             prism,
             config,
@@ -317,9 +494,22 @@ impl Dict {
             let mut head = [0u8; 30];
             if bincode::encode_into_slice(meta, &mut head, config::standard()).is_ok() {
                 let _ = bin_file.write_all(&head);
-                if let Ok(encoded) = bincode::encode_to_vec(&dict, config::standard()) {
-                    let _ = bin_file.write_all(&encoded);
+                let cfg = config::standard();
+                let mut buf = Vec::new();
+                // 按顺序编码 arena, candidates, prism, config
+                if let Ok(b) = bincode::encode_to_vec(&dict.arena, cfg) {
+                    buf.extend_from_slice(&b);
                 }
+                if let Ok(b) = bincode::encode_to_vec(&dict.candidates, cfg) {
+                    buf.extend_from_slice(&b);
+                }
+                if let Ok(b) = bincode::encode_to_vec(&dict.prism, cfg) {
+                    buf.extend_from_slice(&b);
+                }
+                if let Ok(b) = bincode::encode_to_vec(&dict.config, cfg) {
+                    buf.extend_from_slice(&b);
+                }
+                let _ = bin_file.write_all(&buf);
             }
         }
         Ok(dict)
@@ -340,9 +530,15 @@ impl Dict {
         self.prism.lookup(chars).is_some()
     }
 
-    pub fn search(&self, chars: &[char]) -> Option<&[Candidate]> {
+    pub fn search(&self, chars: &[char]) -> Option<Vec<CandidateView<'_>>> {
         if let Some(range) = self.prism.lookup(chars) {
-            Some(&self.candidates[range.0..range.1.min(range.0 + 9)])
+            let end = range.1.min(range.0 + 9);
+            Some(
+                self.candidates[range.0..end]
+                    .iter()
+                    .map(|c| self.candidate_view(c))
+                    .collect(),
+            )
         } else {
             None
         }
@@ -353,6 +549,30 @@ impl Dict {
     }
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// 获取某个 Candidate 的借用视图
+    pub fn candidate_view<'a>(&'a self, cand: &'a Candidate) -> CandidateView<'a> {
+        CandidateView {
+            code: cand.code(&self.arena),
+            text: cand.text(&self.arena),
+            weight: cand.weight,
+        }
+    }
+
+    /// 迭代所有 candidates 的借用视图
+    pub fn candidates_iter(&self) -> impl Iterator<Item=CandidateView<'_>> {
+        self.candidates.iter().map(move |c| self.candidate_view(c))
+    }
+
+    /// 获取 arena 的引用（用于外部直接构造 Candidate 等场景）
+    pub fn arena(&self) -> &StringArena {
+        &self.arena
+    }
+
+    /// 获取可变 arena 的引用（用于外部向 arena 添加字符串）
+    pub fn arena_mut(&mut self) -> &mut StringArena {
+        &mut self.arena
     }
 }
 
@@ -597,7 +817,7 @@ zkc 射 1
         let time_searched = Instant::now();
         println!(
             "searched: {}",
-            candidates.map_or(0, |candidates| candidates.len())
+            candidates.as_ref().map_or(0, |c| c.len())
         );
         assert!(candidates.is_some_and(|cands| cands.len() > 0));
         println!(

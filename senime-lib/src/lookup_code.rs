@@ -11,7 +11,7 @@ use trie::Trie;
 
 use ahash::AHashMap;
 
-use crate::dict::Candidate;
+use crate::dict::CandidateView;
 
 #[derive(Debug, Clone)]
 struct CodePos(Vec<char>, u16);
@@ -25,7 +25,7 @@ pub struct Looker {
 
 const INFINITY: usize = 100000000;
 impl Looker {
-    pub fn new(candidates: &[Candidate]) -> Self {
+    pub fn new<'a>(candidates: impl IntoIterator<Item = CandidateView<'a>>) -> Self {
         let mut map: AHashMap<Vec<char>, Vec<CodePos>> = AHashMap::new();
         let mut code_trie = Trie::new();
         let mut code = "";
@@ -33,12 +33,11 @@ impl Looker {
         let mut max_text_len = 0;
 
         for cand in candidates {
-            // let cand = &candidates[i];
             if code == cand.code {
                 pos += 1;
             } else {
                 code_trie.insert(cand.code.chars());
-                code = &cand.code;
+                code = cand.code;
                 pos = 0;
             }
             let chars = cand.text.chars().collect::<Vec<_>>();
@@ -246,45 +245,39 @@ impl<'a> Segment<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::{dict::Candidate, lookup_code::Looker};
+    use crate::{
+        dict::{Config, Dict},
+        lookup_code::Looker,
+    };
 
-    fn create_candidates() -> Vec<Candidate> {
-        let data = vec![
-            ("d", "中", 0),
-            ("jv", "华", 0),
-            ("j", "人", 0),
-            ("dm", "民", 0),
-            ("lhb", "共", 0),
-            ("xd", "和", 0),
-            ("rn", "国", 0),
-            ("dgjv", "中华", 0),
-            ("jrdm", "人民", 0),
-            ("lhxd", "共和", 0),
-            ("lxrn", "共和国", 0),
-            ("djjr", "中华人民共和国", 0),
-            ("o", "是", 0),
-            ("u", "的", 0),
-            ("hkdm", "公民", 0),
-            ("djv", "喻", 0),
-            ("jdm", "人民网", 0),
-            ("jdma", "人民网world", 0),
-        ];
-        let mut cands: Vec<_> = data
-            .iter()
-            .map(|d| Candidate {
-                code: d.0.to_string(),
-                text: d.1.to_string(),
-                weight: d.2,
-            })
-            .collect();
-        cands.sort();
-        cands
+    fn create_dict() -> Dict {
+        let entries = r#"
+d	中	0
+jv	华	0
+j	人	0
+dm	民	0
+lhb	共	0
+xd	和	0
+rn	国	0
+dgjv	中华	0
+jrdm	人民	0
+lhxd	共和	0
+lxrn	共和国	0
+djjr	中华人民共和国	0
+o	是	0
+u	的	0
+hkdm	公民	0
+djv	喻	0
+jdm	人民网	0
+jdma	人民网world	0
+        "#;
+        Dict::from_str_with_config(entries, Config::default()).unwrap()
     }
 
     #[test]
     fn test_analyze_segments() {
-        let cands = create_candidates();
-        let looker = Looker::new(&cands);
+        let dict = create_dict();
+        let looker = Looker::new(dict.candidates_iter());
         let text = "中华人民是中华人民共和国的公民中华人民是中华人民共和国的公民，共和hello国人民网world。"
             .chars()
             .collect::<Vec<_>>();
