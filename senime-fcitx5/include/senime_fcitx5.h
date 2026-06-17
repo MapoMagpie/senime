@@ -32,8 +32,6 @@ SenimeAnalysis *senime_engine_analyze(const SenimeEngine *engine,
                                       const char *input);
 void senime_analysis_free(SenimeAnalysis *analysis);
 
-const char *senime_engine_selection_keys(const SenimeEngine *engine, size_t *len);
-
 const char *senime_last_error(void);
 void senime_string_free(char *value);
 

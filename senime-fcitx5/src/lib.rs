@@ -1,19 +1,28 @@
+use arc_swap::ArcSwap;
+use notify::{RecursiveMode, Watcher};
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer, secondary_dict_path};
 use std::{
     cell::RefCell,
+    collections::HashSet,
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     ptr,
+    sync::{Arc, mpsc},
+    time::Duration,
 };
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
-pub struct SenimeEngine {
+struct SenimeEngineInner {
     analyzer: InputAnalyzer,
-    selection_keys: CString,
+}
+
+pub struct SenimeEngine {
+    inner: Arc<ArcSwap<SenimeEngineInner>>,
+    _watcher: Option<notify::RecommendedWatcher>,
 }
 
 #[repr(C)]
@@ -65,6 +74,99 @@ fn into_c_string(value: String) -> *mut c_char {
         .into_raw()
 }
 
+/// Build a new engine inner from the given table path.
+fn build_engine_inner(table_path: &str) -> Result<SenimeEngineInner, String> {
+    let dict = Dict::try_load(table_path)?;
+    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
+        let hint = PathBuf::from(path)
+            .file_name()
+            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+            .unwrap_or("反".to_string());
+        (Dict::load(secondary_dict_path(table_path, path)), hint)
+    });
+    Ok(SenimeEngineInner {
+        analyzer: InputAnalyzer::new(dict, reverse_dict),
+    })
+}
+
+/// Collect all file paths that should be watched for changes.
+fn collect_watch_paths(table_path: &str, dict: &Dict) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let table = PathBuf::from(table_path);
+    paths.push(table.clone());
+
+    // If loaded from .toml, also watch the resolved .txt path
+    if let Some(dict_name) = &dict.config().dict {
+        let resolved = secondary_dict_path(table_path, dict_name);
+        if resolved != table {
+            paths.push(resolved);
+        }
+    }
+
+    // Watch reverse dict if configured
+    if let Some(sec_name) = &dict.config().reverse_dict {
+        let resolved = secondary_dict_path(table_path, sec_name);
+        if resolved != table {
+            paths.push(resolved);
+        }
+    }
+
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Spawn a background file watcher that rebuilds the engine on changes.
+fn spawn_watcher(
+    inner: Arc<ArcSwap<SenimeEngineInner>>,
+    table_path: String,
+    watch_paths: Vec<PathBuf>,
+) -> notify::Result<notify::RecommendedWatcher> {
+    // Collect the parent directories to watch (handles vim-style atomic replace via rename).
+    let watch_dirs: HashSet<PathBuf> = watch_paths
+        .iter()
+        .filter_map(|p| p.parent().map(PathBuf::from))
+        .collect();
+
+    let (tx, rx) = mpsc::channel();
+
+    // Create the filesystem watcher — events go through the channel.
+    let mut watcher = notify::recommended_watcher(tx)?;
+
+    // Watch parent directories (handles vim-style atomic replace via rename).
+    for dir in &watch_dirs {
+        watcher.watch(dir, RecursiveMode::NonRecursive)?;
+    }
+
+    // Debounce thread: drain events, wait, then rebuild.
+    std::thread::spawn(move || {
+        while rx.recv().is_ok() {
+            // Drain any queued events (batch rapid-fire notifications).
+            while rx.try_recv().is_ok() {}
+
+            // Check if any event touches a file we care about.
+            // (We drain above without inspecting — just rebuild on any event
+            //  in the watched directories. The directories are chosen to be
+            //  the parent dirs of our target files, so this is precise enough.)
+            std::thread::sleep(Duration::from_millis(200));
+
+            // Re-read the filter: events may have been for unrelated files.
+            // Since we watch narrow directories (parents of our files),
+            // just rebuild unconditionally — it's fast enough.
+            match build_engine_inner(&table_path) {
+                Ok(new_inner) => {
+                    inner.swap(Arc::new(new_inner));
+                }
+                Err(e) => {
+                    eprintln!("[senime] hot-reload failed: {e}");
+                }
+            }
+        }
+    });
+
+    Ok(watcher)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEngine {
     clear_last_error();
@@ -72,24 +174,21 @@ pub extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEng
         return ptr::null_mut();
     };
     let result: Result<Box<SenimeEngine>, String> = (|| {
-        let dict = Dict::try_load(table_path)?;
-        let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
-            let hint = PathBuf::from(path)
-                .file_name()
-                .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-                .unwrap_or("反".to_string());
-            (Dict::load(secondary_dict_path(table_path, path)), hint)
-        });
-        let selection_keys = CString::new(
-            dict.config()
-                .selection_keys
-                .iter()
-                .collect::<String>(),
-        )
-        .unwrap_or_default();
+        let engine_inner = build_engine_inner(table_path)?;
+        let watch_paths = collect_watch_paths(table_path, engine_inner.analyzer.get_dict());
+        let inner = Arc::new(ArcSwap::from_pointee(engine_inner));
+
+        // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
+        let watcher = spawn_watcher(inner.clone(), table_path.to_string(), watch_paths)
+            .map_err(|e| {
+                eprintln!("[senime] file watcher init failed: {e}");
+                e
+            })
+            .ok();
+
         Ok(Box::new(SenimeEngine {
-            analyzer: InputAnalyzer::new(dict, reverse_dict),
-            selection_keys,
+            inner,
+            _watcher: watcher,
         }))
     })();
     match result {
@@ -127,10 +226,11 @@ pub extern "C" fn senime_engine_analyze(
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
         let chars = input.chars().collect::<Vec<_>>();
+        let guard = unsafe { &*engine }.inner.load();
         let AnalysisResult {
             segments,
             candidates,
-        } = unsafe { &*engine }.analyzer.analyze(chars.as_slice());
+        } = guard.analyzer.analyze(chars.as_slice());
         let text = segments
             .into_iter()
             .map(|(text, _)| text)
@@ -201,28 +301,6 @@ pub extern "C" fn senime_last_error() -> *const c_char {
             .map(|err| err.as_ptr())
             .unwrap_or(ptr::null())
     })
-}
-
-/// Returns the selection keys string from the engine's dictionary config.
-/// The returned pointer is valid for the lifetime of the engine.
-/// `len` is set to the number of selection keys.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-#[unsafe(no_mangle)]
-pub extern "C" fn senime_engine_selection_keys(
-    engine: *const SenimeEngine,
-    len: *mut usize,
-) -> *const c_char {
-    if engine.is_null() {
-        if !len.is_null() {
-            unsafe { *len = 0 };
-        }
-        return ptr::null();
-    }
-    let engine = unsafe { &*engine };
-    if !len.is_null() {
-        unsafe { *len = engine.selection_keys.as_bytes().len() };
-    }
-    engine.selection_keys.as_ptr()
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
