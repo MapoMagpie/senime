@@ -10,27 +10,69 @@ extern "C" {
 #endif
 
 typedef struct SenimeEngine SenimeEngine;
+typedef struct SenimeState SenimeState;
 
-typedef struct SenimeCandidate {
+// ── Command types for key event processing ───────────────────────────────
+
+typedef enum SenimeCommandType {
+    SENIME_CMD_COMMIT_TEXT = 0,
+    SENIME_CMD_SET_PREEDIT = 1,
+    SENIME_CMD_SET_CANDIDATES = 2,
+    SENIME_CMD_CLEAR_INPUT_PANEL = 3,
+    SENIME_CMD_UPDATE_PREEDIT = 4,
+    SENIME_CMD_UPDATE_UI = 5,
+    SENIME_CMD_UPDATE_STATUS_AREA = 6,
+    // SENIME_CMD_FILTER_AND_ACCEPT = 7,
+} SenimeCommandType;
+
+typedef struct SenimeCandidateData {
     char *text;
     char *code;
     uint32_t select_key;
-    size_t order;
-    bool unique;
-} SenimeCandidate;
+} SenimeCandidateData;
 
-typedef struct SenimeAnalysis {
+typedef struct SenimeCommand {
+    SenimeCommandType type;
     char *text;
-    SenimeCandidate *candidates;
+    SenimeCandidateData *candidates;
     size_t candidate_count;
-} SenimeAnalysis;
+} SenimeCommand;
+
+typedef struct SenimeKeyEvent {
+    uint32_t sym;
+    uint32_t states;
+    bool is_release;
+} SenimeKeyEvent;
+
+typedef struct SenimeKeyEventResult {
+    bool accepted;
+    bool chinese_mode;
+    SenimeCommand *commands;
+    size_t command_count;
+} SenimeKeyEventResult;
+
+// ── Engine lifecycle ─────────────────────────────────────────────────────
 
 SenimeEngine *senime_engine_new(const char *table_path);
 void senime_engine_free(SenimeEngine *engine);
 
-SenimeAnalysis *senime_engine_analyze(const SenimeEngine *engine,
-                                      const char *input);
-void senime_analysis_free(SenimeAnalysis *analysis);
+// ── State lifecycle ──────────────────────────────────────────────────────
+
+SenimeState *senime_state_new(const SenimeEngine *engine);
+void senime_state_free(SenimeState *state);
+bool senime_state_chinese_mode(const SenimeState *state);
+
+// ── Key event processing ─────────────────────────────────────────────────
+
+SenimeKeyEventResult *senime_engine_process_key(const SenimeEngine *engine,
+                                                SenimeState *state,
+                                                const SenimeKeyEvent *key);
+
+// ── Result cleanup ───────────────────────────────────────────────────────
+
+void senime_key_event_result_free(SenimeKeyEventResult *result);
+
+// ── Utilities ────────────────────────────────────────────────────────────
 
 const char *senime_last_error(void);
 void senime_string_free(char *value);

@@ -39,329 +39,155 @@ private:
 
 } // namespace
 
+// ── SenimeState ──────────────────────────────────────────────────────────
+
 SenimeState::SenimeState(SenimeEngine *engine, InputContext *ic)
-    : engine_(engine), ic_(ic) {}
+    : engine_(engine), ic_(ic),
+      state_(senime_state_new(engine->engine()), senime_state_free) {}
 
-bool SenimeState::isTempChineseMode() const {
-    return !input_.empty() && input_[0] == '`';
-}
+SenimeState::~SenimeState() = default;
 
-void SenimeState::keyEvent(KeyEvent &event) {
+void SenimeState::processKeyEvent(KeyEvent &event) {
     if (event.isRelease() || !engine_->engine()) {
         return;
     }
 
     const auto &key = event.key();
-    // FCITX_INFO() << "Senime keyEvent: sym=" << key.sym()
-    //              << " states=" << key.states()
-    //              << " isRelease=" << event.isRelease()
-    //              << " chineseMode=" << chineseMode();
 
-    // Alt+J: 切换中文模式
-    if (key.check(FcitxKey_J, KeyState::Alt)) {
-    // if (key.check(FcitxKey_Shift_R, KeyState::NoState)) {
-        if (chineseMode()) {
-            commit();
-            setChineseMode(false);
-            // FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> OFF";
-        } else {
-            setChineseMode(true);
-            // FCITX_INFO() << "Senime: Alt+I pressed, chineseMode -> ON";
-            Text preedit(":(中)");
-            // preedit.setCursor(preedit.toString().size());
-            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-                ic_->inputPanel().setClientPreedit(preedit);
-            } else {
-                ic_->inputPanel().setPreedit(preedit);
-            }
-            ic_->updatePreedit();
-            ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-        }
-        ic_->updateUserInterface(UserInterfaceComponent::StatusArea);
-        event.filterAndAccept();
-        return;
-    }
-    // 英文模式下的临时中文模式
-    if (!chineseMode()) {
-        if (isTempChineseMode()) {
-            // 临时中文模式：尾字符为 ` 则提交并退出
-            if (key.check(FcitxKey_quoteleft)) {
-                if (input_.size() == 1) {
-                    // 连续两个 `，输出字面 ` 并退出
-                    ic_->commitString("`");
-                    input_.clear();
-                } else {
-                    // 提交分析结果并退出临时中文模式
-                    input_ += '`';
-                    update();
-                }
-                event.filterAndAccept();
-                return;
-            }
-            // Escape 退出临时中文模式
-            if (key.check(FcitxKey_Escape)) {
-                reset();
-                event.filterAndAccept();
-                return;
-            }
-            // 临时中文模式下忽略 nonShiftMods
-            auto nonShiftMods = key.states() & ~(KeyStates(KeyState::Shift) | KeyState::CapsLock | KeyState::NumLock);
-            if (nonShiftMods) {
-                return;
-            }
-            // Backspace 删除 input_ 最后一个字符
-            if (key.check(FcitxKey_BackSpace)) {
-                if (input_.size() > 1) {
-                    auto pos = input_.size() - 1;
-                    while (pos > 1 && (static_cast<unsigned char>(input_[pos]) & 0xc0) == 0x80) {
-                        --pos;
-                    }
-                    input_.erase(pos);
-                    update();
-                } else {
-                    // 只剩首字符 `，退出临时中文模式
-                    input_.clear();
-                    ic_->inputPanel().reset();
-                    ic_->updatePreedit();
-                    ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-                }
-                event.filterAndAccept();
-                return;
-            }
-            // 追加按键到 input_，由 update() 分析中间段
-            auto utf8 = Key::keySymToUTF8(key.sym());
-            if (!utf8.empty()) {
-                input_ += utf8;
-                update();
-                event.filterAndAccept();
-            }
-            return;
-        }
-        // 英文模式：按下 ` 进入临时中文模式
-        if (key.check(FcitxKey_quoteleft)) {
-            input_ = "`";
-            Text preedit(":(中)");
-            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-                ic_->inputPanel().setClientPreedit(preedit);
-            } else {
-                ic_->inputPanel().setPreedit(preedit);
-            }
-            ic_->updatePreedit();
-            ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-            event.filterAndAccept();
-            return;
-        }
+    // Convert Fcitx5 key event to flat C struct
+    SenimeKeyEvent rustKey;
+    rustKey.sym = static_cast<uint32_t>(key.sym());
+    rustKey.states = static_cast<uint32_t>(key.states());
+    rustKey.is_release = event.isRelease();
+
+    SenimeKeyEventResult *result = senime_engine_process_key(
+        engine_->engine(), state_.get(), &rustKey);
+
+    if (!result) {
+        FCITX_WARN() << "Senime process_key failed: " << lastError();
         return;
     }
 
-    // Non-Shift modifier (Ctrl, Alt, Super...) → commit pending input, forward key to application.
-    auto nonShiftMods = key.states() & ~(KeyStates(KeyState::Shift) | KeyState::CapsLock | KeyState::NumLock);
-    if (nonShiftMods) {
-        if (!input_.empty()) {
-            commit();
-        }
-        return;
-    }
-
-    if (key.check(FcitxKey_Escape)) {
-        reset();
-        event.filterAndAccept();
-        return;
-    }
-
-    if (key.check(FcitxKey_BackSpace)) {
-        if (!input_.empty()) {
-            // Remove last UTF-8 character.
-            auto pos = input_.size() - 1;
-            while (pos > 0 && (static_cast<unsigned char>(input_[pos]) & 0xc0) == 0x80) {
-                --pos;
-            }
-            input_.erase(pos);
-            update();
-            event.filterAndAccept();
-        }
-        return;
-    }
-
-    if (key.check(FcitxKey_Return)) {
-        if (!input_.empty()) {
-            commit();
-        }
-        if (key.states().test(KeyState::Shift)) {
-            event.filterAndAccept();
-        }
-        return;
-    }
-
-    // When input is empty, space should be committed directly.
-    if (key.check(FcitxKey_space) && input_.empty()) {
-        ic_->commitString(" ");
-        event.filterAndAccept();
-        return;
-    }
-
-    // Let the engine handle everything else (letters, numbers, selection keys,
-    // space, punctuation, etc.).
-    auto utf8 = Key::keySymToUTF8(key.sym());
-    if (!utf8.empty()) {
-        input_ += utf8;
-        update();
+    if (result->accepted) {
         event.filterAndAccept();
     }
+
+    executeCommands(result, ic_);
+    senime_key_event_result_free(result);
 }
 
 void SenimeState::reset() {
-    commit();
-    input_.clear();
-    chineseMode_ = false;
-    ic_->inputPanel().reset();
-    ic_->updatePreedit();
-    ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-    ic_->updateUserInterface(UserInterfaceComponent::StatusArea);
+    if (!state_) return;
+
+    // Send Escape key to trigger reset logic in Rust
+    SenimeKeyEvent escKey;
+    escKey.sym = FcitxKey_Escape;
+    escKey.states = 0;
+    escKey.is_release = false;
+
+    SenimeKeyEventResult *result = senime_engine_process_key(
+        engine_->engine(), state_.get(), &escKey);
+
+    if (result) {
+        executeCommands(result, ic_);
+        senime_key_event_result_free(result);
+    }
 }
 
-void SenimeState::commit() {
-    if (input_.empty()) {
-        return;
+void SenimeState::deactivate() {
+    if (!state_) return;
+
+    // Send Return key to commit pending input, then Escape to reset
+    SenimeKeyEvent retKey;
+    retKey.sym = FcitxKey_Return;
+    retKey.states = 0;
+    retKey.is_release = false;
+
+    SenimeKeyEventResult *result = senime_engine_process_key(
+        engine_->engine(), state_.get(), &retKey);
+
+    if (result) {
+        executeCommands(result, ic_);
+        senime_key_event_result_free(result);
     }
-    ic_->commitString(input_);
-    input_.clear();
-    ic_->inputPanel().reset();
-    ic_->updatePreedit();
-    ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+
+    reset();
 }
 
-void SenimeState::update() {
-    ic_->inputPanel().reset();
-
-    if (input_.empty()) {
-        ic_->updatePreedit();
-        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-        return;
-    }
-
-    // 临时中文模式：英文模式下首字符为 `，将中间段发给引擎分析
-    if (!chineseMode_ && isTempChineseMode()) {
-        // 尾字符也是 `，提交分析结果并退出临时模式
-        if (input_.size() >= 2 && input_.back() == '`') {
-            std::string middle = input_.substr(1, input_.size() - 2);
-            if (middle.empty()) {
-                // `` → 输出字面 `
-                ic_->commitString("`");
-            } else {
-                SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), middle.c_str());
-                if (analysis) {
-                    ic_->commitString(analysis->text ? analysis->text : middle.c_str());
-                    senime_analysis_free(analysis);
-                } else {
-                    ic_->commitString(middle);
-                }
-            }
-            input_.clear();
-            ic_->updatePreedit();
-            ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-            return;
-        }
-
-        // 中间段：分析并显示 preedit
-        std::string middle = input_.substr(1);
-        SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), middle.c_str());
-        if (analysis) {
-            const char *text = analysis->text ? analysis->text : "";
-            Text preedit(text);
-            preedit.setCursor(preedit.toString().size());
-            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-                ic_->inputPanel().setClientPreedit(preedit);
-            } else {
-                ic_->inputPanel().setPreedit(preedit);
-            }
-            if (analysis->candidate_count > 0) {
-                auto candidates = std::make_unique<CommonCandidateList>();
-                candidates->setPageSize(engine_->instance()->globalConfig().defaultPageSize());
-                candidates->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
-                for (size_t i = 0; i < analysis->candidate_count; i++) {
-                    const auto &candidate = analysis->candidates[i];
-                    candidates->append<SenimeCandidateWord>(
-                        std::string(candidate.text ? candidate.text : ""),
-                        candidate.code ? candidate.code : "",
-                        candidate.select_key ? std::string(1, static_cast<char>(candidate.select_key)) + ": " : std::string(),
-                        ic_);
-                }
-                candidates->setGlobalCursorIndex(0);
-                ic_->inputPanel().setCandidateList(std::move(candidates));
-            }
-            senime_analysis_free(analysis);
-        } else {
-            Text preedit(middle);
-            preedit.setCursor(preedit.toString().size());
-            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-                ic_->inputPanel().setClientPreedit(preedit);
-            } else {
-                ic_->inputPanel().setPreedit(preedit);
-            }
-        }
-        ic_->updatePreedit();
-        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-        return;
-    }
-
-    SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), input_.c_str());
-    if (!analysis) {
-        FCITX_WARN() << "Senime analyze failed: " << lastError();
-        ic_->updatePreedit();
-        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-        return;
-    }
-
-    const char *text = analysis->text ? analysis->text : "";
-
-    // No candidates — everything resolved (unique codes, punctuation, etc.), commit.
-    if (analysis->candidate_count == 0) {
-        if (input_ != text) {
-            ic_->commitString(text);
-            input_.clear();
-        } else {
-            // Show input as preedit.
-            Text preedit(text);
-            preedit.setCursor(preedit.toString().size());
-            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-                ic_->inputPanel().setClientPreedit(preedit);
-            } else {
-                ic_->inputPanel().setPreedit(preedit);
-            }
-        }
-        senime_analysis_free(analysis);
-        ic_->updatePreedit();
-        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
-        return;
-    }
-
-    // Show preedit and candidate list.
-    Text preedit(text);
-    preedit.setCursor(preedit.toString().size());
-    if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
-        ic_->inputPanel().setClientPreedit(preedit);
-    } else {
-        ic_->inputPanel().setPreedit(preedit);
-    }
-    auto candidates = std::make_unique<CommonCandidateList>();
-    candidates->setPageSize(engine_->instance()->globalConfig().defaultPageSize());
-    candidates->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
-    for (size_t i = 0; i < analysis->candidate_count; i++) {
-        const auto &candidate = analysis->candidates[i];
-        candidates->append<SenimeCandidateWord>(
-            std::string(candidate.text ? candidate.text : ""),
-            candidate.code ? candidate.code : "",
-            candidate.select_key ? std::string(1, static_cast<char>(candidate.select_key)) + ": " : std::string(),
-            ic_);
-    }
-    candidates->setGlobalCursorIndex(0);
-    ic_->inputPanel().setCandidateList(std::move(candidates));
-
-    senime_analysis_free(analysis);
-    ic_->updatePreedit();
-    ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+bool SenimeState::chineseMode() const {
+    return state_ ? senime_state_chinese_mode(state_.get()) : false;
 }
+
+void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic) {
+    if (!result || !result->commands || result->command_count == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < result->command_count; i++) {
+        const SenimeCommand &cmd = result->commands[i];
+        switch (cmd.type) {
+        case SENIME_CMD_COMMIT_TEXT:
+            if (cmd.text) {
+                ic->commitString(cmd.text);
+            }
+            break;
+
+        case SENIME_CMD_SET_PREEDIT: {
+            Text preedit(cmd.text ? cmd.text : "");
+            preedit.setCursor(preedit.toString().size());
+            if (ic->capabilityFlags().test(CapabilityFlag::Preedit)) {
+                ic->inputPanel().setClientPreedit(preedit);
+            } else {
+                ic->inputPanel().setPreedit(preedit);
+            }
+            break;
+        }
+
+        case SENIME_CMD_SET_CANDIDATES: {
+            auto candidates = std::make_unique<CommonCandidateList>();
+            candidates->setPageSize(
+                engine_->instance()->globalConfig().defaultPageSize());
+            candidates->setCursorPositionAfterPaging(
+                CursorPositionAfterPaging::ResetToFirst);
+            for (size_t j = 0; j < cmd.candidate_count; j++) {
+                const auto &cand = cmd.candidates[j];
+                candidates->append<SenimeCandidateWord>(
+                    std::string(cand.text ? cand.text : ""),
+                    cand.code ? cand.code : "",
+                    cand.select_key
+                        ? std::string(1, static_cast<char>(cand.select_key)) + ": "
+                        : std::string(),
+                    ic);
+            }
+            candidates->setGlobalCursorIndex(0);
+            ic->inputPanel().setCandidateList(std::move(candidates));
+            break;
+        }
+
+        case SENIME_CMD_CLEAR_INPUT_PANEL:
+            ic->inputPanel().reset();
+            break;
+
+        case SENIME_CMD_UPDATE_PREEDIT:
+            ic->updatePreedit();
+            break;
+
+        case SENIME_CMD_UPDATE_UI:
+            ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+            break;
+
+        case SENIME_CMD_UPDATE_STATUS_AREA:
+            ic->updateUserInterface(UserInterfaceComponent::StatusArea);
+            break;
+
+        // case SENIME_CMD_FILTER_AND_ACCEPT:
+        //     // Already handled via event.filterAndAccept() in processKeyEvent
+        //     break;
+        }
+    }
+}
+
+// ── SenimeEngine ─────────────────────────────────────────────────────────
 
 std::string SenimeEngine::subModeIconImpl(const InputMethodEntry &,
                                           InputContext &ic) {
@@ -397,7 +223,7 @@ void SenimeEngine::reloadEngine() {
 
 void SenimeEngine::keyEvent(const InputMethodEntry &, KeyEvent &event) {
     auto *state = event.inputContext()->propertyFor(&factory_);
-    state->keyEvent(event);
+    state->processKeyEvent(event);
 }
 
 void SenimeEngine::reset(const InputMethodEntry &, InputContextEvent &event) {
@@ -408,7 +234,7 @@ void SenimeEngine::reset(const InputMethodEntry &, InputContextEvent &event) {
 void SenimeEngine::deactivate(const InputMethodEntry &entry,
                               InputContextEvent &event) {
     auto *state = event.inputContext()->propertyFor(&factory_);
-    state->commit();
+    state->deactivate();
     reset(entry, event);
 }
 

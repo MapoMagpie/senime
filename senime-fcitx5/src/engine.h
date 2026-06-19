@@ -31,21 +31,21 @@ class SenimeEngine;
 class SenimeState : public InputContextProperty {
 public:
     SenimeState(SenimeEngine *engine, InputContext *ic);
+    ~SenimeState();
 
-    void keyEvent(KeyEvent &event);
+    void processKeyEvent(KeyEvent &event);
     void reset();
-    void commit();
-    bool chineseMode() const { return chineseMode_; }
-    void setChineseMode(bool mode) { chineseMode_ = mode; }
+    void deactivate();
+    bool chineseMode() const;
 
 private:
-    void update();
-    bool isTempChineseMode() const;
+    using StatePtr = std::unique_ptr<::SenimeState, decltype(&senime_state_free)>;
+
+    void executeCommands(SenimeKeyEventResult *result, InputContext *ic);
 
     SenimeEngine *engine_;
     InputContext *ic_;
-    std::string input_;
-    bool chineseMode_ = false;
+    StatePtr state_;
 };
 
 class SenimeEngine : public InputMethodEngineV2 {
