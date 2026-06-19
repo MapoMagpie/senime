@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use log::LevelFilter;
 use notify::{RecursiveMode, Watcher};
 use ropey::Rope;
-use senime_lib::{secondary_dict_path, AnalysisResult, Dict, InputAnalyzer};
+use senime_lib::{AnalysisResult, Dict, InputAnalyzer, secondary_dict_path};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
