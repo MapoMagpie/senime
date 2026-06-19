@@ -5,6 +5,7 @@
 #include <fcitx/event.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/userinterface.h>
+#include <chrono>
 #include <memory>
 
 namespace fcitx {
@@ -60,8 +61,13 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
     rustKey.states = static_cast<uint32_t>(key.states());
     rustKey.is_release = event.isRelease();
 
+    auto start = std::chrono::steady_clock::now();
     SenimeKeyEventResult *result = senime_engine_process_key(
         engine_->engine(), state_.get(), &rustKey);
+    auto end = std::chrono::steady_clock::now();
+
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    FCITX_INFO() << "Senime process_key: " << us << "us";
 
     if (!result) {
         FCITX_WARN() << "Senime process_key failed: " << lastError();
