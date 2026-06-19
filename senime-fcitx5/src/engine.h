@@ -40,6 +40,7 @@ public:
 
 private:
     void update();
+    bool isTempChineseMode() const;
 
     SenimeEngine *engine_;
     InputContext *ic_;

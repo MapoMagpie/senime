@@ -42,6 +42,10 @@ private:
 SenimeState::SenimeState(SenimeEngine *engine, InputContext *ic)
     : engine_(engine), ic_(ic) {}
 
+bool SenimeState::isTempChineseMode() const {
+    return !input_.empty() && input_[0] == '`';
+}
+
 void SenimeState::keyEvent(KeyEvent &event) {
     if (event.isRelease() || !engine_->engine()) {
         return;
@@ -77,8 +81,76 @@ void SenimeState::keyEvent(KeyEvent &event) {
         event.filterAndAccept();
         return;
     }
-    // 英文模式下直接透传
+    // 英文模式下的临时中文模式
     if (!chineseMode()) {
+        if (isTempChineseMode()) {
+            // 临时中文模式：尾字符为 ` 则提交并退出
+            if (key.check(FcitxKey_quoteleft)) {
+                if (input_.size() == 1) {
+                    // 连续两个 `，输出字面 ` 并退出
+                    ic_->commitString("`");
+                    input_.clear();
+                } else {
+                    // 提交分析结果并退出临时中文模式
+                    input_ += '`';
+                    update();
+                }
+                event.filterAndAccept();
+                return;
+            }
+            // Escape 退出临时中文模式
+            if (key.check(FcitxKey_Escape)) {
+                reset();
+                event.filterAndAccept();
+                return;
+            }
+            // 临时中文模式下忽略 nonShiftMods
+            auto nonShiftMods = key.states() & ~(KeyStates(KeyState::Shift) | KeyState::CapsLock | KeyState::NumLock);
+            if (nonShiftMods) {
+                return;
+            }
+            // Backspace 删除 input_ 最后一个字符
+            if (key.check(FcitxKey_BackSpace)) {
+                if (input_.size() > 1) {
+                    auto pos = input_.size() - 1;
+                    while (pos > 1 && (static_cast<unsigned char>(input_[pos]) & 0xc0) == 0x80) {
+                        --pos;
+                    }
+                    input_.erase(pos);
+                    update();
+                } else {
+                    // 只剩首字符 `，退出临时中文模式
+                    input_.clear();
+                    ic_->inputPanel().reset();
+                    ic_->updatePreedit();
+                    ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+                }
+                event.filterAndAccept();
+                return;
+            }
+            // 追加按键到 input_，由 update() 分析中间段
+            auto utf8 = Key::keySymToUTF8(key.sym());
+            if (!utf8.empty()) {
+                input_ += utf8;
+                update();
+                event.filterAndAccept();
+            }
+            return;
+        }
+        // 英文模式：按下 ` 进入临时中文模式
+        if (key.check(FcitxKey_quoteleft)) {
+            input_ = "`";
+            Text preedit(":(中)");
+            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
+                ic_->inputPanel().setClientPreedit(preedit);
+            } else {
+                ic_->inputPanel().setPreedit(preedit);
+            }
+            ic_->updatePreedit();
+            ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+            event.filterAndAccept();
+            return;
+        }
         return;
     }
 
@@ -163,6 +235,71 @@ void SenimeState::update() {
     ic_->inputPanel().reset();
 
     if (input_.empty()) {
+        ic_->updatePreedit();
+        ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+        return;
+    }
+
+    // 临时中文模式：英文模式下首字符为 `，将中间段发给引擎分析
+    if (!chineseMode_ && isTempChineseMode()) {
+        // 尾字符也是 `，提交分析结果并退出临时模式
+        if (input_.size() >= 2 && input_.back() == '`') {
+            std::string middle = input_.substr(1, input_.size() - 2);
+            if (middle.empty()) {
+                // `` → 输出字面 `
+                ic_->commitString("`");
+            } else {
+                SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), middle.c_str());
+                if (analysis) {
+                    ic_->commitString(analysis->text ? analysis->text : middle.c_str());
+                    senime_analysis_free(analysis);
+                } else {
+                    ic_->commitString(middle);
+                }
+            }
+            input_.clear();
+            ic_->updatePreedit();
+            ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
+            return;
+        }
+
+        // 中间段：分析并显示 preedit
+        std::string middle = input_.substr(1);
+        SenimeAnalysis *analysis = senime_engine_analyze(engine_->engine(), middle.c_str());
+        if (analysis) {
+            const char *text = analysis->text ? analysis->text : "";
+            Text preedit(text);
+            preedit.setCursor(preedit.toString().size());
+            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
+                ic_->inputPanel().setClientPreedit(preedit);
+            } else {
+                ic_->inputPanel().setPreedit(preedit);
+            }
+            if (analysis->candidate_count > 0) {
+                auto candidates = std::make_unique<CommonCandidateList>();
+                candidates->setPageSize(engine_->instance()->globalConfig().defaultPageSize());
+                candidates->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
+                for (size_t i = 0; i < analysis->candidate_count; i++) {
+                    const auto &candidate = analysis->candidates[i];
+                    candidates->append<SenimeCandidateWord>(
+                        std::string(candidate.text ? candidate.text : ""),
+                        candidate.code ? candidate.code : "",
+                        candidate.select_key ? std::string(1, static_cast<char>(candidate.select_key)) + ": " : std::string(),
+                        ic_);
+                }
+                candidates->setGlobalCursorIndex(0);
+                ic_->inputPanel().setCandidateList(std::move(candidates));
+            }
+            senime_analysis_free(analysis);
+        } else {
+            Text preedit(middle);
+            preedit.setCursor(preedit.toString().size());
+            if (ic_->capabilityFlags().test(CapabilityFlag::Preedit)) {
+                ic_->inputPanel().setClientPreedit(preedit);
+            } else {
+                ic_->inputPanel().setPreedit(preedit);
+            }
+        }
         ic_->updatePreedit();
         ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
         return;
