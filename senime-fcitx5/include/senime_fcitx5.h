@@ -18,11 +18,9 @@ typedef enum SenimeCommandType {
     SENIME_CMD_COMMIT_TEXT = 0,
     SENIME_CMD_SET_PREEDIT = 1,
     SENIME_CMD_SET_CANDIDATES = 2,
-    SENIME_CMD_CLEAR_INPUT_PANEL = 3,
-    SENIME_CMD_UPDATE_PREEDIT = 4,
-    SENIME_CMD_UPDATE_UI = 5,
-    SENIME_CMD_UPDATE_STATUS_AREA = 6,
-    // SENIME_CMD_FILTER_AND_ACCEPT = 7,
+    SENIME_CMD_RESET_INPUT_PANEL = 3,
+    SENIME_CMD_UPDATE_UI = 4,
+    SENIME_CMD_UPDATE_STATUS_AREA = 5,
 } SenimeCommandType;
 
 typedef struct SenimeCandidateData {
@@ -64,7 +62,7 @@ bool senime_state_chinese_mode(const SenimeState *state);
 
 // ── Key event processing ─────────────────────────────────────────────────
 
-SenimeKeyEventResult *senime_engine_process_key(const SenimeEngine *engine,
+SenimeKeyEventResult *senime_engine_key_event(const SenimeEngine *engine,
                                                 SenimeState *state,
                                                 const SenimeKeyEvent *key);
 

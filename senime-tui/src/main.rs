@@ -230,11 +230,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let poped = segments.pop();
         if !segments.is_empty() {
-            segments.into_iter().for_each(|(text, origin)| {
+            segments.into_iter().for_each(|(text, origin, _)| {
                 ctx.push(text.chars(), origin);
             });
         }
-        if let Some((text, chars)) = poped {
+        if let Some((text, chars, _)) = poped {
             // 会出现text为空，而chars为 ' '(空格)
             let text_chars: Vec<char> = text.chars().collect();
             if candidates.is_none() && text_chars != chars {

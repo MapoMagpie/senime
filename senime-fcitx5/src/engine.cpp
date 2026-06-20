@@ -5,7 +5,7 @@
 #include <fcitx/event.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/userinterface.h>
-#include <chrono>
+// #include <chrono>
 #include <memory>
 
 namespace fcitx {
@@ -61,13 +61,13 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
     rustKey.states = static_cast<uint32_t>(key.states());
     rustKey.is_release = event.isRelease();
 
-    auto start = std::chrono::steady_clock::now();
-    SenimeKeyEventResult *result = senime_engine_process_key(
+    // auto start = std::chrono::steady_clock::now();
+    SenimeKeyEventResult *result = senime_engine_key_event(
         engine_->engine(), state_.get(), &rustKey);
-    auto end = std::chrono::steady_clock::now();
+    // auto end = std::chrono::steady_clock::now();
 
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-    FCITX_INFO() << "Senime process_key: " << us << "us";
+    // auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    // FCITX_INFO() << "Senime process_key: " << us << "us";
 
     if (!result) {
         FCITX_WARN() << "Senime process_key failed: " << lastError();
@@ -91,7 +91,7 @@ void SenimeState::reset() {
     escKey.states = 0;
     escKey.is_release = false;
 
-    SenimeKeyEventResult *result = senime_engine_process_key(
+    SenimeKeyEventResult *result = senime_engine_key_event(
         engine_->engine(), state_.get(), &escKey);
 
     if (result) {
@@ -109,7 +109,7 @@ void SenimeState::deactivate() {
     retKey.states = 0;
     retKey.is_release = false;
 
-    SenimeKeyEventResult *result = senime_engine_process_key(
+    SenimeKeyEventResult *result = senime_engine_key_event(
         engine_->engine(), state_.get(), &retKey);
 
     if (result) {
@@ -146,6 +146,7 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
             } else {
                 ic->inputPanel().setPreedit(preedit);
             }
+            ic->updatePreedit();
             break;
         }
 
@@ -170,12 +171,8 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
             break;
         }
 
-        case SENIME_CMD_CLEAR_INPUT_PANEL:
+        case SENIME_CMD_RESET_INPUT_PANEL:
             ic->inputPanel().reset();
-            break;
-
-        case SENIME_CMD_UPDATE_PREEDIT:
-            ic->updatePreedit();
             break;
 
         case SENIME_CMD_UPDATE_UI:
@@ -185,10 +182,6 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
         case SENIME_CMD_UPDATE_STATUS_AREA:
             ic->updateUserInterface(UserInterfaceComponent::StatusArea);
             break;
-
-        // case SENIME_CMD_FILTER_AND_ACCEPT:
-        //     // Already handled via event.filterAndAccept() in processKeyEvent
-        //     break;
         }
     }
 }

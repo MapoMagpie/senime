@@ -103,7 +103,7 @@ impl InputAnalyzer {
         let segments = self.segments(input);
         let segment_len = segments.len();
         let mut reduce_space = false;
-        let mut segments_ret: Vec<(String, Vec<char>)> = vec![];
+        let mut segments_ret: Vec<(String, Vec<char>, Tag)> = vec![];
         let mut candidates: Option<Vec<CandidateRich>> = None;
         for (i, (codes, tag)) in segments.into_iter().enumerate() {
             let at_last = i == segment_len - 1;
@@ -115,7 +115,7 @@ impl InputAnalyzer {
                         self.search_candidates(&codes, 0, get_count, use_secondary_dict)
                     {
                         reduce_space = !unique;
-                        segments_ret.push((cands[0].text.to_string(), codes.clone()));
+                        segments_ret.push((cands[0].text.to_string(), codes.clone(), tag));
                         // candidates
                         if at_last && !unique {
                             let to_rich = |(i, cand): (usize, &CandidateView)| -> CandidateRich {
@@ -133,7 +133,7 @@ impl InputAnalyzer {
                             candidates = Some(cands.iter().enumerate().map(to_rich).collect());
                         }
                     } else {
-                        segments_ret.push((codes.iter().collect(), codes));
+                        segments_ret.push((codes.iter().collect(), codes, tag));
                     }
                 }
                 Tag::Selection(i_cand) | Tag::SelectionForSecondary(i_cand) => {
@@ -143,7 +143,7 @@ impl InputAnalyzer {
                         get_count,
                         use_secondary_dict,
                     ) {
-                        segments_ret.push((cands[0].text.to_string(), codes));
+                        segments_ret.push((cands[0].text.to_string(), codes, tag));
                     }
                 }
                 Tag::Punctuation | Tag::SelectionForPunc(_) => {
@@ -164,13 +164,13 @@ impl InputAnalyzer {
                         }
                         match self.get_punctuation(&punc, repeat, select.map(|s| s.0)) {
                             Some((punc_text, cands)) => {
-                                segments_ret.push((punc_text, origin));
+                                segments_ret.push((punc_text, origin, tag));
                                 if at_last {
                                     candidates = cands;
                                 }
                             }
                             _ => {
-                                segments_ret.push((origin.iter().collect(), origin));
+                                segments_ret.push((origin.iter().collect(), origin, tag));
                             }
                         }
                     }
@@ -183,7 +183,7 @@ impl InputAnalyzer {
                     } else {
                         codes.iter().collect()
                     };
-                    segments_ret.push((text, codes));
+                    segments_ret.push((text, codes, tag));
                 }
                 _ => {
                     let start = (reduce_space && codes[0] == ' ') as usize;
@@ -191,7 +191,7 @@ impl InputAnalyzer {
                         reduce_space = false;
                     }
                     let text = &codes[start..];
-                    segments_ret.push((text.iter().collect(), codes.to_vec()));
+                    segments_ret.push((text.iter().collect(), codes.to_vec(), tag));
                 }
             };
         }
@@ -212,7 +212,14 @@ impl InputAnalyzer {
         // codes为空（排除反查触发字符后)时，展示反查提示（通常为码表名)
         if use_secondary_dict && code.len() <= 1 {
             return self.secondary_hint.as_ref().map(|(code, text, weight)| {
-                (vec![CandidateView { code, text, weight: *weight }], false)
+                (
+                    vec![CandidateView {
+                        code,
+                        text,
+                        weight: *weight,
+                    }],
+                    false,
+                )
             });
         }
         let (dict, codes) = if use_secondary_dict {
@@ -468,7 +475,7 @@ fn compact_vec(v: &[char]) -> Vec<(char, usize)> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
-enum Tag {
+pub enum Tag {
     Normal,
     Selection(usize),
     Punctuation,
@@ -513,7 +520,8 @@ impl CandidateRich {
 }
 
 pub struct AnalysisResult {
-    pub segments: Vec<(String, Vec<char>)>,
+    /// (text, origin_input, tag)
+    pub segments: Vec<(String, Vec<char>, Tag)>,
     pub candidates: Option<Vec<CandidateRich>>,
 }
 
@@ -550,61 +558,36 @@ zkc 射 1"#
     fn test_analyzer() {
         let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
         let analyzer = InputAnalyzer::new(dict, None);
-        let input = "a cIzk";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(texts, vec!["来", "", "不是", "可能",]);
-
-        let input = "a cIzk@abc";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(texts, vec!["来", "", "不是", "可能", "@abc"]);
-
-        let input = "a cIzk,,,[]I]]";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(texts, vec!["来", "", "不是", "可能", "……", "「", "”", "”"]);
-
-        let input = "acIzk";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(texts, vec!["来", "不是", "可能"]);
-
-        let input = "zk  cuahcI";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(texts, vec!["可能", " ", "还", "疲惫不堪"]);
-
-        let input = "zk ,cuahcI";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(texts, vec!["可能", "", "，", "还", "疲惫不堪"]);
-
-        let input = "zk  c,cua.hcI";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(
-            texts,
-            vec!["可能", " ", "不", "，", "还", "来", "。", "h", "不是",]
-        );
-
-        let input = "zk`zk`c,cua.hcI";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(
-            texts,
-            vec!["可能", "zk", "不", "，", "还", "来", "。", "h", "不是",]
-        );
-
-        let input = "zk `zk` c,cua.hcI`hhh";
-        let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
-        let (texts, _): (Vec<String>, Vec<Vec<char>>) = result.segments.into_iter().unzip();
-        assert_eq!(
-            texts,
-            vec![
-                "可能", "", "zk", " ", "不", "，", "还", "来", "。", "h", "不是", "`hhh"
-            ]
-        );
+        let inputs = vec![
+            ("a cIzk", vec!["来", "", "不是", "可能"]),
+            ("a cIzk@abc", vec!["来", "", "不是", "可能", "@abc"]),
+            (
+                "a cIzk,,,[]I]]",
+                vec!["来", "", "不是", "可能", "……", "「", "”", "”"],
+            ),
+            ("acIzk", vec!["来", "不是", "可能"]),
+            ("zk  cuahcI", vec!["可能", " ", "还", "疲惫不堪"]),
+            ("zk ,cuahcI", vec!["可能", "", "，", "还", "疲惫不堪"]),
+            (
+                "zk  c,cua.hcI",
+                vec!["可能", " ", "不", "，", "还", "来", "。", "h", "不是"],
+            ),
+            (
+                "zk`zk`c,cua.hcI",
+                vec!["可能", "zk", "不", "，", "还", "来", "。", "h", "不是"],
+            ),
+            (
+                "zk `zk` c,cua.hcI`hhh",
+                vec![
+                    "可能", "", "zk", " ", "不", "，", "还", "来", "。", "h", "不是", "`hhh",
+                ],
+            ),
+        ];
+        for (input, expect) in inputs.into_iter() {
+            let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
+            let texts: Vec<String> = result.segments.into_iter().map(|seg| seg.0).collect();
+            assert_eq!(texts, expect);
+        }
     }
 
     #[test]
