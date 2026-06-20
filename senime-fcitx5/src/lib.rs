@@ -163,9 +163,10 @@ impl SenimeState {
                 return self.chinese_mode(sym, states, true);
             } else if sym == FCITX_KEY_quoteleft {
                 self.input.push('`');
-                let mut cmds = Vec::new();
-                cmds.push(SenimeCommand::with_preedit_text(":(中)".to_string()));
-                cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+                let cmds = vec![
+                    SenimeCommand::with_preedit_text(":(中)".to_string()),
+                    SenimeCommand::with_type(SenimeCommandType::UpdateUI),
+                ];
                 return (true, cmds);
             };
             return (false, vec![]);
@@ -194,13 +195,12 @@ impl SenimeState {
 
         // Escape
         if sym == FCITX_KEY_Escape || sym == FCITX_KEY_Return {
-            let mut cmds = Vec::new();
-            cmds.push(SenimeCommand::with_commit_text(self.input.clone()));
-            cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
-            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
-            cmds.push(SenimeCommand::with_type(
-                SenimeCommandType::UpdateStatusArea,
-            ));
+            let cmds = vec![
+                SenimeCommand::with_commit_text(self.input.clone()),
+                SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
+                SenimeCommand::with_type(SenimeCommandType::UpdateUI),
+                SenimeCommand::with_type(SenimeCommandType::UpdateStatusArea),
+            ];
             if sym == FCITX_KEY_Escape {
                 self.chinese_mode = false;
             }
