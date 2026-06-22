@@ -6,10 +6,11 @@ use wasm_bindgen::prelude::*;
 static IME: Mutex<Option<InputAnalyzer>> = Mutex::new(None);
 
 #[wasm_bindgen]
-pub fn init_ime(bs: &[u8]) {
+pub fn init_ime(bs: &[u8]) -> Result<(), JsValue> {
     let mut ime = IME.lock().unwrap();
-    let dict = Dict::try_from((0, 0, bs)).unwrap();
+    let dict = Dict::try_from((0, 0, bs)).map_err(|e| JsValue::from_str(&e.to_string()))?;
     ime.replace(InputAnalyzer::new(dict, None));
+    Ok(())
 }
 
 #[wasm_bindgen]

@@ -41,7 +41,7 @@ init().then(() => {
         init_ime(bin);
       }).then(() => {
         show.textContent = "init input method engine finished!";
-      });
+      }).catch(console.error);
     }
   });
 
