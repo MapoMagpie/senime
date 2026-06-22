@@ -10,8 +10,15 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -23,40 +30,49 @@
       in
       {
         packages = {
-          default = self.packages.${system}.senime-tui;
+          default = self.packages.${system}.senitui;
 
-          senime-tui = pkgs.rustPlatform.buildRustPackage {
-            pname = "senime-tui";
+          senitui = pkgs.rustPlatform.buildRustPackage {
+            pname = "senime";
             version = "0.0.1";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
-            cargoBuildFlags = [ "-p" "senime-tui" ];
+            cargoBuildFlags = [
+              "-p"
+              "senime-tui"
+            ];
             nativeBuildInputs = [ rust ];
             doCheck = false;
           };
 
-          senime-lsp = pkgs.rustPlatform.buildRustPackage {
-            pname = "senime-lsp";
+          senilsp = pkgs.rustPlatform.buildRustPackage {
+            pname = "senime";
             version = "0.0.1";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
-            cargoBuildFlags = [ "-p" "senime-lsp" ];
+            cargoBuildFlags = [
+              "-p"
+              "senime-lsp"
+            ];
             nativeBuildInputs = [ rust ];
             doCheck = false;
           };
 
-          senime-encode = pkgs.rustPlatform.buildRustPackage {
-            pname = "senime-encode";
+          senienc = pkgs.rustPlatform.buildRustPackage {
+            pname = "senime";
             version = "0.0.1";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
-            cargoBuildFlags = [ "-p" "senime-encode" ];
+            cargoBuildFlags = [
+              "-p"
+              "senime-encode"
+            ];
             nativeBuildInputs = [ rust ];
             doCheck = false;
           };
 
-          senime-fcitx5 = pkgs.stdenv.mkDerivation {
-            pname = "senime-fcitx5";
+          fcitx5-senime = pkgs.stdenv.mkDerivation {
+            pname = "fcitx5-senime";
             version = "0.0.1";
             src = ./.;
 
@@ -107,5 +123,6 @@
           ];
           RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
         };
-      });
+      }
+    );
 }
