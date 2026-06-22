@@ -70,7 +70,7 @@ impl SenimeCommand {
     }
 
     fn with_candidates(cands: Vec<senime_lib::CandidateRich>) -> SenimeCommand {
-        let mut data: Vec<SenimeCandidateData> = cands
+        let data: Vec<SenimeCandidateData> = cands
             .into_iter()
             .map(|c| SenimeCandidateData {
                 text: into_c_string(c.text),
@@ -78,9 +78,10 @@ impl SenimeCommand {
                 select_key: c.select_key as u32,
             })
             .collect();
-        let count = data.len();
-        let ptr = data.as_mut_ptr();
-        std::mem::forget(data);
+        // 使用 into_boxed_slice 确保 capacity == len，避免 Vec::from_raw_parts 的安全隐患
+        let boxed = data.into_boxed_slice();
+        let count = boxed.len();
+        let ptr = Box::into_raw(boxed) as *mut SenimeCandidateData;
         SenimeCommand {
             type_: SenimeCommandType::SetCandidates,
             text: ptr::null_mut(),
@@ -193,8 +194,9 @@ impl SenimeState {
             return (false, cmds);
         }
 
-        // Escape
+        // Escape / Return
         if sym == FCITX_KEY_Escape || sym == FCITX_KEY_Return {
+            // 空输入时提交空字符串，非空时提交当前输入
             let cmds = vec![
                 SenimeCommand::with_commit_text(self.input.clone()),
                 SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
@@ -212,7 +214,7 @@ impl SenimeState {
         if sym == FCITX_KEY_BackSpace {
             let mut accept = false;
             if !self.input.is_empty() {
-                remove_last_utf8_char(&mut self.input);
+                self.input.pop();
                 accept = true;
             }
             let mut cmds = Vec::new();
@@ -249,7 +251,7 @@ impl SenimeState {
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
             return;
         }
-        // Drop guard before calling &self methods
+        // 先 load() 获取 guard，分析后 drop guard，再调用 &self 方法
         let (pre_text, last_text, last_input, last_tag, candidates) = {
             let guard = self.engine.load();
             let AnalysisResult {
@@ -448,8 +450,13 @@ fn spawn_watcher(
     Ok(watcher)
 }
 
+/// 创建一个新的输入法引擎实例。
+///
+/// # Safety
+///
+/// `table_path` 必须是一个有效的、以 NUL 结尾的 C 字符串指针。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEngine {
+pub unsafe extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEngine {
     clear_last_error();
     let Some(table_path) = cstr_to_str(table_path, "table_path") else {
         return ptr::null_mut();
@@ -481,18 +488,25 @@ pub extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEng
     }
 }
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// 释放输入法引擎实例。
+///
+/// # Safety
+///
+/// `engine` 必须是由 `senime_engine_new` 返回的有效指针，且只能释放一次。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_engine_free(engine: *mut SenimeEngine) {
+pub unsafe extern "C" fn senime_engine_free(engine: *mut SenimeEngine) {
     if !engine.is_null() {
-        unsafe {
-            drop(Box::from_raw(engine));
-        }
+        unsafe { drop(Box::from_raw(engine)) };
     }
 }
 
+/// 获取最后一次操作的错误信息。
+///
+/// # Safety
+///
+/// 返回的指针在线程局部存储中有效，直到下一次调用 senime API。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_last_error() -> *const c_char {
+pub unsafe extern "C" fn senime_last_error() -> *const c_char {
     LAST_ERROR.with(|last| {
         last.borrow()
             .as_ref()
@@ -501,13 +515,15 @@ pub extern "C" fn senime_last_error() -> *const c_char {
     })
 }
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// 释放由 senime API 返回的 C 字符串。
+///
+/// # Safety
+///
+/// `value` 必须是由 senime API 分配的有效 `CString` 指针，且只能释放一次。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_string_free(value: *mut c_char) {
+pub unsafe extern "C" fn senime_string_free(value: *mut c_char) {
     if !value.is_null() {
-        unsafe {
-            drop(CString::from_raw(value));
-        }
+        unsafe { drop(CString::from_raw(value)) };
     }
 }
 
@@ -515,31 +531,25 @@ pub extern "C" fn senime_string_free(value: *mut c_char) {
 
 /// Convert an X11 keysym to a char. Returns None for non-printable keys.
 fn keysym_to_char(sym: u32) -> Option<char> {
-    // ASCII printable range
-    if (FCITX_KEY_space..=FCITX_KEY_asciitilde).contains(&sym) {
+    // ASCII printable 或 Latin-1 supplement
+    if (FCITX_KEY_space..=FCITX_KEY_asciitilde).contains(&sym)
+        || (FCITX_KEY_nobreakspace..=FCITX_KEY_ydiaeresis).contains(&sym)
+    {
         char::from_u32(sym)
     } else {
-        // Latin-1 supplement
-        if (FCITX_KEY_nobreakspace..=FCITX_KEY_ydiaeresis).contains(&sym) {
-            char::from_u32(sym)
-        } else {
-            None
-        }
-    }
-}
-
-/// Remove the last UTF-8 character from a string.
-fn remove_last_utf8_char(s: &mut String) {
-    if let Some(last_byte_pos) = s.char_indices().next_back().map(|(pos, _)| pos) {
-        s.truncate(last_byte_pos);
+        None
     }
 }
 
 // ── FFI: State management ────────────────────────────────────────────────
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// 创建一个新的输入状态实例。
+///
+/// # Safety
+///
+/// `engine` 必须是由 `senime_engine_new` 返回的有效指针。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_state_new(engine: *const SenimeEngine) -> *mut SenimeState {
+pub unsafe extern "C" fn senime_state_new(engine: *const SenimeEngine) -> *mut SenimeState {
     clear_last_error();
     if engine.is_null() {
         set_last_error("engine is null");
@@ -549,30 +559,42 @@ pub extern "C" fn senime_state_new(engine: *const SenimeEngine) -> *mut SenimeSt
     Box::into_raw(Box::new(SenimeState::new(engine.inner.clone())))
 }
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// 释放输入状态实例。
+///
+/// # Safety
+///
+/// `state` 必须是由 `senime_state_new` 返回的有效指针，且只能释放一次。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_state_free(state: *mut SenimeState) {
+pub unsafe extern "C" fn senime_state_free(state: *mut SenimeState) {
     if !state.is_null() {
-        unsafe {
-            drop(Box::from_raw(state));
-        }
+        unsafe { drop(Box::from_raw(state)) };
     }
 }
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// 查询当前是否处于中文模式。
+///
+/// # Safety
+///
+/// `state` 必须是由 `senime_state_new` 返回的有效指针。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_state_chinese_mode(state: *const SenimeState) -> bool {
+pub unsafe extern "C" fn senime_state_chinese_mode(state: *const SenimeState) -> bool {
     if state.is_null() {
         return false;
     }
-    unsafe { &*state }.chinese_mode
+    unsafe { (*state).chinese_mode }
 }
 
 // ── FFI: Key event processing ────────────────────────────────────────────
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// 处理键盘事件，返回操作结果和命令列表。
+///
+/// # Safety
+///
+/// - `engine` 必须是由 `senime_engine_new` 返回的有效指针
+/// - `state` 必须是由 `senime_state_new` 返回的有效指针
+/// - `key` 必须是指向有效 `SenimeKeyEvent` 的指针
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_engine_key_event(
+pub unsafe extern "C" fn senime_engine_key_event(
     engine: *const SenimeEngine,
     state: *mut SenimeState,
     key: *const SenimeKeyEvent,
@@ -595,13 +617,13 @@ pub extern "C" fn senime_engine_key_event(
         let key = unsafe { &*key };
         let (accepted, commands) = state.key_event(key);
         let chinese_mode = state.chinese_mode;
-        let mut commands = commands;
-        let count = commands.len();
+        // 使用 into_boxed_slice 确保 capacity == len，避免 Vec::from_raw_parts 的安全隐患
+        let boxed = commands.into_boxed_slice();
+        let count = boxed.len();
         let cmd_ptr = if count > 0 {
-            let ptr = commands.as_mut_ptr();
-            std::mem::forget(commands);
-            ptr
+            Box::into_raw(boxed) as *mut SenimeCommand
         } else {
+            drop(boxed);
             ptr::null_mut()
         };
         Box::new(SenimeKeyEventResult {
@@ -622,26 +644,33 @@ pub extern "C" fn senime_engine_key_event(
 
 // ── FFI: Result cleanup ──────────────────────────────────────────────────
 
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// 释放键盘事件结果及其中的所有命令和候选数据。
+///
+/// # Safety
+///
+/// `result` 必须是由 `senime_engine_key_event` 返回的有效指针，且只能释放一次。
 #[unsafe(no_mangle)]
-pub extern "C" fn senime_key_event_result_free(result: *mut SenimeKeyEventResult) {
+pub unsafe extern "C" fn senime_key_event_result_free(result: *mut SenimeKeyEventResult) {
     if result.is_null() {
         return;
     }
     unsafe {
         let result = Box::from_raw(result);
         if !result.commands.is_null() && result.command_count > 0 {
-            let commands =
-                Vec::from_raw_parts(result.commands, result.command_count, result.command_count);
-            for cmd in commands {
+            // 安全: commands 由 into_boxed_slice + Box::into_raw 产生
+            let commands = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                result.commands,
+                result.command_count,
+            ));
+            for cmd in commands.iter() {
                 senime_string_free(cmd.text);
                 if !cmd.candidates.is_null() && cmd.candidate_count > 0 {
-                    let candidates = Vec::from_raw_parts(
+                    // 安全: candidates 由 into_boxed_slice + Box::into_raw 产生
+                    let candidates = Box::from_raw(std::ptr::slice_from_raw_parts_mut(
                         cmd.candidates,
                         cmd.candidate_count,
-                        cmd.candidate_count,
-                    );
-                    for cand in candidates {
+                    ));
+                    for cand in candidates.iter() {
                         senime_string_free(cand.text);
                         senime_string_free(cand.code);
                     }
