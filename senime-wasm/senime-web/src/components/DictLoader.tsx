@@ -1,0 +1,95 @@
+import { useRef, useState } from "react";
+import type { DictStatus } from "../hooks/useDictLoader";
+
+const PRESETS: { label: string; keys: string[] }[] = [
+  { label: "1-9", keys: ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
+  { label: ";'+数字", keys: [";", "'", "3", "4", "5", "6", "7", "8", "9"] },
+  { label: "UIOP+数字", keys: ["U", "I", "O", "P", "5", "6", "7", "8", "9"] },
+];
+
+interface Props {
+  status: DictStatus;
+  selectionKeys: string[];
+  onSelectionKeysChange: (keys: string[]) => void;
+  onUpload: (file: File, keys: string[]) => void;
+}
+
+export function DictLoader({ status, selectionKeys, onSelectionKeysChange, onUpload }: Props) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const handleConfirm = () => {
+    setLocalError(null);
+    const files = fileRef.current?.files;
+    if (!files || files.length === 0) {
+      setLocalError("请先选择码表文件");
+      return;
+    }
+    const file = files[0];
+    if (file.size === 0) {
+      setLocalError("码表文件为空");
+      return;
+    }
+    onUpload(file, selectionKeys);
+  };
+
+  const handleSlotChange = (index: number, value: string) => {
+    const ch = value.slice(-1); // 只取最后一个字符
+    const next = [...selectionKeys];
+    next[index] = ch;
+    onSelectionKeysChange(next);
+  };
+
+  return (
+    <section className="dict-loader">
+      <h2>码表加载</h2>
+      <p className="dict-desc">选择你的码表，自定义候选键(可选)，然后点击确认加载。</p>
+
+      <div className="dict-controls">
+        <input ref={fileRef} type="file" accept=".txt" />
+      </div>
+
+      <div className="selection-keys-section">
+        <h3>候选键配置</h3>
+        <div className="presets">
+          {PRESETS.map((p) => (
+            <button
+              key={p.label}
+              className="preset-btn"
+              onClick={() => onSelectionKeysChange(p.keys)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="custom-keys">
+          {selectionKeys.map((k, i) => (
+            <input
+              key={i}
+              type="text"
+              className="key-slot"
+              maxLength={2}
+              value={k}
+              onChange={(e) => handleSlotChange(i, e.target.value)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="dict-bottom">
+        <button onClick={handleConfirm} disabled={status.state === "loading"}>
+          确认加载
+        </button>
+        <div className="dict-status">
+          {localError && <span className="status-error">✗ {localError}</span>}
+          {status.state === "wasm_init" && <span className="status-loading">正在初始化 WASM...</span>}
+          {status.state === "loading" && <span className="status-loading">正在加载码表...</span>}
+          {status.state === "cached" && <span className="status-ok">✓ {status.message}</span>}
+          {status.state === "uploaded" && <span className="status-ok">✓ {status.message}</span>}
+          {status.state === "error" && !localError && <span className="status-error">✗ {status.message}</span>}
+          {status.state === "idle" && !localError && <span className="status-idle">请选择 .txt 码表文件</span>}
+        </div>
+      </div>
+    </section>
+  );
+}

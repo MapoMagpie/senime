@@ -1,0 +1,69 @@
+import { useEffect, useRef } from "react";
+import type { ImeState } from "../hooks/useIme.ts";
+
+interface Props {
+  state: ImeState;
+  imeReady: boolean;
+  onKeyDown: (e: KeyboardEvent) => void;
+  onSelectCandidate: (selectKey: string) => void;
+}
+
+export function InputArea({ state, imeReady, onKeyDown, onSelectCandidate }: Props) {
+  const divRef = useRef<HTMLDivElement>(null);
+
+  // 自动聚焦
+  useEffect(() => {
+    divRef.current?.focus();
+  }, [imeReady]);
+
+  // 挂载 keydown 到输入框元素
+  useEffect(() => {
+    const el = divRef.current;
+    if (!el) return;
+    const handler = (e: KeyboardEvent) => onKeyDown(e);
+    el.addEventListener("keydown", handler);
+    return () => el.removeEventListener("keydown", handler);
+  }, [onKeyDown]);
+
+  const handleClick = () => {
+    divRef.current?.focus();
+  };
+
+  return (
+    <section className="input-area">
+      <div
+        ref={divRef}
+        className="input-display"
+        tabIndex={0}
+        onClick={handleClick}
+      >
+        {!imeReady ? (
+          <span className="placeholder">请先加载码表...</span>
+        ) : (
+          <>
+            <span className="confirmed-text">{state.completedText}</span>
+            {state.pendingText && (
+              <span className="pending-text">{state.pendingText}</span>
+            )}
+            <span className="cursor-text">{state.userInput}</span>
+            <span className="cursor">|</span>
+          </>
+        )}
+      </div>
+      {state.candidates.length > 0 && (
+        <div className="candidates">
+          {state.candidates.map((c, i) => (
+            <span
+              key={i}
+              className={`candidate ${i === 0 ? "candidate-primary" : ""}`}
+              onClick={() => onSelectCandidate(c.selectKey)}
+            >
+              <span className="candidate-key">{c.selectKey}</span>
+              <span className="candidate-text">{c.text}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
