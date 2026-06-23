@@ -3,10 +3,9 @@ use notify::{RecursiveMode, Watcher};
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer, input_analyzer::Tag, secondary_dict_path};
 use std::{
     cell::RefCell,
-    collections::HashSet,
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr,
     sync::{Arc, mpsc},
     time::Duration,
@@ -362,64 +361,29 @@ fn into_c_string(value: String) -> *mut c_char {
 /// Build a new engine inner from the given table path.
 fn build_engine(table_path: &str) -> Result<InputAnalyzer, String> {
     let dict = Dict::try_load(table_path)?;
-    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
-        let hint = PathBuf::from(path)
+    let reverse_dict = dict.config().reverse_dict.as_ref().map(|sec_table_path| {
+        let hint = PathBuf::from(sec_table_path)
             .file_name()
             .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
             .unwrap_or("反".to_string());
-        (Dict::load(secondary_dict_path(table_path, path)), hint)
+        (
+            Dict::load(secondary_dict_path(table_path, sec_table_path)),
+            hint,
+        )
     });
     Ok(InputAnalyzer::new(dict, reverse_dict))
-}
-
-/// Collect all file paths that should be watched for changes.
-fn collect_watch_paths(table_path: &str, dict: &Dict) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let table = PathBuf::from(table_path);
-    paths.push(table.clone());
-
-    // If loaded from .toml, also watch the resolved .txt path
-    if let Some(dict_name) = &dict.config().dict {
-        let resolved = secondary_dict_path(table_path, dict_name);
-        if resolved != table {
-            paths.push(resolved);
-        }
-    }
-
-    // Watch reverse dict if configured
-    if let Some(sec_name) = &dict.config().reverse_dict {
-        let resolved = secondary_dict_path(table_path, sec_name);
-        if resolved != table {
-            paths.push(resolved);
-        }
-    }
-
-    paths.sort();
-    paths.dedup();
-    paths
 }
 
 /// Spawn a background file watcher that rebuilds the engine on changes.
 fn spawn_watcher(
     inner: Arc<ArcSwap<InputAnalyzer>>,
     table_path: String,
-    watch_paths: Vec<PathBuf>,
 ) -> notify::Result<notify::RecommendedWatcher> {
-    // Collect the parent directories to watch (handles vim-style atomic replace via rename).
-    let watch_dirs: HashSet<PathBuf> = watch_paths
-        .iter()
-        .filter_map(|p| p.parent().map(PathBuf::from))
-        .collect();
-
     let (tx, rx) = mpsc::channel();
 
     // Create the filesystem watcher — events go through the channel.
     let mut watcher = notify::recommended_watcher(tx)?;
-
-    // Watch parent directories (handles vim-style atomic replace via rename).
-    for dir in &watch_dirs {
-        watcher.watch(dir, RecursiveMode::NonRecursive)?;
-    }
+    watcher.watch(Path::new(&table_path), RecursiveMode::NonRecursive)?;
 
     // Debounce thread: drain events, wait, then rebuild.
     std::thread::spawn(move || {
@@ -463,11 +427,10 @@ pub unsafe extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut Se
     };
     let result: Result<Box<SenimeEngine>, String> = (|| {
         let engine = build_engine(table_path)?;
-        let watch_paths = collect_watch_paths(table_path, engine.get_dict());
         let engine = Arc::new(ArcSwap::from_pointee(engine));
 
         // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
-        let watcher = spawn_watcher(engine.clone(), table_path.to_string(), watch_paths)
+        let watcher = spawn_watcher(engine.clone(), table_path.to_string())
             .map_err(|e| {
                 eprintln!("[senime] file watcher init failed: {e}");
                 e
