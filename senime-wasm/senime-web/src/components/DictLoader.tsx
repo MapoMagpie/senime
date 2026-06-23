@@ -42,15 +42,17 @@ export function DictLoader({ status, selectionKeys, onSelectionKeysChange, onUpl
 
   return (
     <section className="dict-loader">
-      <h2>码表加载</h2>
       <p className="dict-desc">选择你的码表，自定义候选键(可选)，然后点击确认加载。</p>
 
-      <div className="dict-controls">
-        <input ref={fileRef} type="file" accept=".txt" />
+      <div className="selection-keys-section">
+        <h2>码表加载</h2>
+        <div className="dict-controls">
+          <input ref={fileRef} type="file" accept=".txt" />
+        </div>
       </div>
 
       <div className="selection-keys-section">
-        <h3>候选键配置</h3>
+        <h2>候选键配置</h2>
         <div className="presets">
           {PRESETS.map((p) => (
             <button
@@ -76,18 +78,20 @@ export function DictLoader({ status, selectionKeys, onSelectionKeysChange, onUpl
         </div>
       </div>
 
-      <div className="dict-bottom">
-        <button onClick={handleConfirm} disabled={status.state === "loading"}>
-          确认加载
-        </button>
-        <div className="dict-status">
-          {localError && <span className="status-error">✗ {localError}</span>}
-          {status.state === "wasm_init" && <span className="status-loading">正在初始化 WASM...</span>}
-          {status.state === "loading" && <span className="status-loading">正在加载码表...</span>}
-          {status.state === "cached" && <span className="status-ok">✓ {status.message}</span>}
-          {status.state === "uploaded" && <span className="status-ok">✓ {status.message}</span>}
-          {status.state === "error" && !localError && <span className="status-error">✗ {status.message}</span>}
-          {status.state === "idle" && !localError && <span className="status-idle">请选择 .txt 码表文件</span>}
+      <div className="selection-keys-section">
+        <div className="dict-bottom">
+          <button onClick={handleConfirm} disabled={status.state === "loading"}>
+            确认加载
+          </button>
+          <div className="dict-status">
+            {localError && <span className="status-error">✗ {localError}</span>}
+            {status.state === "wasm_init" && <span className="status-loading">正在初始化 WASM...</span>}
+            {status.state === "loading" && <span className="status-loading">正在加载码表...</span>}
+            {status.state === "cached" && <span className="status-ok">✓ {status.message}</span>}
+            {status.state === "uploaded" && <span className="status-ok">✓ {status.message}</span>}
+            {status.state === "error" && !localError && <span className="status-error">✗ {status.message}</span>}
+            {status.state === "idle" && !localError && <span className="status-idle">请选择 .txt 码表文件</span>}
+          </div>
         </div>
       </div>
     </section>
