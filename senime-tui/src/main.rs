@@ -65,8 +65,7 @@ pub struct Args {
     #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub stdin: bool,
 
-    /// 使用标准输出流做出界面绘制区
-    /// 默认使用/dev/tty做为界面绘制区，若无法打开/dev/tty或其不存在，可使用--stdout解决此问题
+    /// 退出程序时，将输入的内容输出到标准输出流
     #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub stdout: bool,
 }
@@ -303,13 +302,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(err) = write_input_data(&time_id, &ctx) {
         eprintln!("写入输入数据时出错: {:?}", err);
     }
-    // let bs = sentence_rec
-    //     .iter()
-    //     .map(|se| se.text.iter())
-    //     .flatten()
-    //     .collect::<String>();
-    // io::stdout().write(bs.as_bytes())?;
-    // io::stdout().write_all(b"\n")?;
+    if args.stdout {
+        println!("{}", ctx.get_sentence().collect::<String>())
+    }
     Ok(())
 }
 
