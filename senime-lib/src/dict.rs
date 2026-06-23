@@ -484,33 +484,8 @@ impl Dict {
         let dict =
             Self::from_str_with_config(&raw, config).map_err(|e| format!("解析码表失败: {e}"))?;
         // 写入 bin 缓存
-        let meta = DictMeta {
-            head: ['s', 'e', 'n', 'i', 'm', 'e'],
-            ver: VERSION,
-            txt_mtime,
-            config_mtime,
-        };
         if let Ok(mut bin_file) = File::create(&bin_path) {
-            let mut head = [0u8; 30];
-            if bincode::encode_into_slice(meta, &mut head, config::standard()).is_ok() {
-                let _ = bin_file.write_all(&head);
-                let cfg = config::standard();
-                let mut buf = Vec::new();
-                // 按顺序编码 arena, candidates, prism, config
-                if let Ok(b) = bincode::encode_to_vec(&dict.arena, cfg) {
-                    buf.extend_from_slice(&b);
-                }
-                if let Ok(b) = bincode::encode_to_vec(&dict.candidates, cfg) {
-                    buf.extend_from_slice(&b);
-                }
-                if let Ok(b) = bincode::encode_to_vec(&dict.prism, cfg) {
-                    buf.extend_from_slice(&b);
-                }
-                if let Ok(b) = bincode::encode_to_vec(&dict.config, cfg) {
-                    buf.extend_from_slice(&b);
-                }
-                let _ = bin_file.write_all(&buf);
-            }
+            let _ = bin_file.write_all(&dict.to_bin(txt_mtime, config_mtime));
         }
         Ok(dict)
     }
@@ -524,6 +499,28 @@ impl Dict {
             .map_err(|e| format!("无法读取二进制文件内容: {e}"))?;
         Self::try_from((0, 0, buf.as_slice()))
             .map_err(|e| format!("无效的二进制文件 {:?}: {e}", bin_path))
+    }
+
+    /// 将 Dict 序列化为二进制格式（包含 DictMeta 头部）
+    pub fn to_bin(&self, txt_mtime: i64, config_mtime: i64) -> Vec<u8> {
+        let meta = DictMeta {
+            head: ['s', 'e', 'n', 'i', 'm', 'e'],
+            ver: VERSION,
+            txt_mtime,
+            config_mtime,
+        };
+        let cfg = config::standard();
+        let mut buf = Vec::new();
+        // 30 字节头部
+        let mut head = [0u8; 30];
+        bincode::encode_into_slice(meta, &mut head, cfg).unwrap();
+        buf.extend_from_slice(&head);
+        // 按顺序编码 arena, candidates, prism, config
+        buf.extend(bincode::encode_to_vec(&self.arena, cfg).unwrap());
+        buf.extend(bincode::encode_to_vec(&self.candidates, cfg).unwrap());
+        buf.extend(bincode::encode_to_vec(&self.prism, cfg).unwrap());
+        buf.extend(bincode::encode_to_vec(&self.config, cfg).unwrap());
+        buf
     }
 
     pub fn reachable(&self, chars: &[char]) -> bool {
