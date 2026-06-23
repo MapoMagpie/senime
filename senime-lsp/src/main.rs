@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -446,61 +446,28 @@ pub struct Args {
 /// Build a new InputAnalyzer from the given table path.
 fn build_engine(table_path: &str) -> std::result::Result<InputAnalyzer, String> {
     let dict = Dict::try_load(table_path)?;
-    let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
-        let hint = PathBuf::from(path)
+    let reverse_dict = dict.config().reverse_dict.as_ref().map(|sec_table_path| {
+        let hint = PathBuf::from(sec_table_path)
             .file_name()
             .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
             .unwrap_or("反".to_string());
-        (Dict::load(secondary_dict_path(table_path, path)), hint)
+        (
+            Dict::load(secondary_dict_path(table_path, sec_table_path)),
+            hint,
+        )
     });
     Ok(InputAnalyzer::new(dict, reverse_dict))
-}
-
-/// Collect all file paths that should be watched for changes.
-fn collect_watch_paths(table_path: &str, dict: &Dict) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let table = PathBuf::from(table_path);
-    paths.push(table.clone());
-
-    // If loaded from .toml, also watch the resolved .txt path
-    if let Some(dict_name) = &dict.config().dict {
-        let resolved = secondary_dict_path(table_path, dict_name);
-        if resolved != table {
-            paths.push(resolved);
-        }
-    }
-
-    // Watch reverse dict if configured
-    if let Some(sec_name) = &dict.config().reverse_dict {
-        let resolved = secondary_dict_path(table_path, sec_name);
-        if resolved != table {
-            paths.push(resolved);
-        }
-    }
-
-    paths.sort();
-    paths.dedup();
-    paths
 }
 
 /// Spawn a background file watcher that rebuilds the engine on changes.
 fn spawn_watcher(
     engine: Arc<ArcSwap<InputAnalyzer>>,
-    table_path: String,
-    watch_paths: Vec<PathBuf>,
+    table_path: &str,
 ) -> notify::Result<notify::RecommendedWatcher> {
-    // Collect the parent directories to watch (handles vim-style atomic replace via rename).
-    let watch_dirs: HashSet<PathBuf> = watch_paths
-        .iter()
-        .filter_map(|p| p.parent().map(PathBuf::from))
-        .collect();
-
     let (tx, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(tx)?;
-
-    for dir in &watch_dirs {
-        watcher.watch(dir, RecursiveMode::NonRecursive)?;
-    }
+    let table_path = table_path.to_owned();
+    watcher.watch(Path::new(&table_path), RecursiveMode::NonRecursive)?;
 
     // Debounce thread: drain events, wait, then rebuild.
     std::thread::spawn(move || {
@@ -536,12 +503,10 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let engine = build_engine(&args.table).expect("failed to load dict");
-    let dict_ref = engine.get_dict();
-    let watch_paths = collect_watch_paths(&args.table, dict_ref);
     let engine = Arc::new(ArcSwap::from_pointee(engine));
 
     // Spawn file watcher — failure is non-fatal.
-    let _watcher = spawn_watcher(engine.clone(), args.table.clone(), watch_paths)
+    let _watcher = spawn_watcher(engine.clone(), args.table.as_str())
         .map_err(|e| log::warn!("[senime] file watcher init failed: {e}"))
         .ok();
 
