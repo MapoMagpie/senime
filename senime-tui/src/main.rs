@@ -13,7 +13,6 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{event, execute};
-use dirs::data_dir;
 use ratatui::Terminal;
 use ratatui::layout::Position;
 use ratatui::layout::Size;
@@ -43,8 +42,9 @@ pub struct Args {
     /// 如果指定的是配置文件，则需要在配置中指定码表文件。
     /// 如果指定的是码表文件，其结构应为: 字词<TAB>编码<TAB>权重(可选) 每行，当没有权重时则以行的顺序判断编码对应的字词的首选还是候选。
     /// 同时，还可以直接指定二进制格式的码表文件，它是由本程序编译码表后产生的bin文件。
+    /// 如果不指定此参数，默认将尝试加载 `XDG_CONFIG_HOME/senime/config.toml`
     #[arg(short, long, verbatim_doc_comment)]
-    pub table: String,
+    pub table: Option<String>,
 
     /// 将此文件中的内容作为预设文本
     /// 此功能类似赛码器，将以灰色的文本展示这些预设文本
@@ -68,6 +68,10 @@ pub struct Args {
     /// 退出程序时，将输入的内容输出到标准输出流
     #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub stdout: bool,
+
+    /// 是否保存输入记录，退出程序后，会将输入内容与额外信息(速度、击键、耗时、码长等)保存到`XDG_DATA_HOME/senitui`中
+    #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
+    pub record: bool,
 }
 
 fn read_stdin() -> Result<String, std::io::Error> {
@@ -128,11 +132,26 @@ fn create_backend() -> Result<CrosstermBackend<Stdout>, Box<dyn std::error::Erro
     Ok(backend)
 }
 
+fn get_default_table() -> Result<String, std::io::Error> {
+    use std::io::{Error, ErrorKind};
+    // 寻找XDG_CONFIG_HOME/senime/config.toml，并检查文件是否存在，不存在时，返回错误。
+    dirs::config_dir()
+        .map(|dir| dir.join("senime").join("config.toml"))
+        .filter(|path| path.is_file())
+        .map(|path| path.to_str().unwrap().to_owned())
+        .ok_or(Error::new(
+            ErrorKind::NotFound,
+            "未指定码表文件或配置文件，且无法找到默认配置文件路径",
+        ))
+}
+
 // TODO: 实现中间编辑，删除新增
-// TODO: 重构setpending，接续分词，降低复杂性
-// TODO: 数据记录，每次使用时，生成一个时间相关的ID，并在适当的时候将所有的输入记录保存下来
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let table_path: String = match args.table {
+        Some(t) => t,
+        None => get_default_table()?,
+    };
     let preset: Option<Vec<char>> = if args.stdin {
         Some(read_stdin()?)
     } else if let Some(preset_path) = args.preset {
@@ -151,13 +170,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let time_id = generate_time_id();
     // 输入法引擎
     let (ime, reverse_key) = {
-        let dict = Dict::load(&args.table);
-        let reverse_dict = dict.config().reverse_dict.as_ref().map(|path| {
-            let hint = PathBuf::from(path)
+        let dict = Dict::try_load(&table_path)?;
+        let reverse_dict = dict.config().reverse_dict.as_ref().map(|sec_table_path| {
+            let hint = PathBuf::from(sec_table_path)
                 .file_name()
                 .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
                 .unwrap_or("反".to_string());
-            (Dict::load(secondary_dict_path(&args.table, path)), hint)
+            (
+                Dict::load(secondary_dict_path(&table_path, sec_table_path)),
+                hint,
+            )
         });
         let reverse_key = dict.config().reverse_key.unwrap();
         (InputAnalyzer::new(dict, reverse_dict), reverse_key)
@@ -193,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                         ctx.calc_measurement();
-                        let _ = write_input_data(&time_id, &ctx);
+                        let _ = record_input_data(&time_id, &ctx);
                     }
                     KeyCode::Esc => {
                         break;
@@ -299,11 +321,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         terminal.show_cursor()?;
     }
-    if let Err(err) = write_input_data(&time_id, &ctx) {
-        eprintln!("写入输入数据时出错: {:?}", err);
-    }
     if args.stdout {
         println!("{}", ctx.get_sentence().collect::<String>())
+    }
+    if args.record {
+        record_input_data(&time_id, &ctx)?;
     }
     Ok(())
 }
@@ -457,9 +479,9 @@ fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> 
 /// 输出文件：
 ///       文件1、输入文本
 ///       文件2、chunk_1>计量信息 chunk_2>输入记录 chunk_3预设文本
-fn write_input_data(id: &str, ctx: &Context) -> Result<(), std::io::Error> {
+fn record_input_data(id: &str, ctx: &Context) -> Result<(), std::io::Error> {
     let fire_prefix = format!("sentui_{id}_");
-    let state_dir = match data_dir() {
+    let state_dir = match dirs::data_dir() {
         Some(mut dir) => {
             dir.push("senitui");
             if !dir.exists() {
