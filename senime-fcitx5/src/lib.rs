@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use notify::{RecursiveMode, Watcher};
-use senime_lib::{AnalysisResult, Dict, InputAnalyzer, input_analyzer::Tag, secondary_dict_path};
+use senime_lib::{AnalysisResult, Dict, InputAnalyzer, input_analyzer::Tag, resolve_relative_path};
 use std::{
     cell::RefCell,
     ffi::{CStr, CString, c_char},
@@ -105,6 +105,14 @@ pub struct SenimeKeyEvent {
 }
 
 #[repr(C)]
+pub struct SenimeKeyConfig {
+    pub toggle_sym: u32,
+    pub toggle_states: u32,
+    pub trigger_sym: u32,
+    pub trigger_states: u32,
+}
+
+#[repr(C)]
 pub struct SenimeKeyEventResult {
     pub accepted: bool,
     pub chinese_mode: bool,
@@ -118,14 +126,28 @@ pub struct SenimeState {
     engine: Arc<ArcSwap<InputAnalyzer>>,
     input: String,
     chinese_mode: bool,
+    /// 中英切换键 (keysym, modifiers)
+    toggle_key: (u32, u32),
+    /// 临时中文触发键 (keysym, modifiers)
+    trigger_key: (u32, u32),
+    /// 临时中文触发字符（由 trigger_key 的 keysym 推导）
+    trigger_char: Option<char>,
 }
 
 impl SenimeState {
-    fn new(engine: Arc<ArcSwap<InputAnalyzer>>) -> Self {
+    fn new(
+        engine: Arc<ArcSwap<InputAnalyzer>>,
+        toggle_key: (u32, u32),
+        trigger_key: (u32, u32),
+    ) -> Self {
+        let trigger_char = keysym_to_char(trigger_key.0);
         Self {
             engine,
             input: String::new(),
             chinese_mode: false,
+            toggle_key,
+            trigger_key,
+            trigger_char,
         }
     }
 
@@ -138,8 +160,9 @@ impl SenimeState {
         let sym = key.sym;
         let states = key.states;
 
-        // Alt+J: toggle Chinese mode
-        if sym == FCITX_KEY_J && (states & FCITX_MOD_ALT) != 0 {
+        // 中英切换键：匹配配置的 keysym 和修饰符
+        let (toggle_sym, toggle_mods) = self.toggle_key;
+        if toggle_sym != 0 && sym == toggle_sym && (states & toggle_mods) == toggle_mods {
             let mut cmds = Vec::new();
             if self.chinese_mode {
                 cmds.push(SenimeCommand::with_commit_text(self.input.clone()));
@@ -157,12 +180,20 @@ impl SenimeState {
             return (true, cmds);
         }
 
-        // English mode handling
+        // 英文模式处理
         if !self.chinese_mode {
-            if self.input.starts_with('`') {
+            let (trigger_sym, trigger_mods) = self.trigger_key;
+            // 已进入临时中文模式（输入缓冲以触发字符开头）
+            if matches!(self.trigger_char, Some(ch) if self.input.starts_with(ch)) {
                 return self.chinese_mode(sym, states, true);
-            } else if sym == FCITX_KEY_quoteleft {
-                self.input.push('`');
+            // 按下触发键，进入临时中文模式
+            } else if trigger_sym != 0
+                && sym == trigger_sym
+                && (states & trigger_mods) == trigger_mods
+            {
+                if let Some(ch) = self.trigger_char {
+                    self.input.push(ch);
+                }
                 let cmds = vec![
                     SenimeCommand::with_preedit_text(":(中)".to_string()),
                     SenimeCommand::with_type(SenimeCommandType::UpdateUI),
@@ -234,14 +265,15 @@ impl SenimeState {
 
     /// Core update: analyze input and produce commands.
     fn do_update(&mut self, temp_chinese_mode: bool, cmds: &mut Vec<SenimeCommand>) {
-        let chars: Vec<char> = if temp_chinese_mode {
-            self.input.chars().filter(|&c| c != '`').collect()
+        let trigger_ch = self.trigger_char;
+        let chars: Vec<char> = if let (true, Some(ch)) = (temp_chinese_mode, trigger_ch) {
+            self.input.chars().filter(|&c| c != ch).collect()
         } else {
             self.input.chars().collect()
         };
         if chars.is_empty() {
-            if self.input.len() == 2 {
-                cmds.push(SenimeCommand::with_commit_text("`".to_string()));
+            if let Some(ch) = trigger_ch.filter(|_| self.input.len() == 2) {
+                cmds.push(SenimeCommand::with_commit_text(ch.to_string()));
                 self.input.clear();
             } else {
                 cmds.push(SenimeCommand::with_preedit_text("".to_string()));
@@ -295,7 +327,7 @@ impl SenimeState {
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
         } else {
             // 临时中文模式
-            if self.input.ends_with('`') {
+            if matches!(trigger_ch, Some(c) if self.input.ends_with(c)) {
                 // 临时中文模式结束
                 self.input.clear();
                 cmds.push(SenimeCommand::with_commit_text(
@@ -361,16 +393,19 @@ fn into_c_string(value: String) -> *mut c_char {
 /// Build a new engine inner from the given table path.
 fn build_engine(table_path: &str) -> Result<InputAnalyzer, String> {
     let dict = Dict::try_load(table_path)?;
-    let reverse_dict = dict.config().reverse_dict.as_ref().map(|sec_table_path| {
-        let hint = PathBuf::from(sec_table_path)
-            .file_name()
-            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-            .unwrap_or("反".to_string());
-        (
-            Dict::load(secondary_dict_path(table_path, sec_table_path)),
-            hint,
-        )
-    });
+    let reverse_dict = dict
+        .config()
+        .reverse_dict
+        .as_ref()
+        .map(|sec_table_path| {
+            let hint = PathBuf::from(sec_table_path)
+                .file_name()
+                .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+                .unwrap_or("反".to_string());
+            Dict::try_load(resolve_relative_path(Path::new(table_path), sec_table_path))
+                .map(|sec_dict| (sec_dict, hint))
+        })
+        .transpose()?;
     Ok(InputAnalyzer::new(dict, reverse_dict))
 }
 
@@ -459,12 +494,12 @@ pub unsafe extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut Se
     };
     let result: Result<Box<SenimeEngine>, String> = (|| {
         let engine = build_engine(&table_path)?;
-        let mut watch_paths = vec![table_path];
+        let mut watch_paths = vec![table_path.clone()];
         if let Some(dict_path) = engine.get_dict().config().dict.as_ref() {
-            watch_paths.push(dict_path.to_owned());
+            watch_paths.push(resolve_relative_path(Path::new(&table_path), dict_path));
         }
         if let Some(sec_dict_path) = engine.get_dict().config().reverse_dict.as_ref() {
-            watch_paths.push(sec_dict_path.to_owned());
+            watch_paths.push(resolve_relative_path(Path::new(&table_path), sec_dict_path));
         }
         watch_paths.dedup();
         let engine = Arc::new(ArcSwap::from_pointee(engine));
@@ -551,15 +586,32 @@ fn keysym_to_char(sym: u32) -> Option<char> {
 /// # Safety
 ///
 /// `engine` 必须是由 `senime_engine_new` 返回的有效指针。
+/// `key_config` 可以为 null（使用默认值）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn senime_state_new(engine: *const SenimeEngine) -> *mut SenimeState {
+pub unsafe extern "C" fn senime_state_new(
+    engine: *const SenimeEngine,
+    key_config: *const SenimeKeyConfig,
+) -> *mut SenimeState {
     clear_last_error();
     if engine.is_null() {
         set_last_error("engine is null");
         return ptr::null_mut();
     }
     let engine = unsafe { &*engine };
-    Box::into_raw(Box::new(SenimeState::new(engine.inner.clone())))
+    let (toggle_key, trigger_key) = if key_config.is_null() {
+        ((FCITX_KEY_J, FCITX_MOD_ALT), (FCITX_KEY_quoteleft, 0))
+    } else {
+        let cfg = unsafe { &*key_config };
+        (
+            (cfg.toggle_sym, cfg.toggle_states),
+            (cfg.trigger_sym, cfg.trigger_states),
+        )
+    };
+    Box::into_raw(Box::new(SenimeState::new(
+        engine.inner.clone(),
+        toggle_key,
+        trigger_key,
+    )))
 }
 
 /// 释放输入状态实例。
@@ -680,5 +732,140 @@ pub unsafe extern "C" fn senime_key_event_result_free(result: *mut SenimeKeyEven
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use senime_lib::{Config, Dict, InputAnalyzer};
+
+    fn dummy_engine() -> Arc<ArcSwap<InputAnalyzer>> {
+        let dict = Dict::from_str_with_config("a\t啊\t1\n", Config::default()).unwrap();
+        Arc::new(ArcSwap::from_pointee(InputAnalyzer::new(dict, None)))
+    }
+
+    fn make_key(sym: u32, states: u32) -> SenimeKeyEvent {
+        SenimeKeyEvent {
+            sym,
+            states,
+            is_release: false,
+        }
+    }
+
+    #[test]
+    fn test_toggle_key_default() {
+        let mut state = SenimeState::new(
+            dummy_engine(),
+            (FCITX_KEY_J, FCITX_MOD_ALT), // Alt+J
+            (FCITX_KEY_quoteleft, 0),     // `
+        );
+        // 初始为英文模式
+        assert!(!state.chinese_mode);
+        // Alt+J 切换到中文
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
+        assert!(accepted);
+        assert!(state.chinese_mode);
+        // 再次 Alt+J 切回英文
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
+        assert!(accepted);
+        assert!(!state.chinese_mode);
+    }
+
+    #[test]
+    fn test_toggle_key_custom() {
+        let mut state = SenimeState::new(
+            dummy_engine(),
+            (FCITX_KEY_space, FCITX_MOD_SHIFT), // Shift+Space
+            (FCITX_KEY_quoteleft, 0),
+        );
+        // Shift+Space 切换
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_space, FCITX_MOD_SHIFT));
+        assert!(accepted);
+        assert!(state.chinese_mode);
+        // Alt+J 不再生效
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
+        assert!(!accepted);
+        assert!(state.chinese_mode);
+    }
+
+    #[test]
+    fn test_toggle_key_unbound() {
+        let mut state = SenimeState::new(
+            dummy_engine(),
+            (0, 0), // 未绑定
+            (FCITX_KEY_quoteleft, 0),
+        );
+        // 任何键都不应触发切换
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
+        assert!(!accepted);
+        assert!(!state.chinese_mode);
+    }
+
+    #[test]
+    fn test_toggle_modifier_matching() {
+        let mut state = SenimeState::new(
+            dummy_engine(),
+            (FCITX_KEY_J, FCITX_MOD_ALT), // Alt+J
+            (FCITX_KEY_quoteleft, 0),
+        );
+        // 仅按 J（无 Alt）不触发
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, 0));
+        assert!(!accepted);
+        assert!(!state.chinese_mode);
+        // Alt+Shift+J（额外修饰符）应触发（因为 (states & alt) == alt）
+        let (accepted, _) =
+            state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT | FCITX_MOD_SHIFT));
+        assert!(accepted);
+        assert!(state.chinese_mode);
+    }
+
+    #[test]
+    fn test_trigger_key_default() {
+        let mut state = SenimeState::new(
+            dummy_engine(),
+            (FCITX_KEY_J, FCITX_MOD_ALT),
+            (FCITX_KEY_quoteleft, 0), // `
+        );
+        // 英文模式下按 ` 进入临时中文
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_quoteleft, 0));
+        assert!(accepted);
+        // 输入缓冲中应有触发字符
+        assert_eq!(state.input, "`");
+    }
+
+    #[test]
+    fn test_trigger_key_custom() {
+        let mut state = SenimeState::new(
+            dummy_engine(),
+            (FCITX_KEY_J, FCITX_MOD_ALT),
+            (FCITX_KEY_semicolon, 0), // ; 作为触发键
+        );
+        // 按 ; 进入临时中文
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_semicolon, 0));
+        assert!(accepted);
+        assert_eq!(state.input, ";");
+        // ` 不再是触发键
+        let mut state2 = SenimeState::new(
+            dummy_engine(),
+            (FCITX_KEY_J, FCITX_MOD_ALT),
+            (FCITX_KEY_semicolon, 0),
+        );
+        let (accepted, _) = state2.key_event(&make_key(FCITX_KEY_quoteleft, 0));
+        assert!(!accepted);
+        assert!(state2.input.is_empty());
+    }
+
+    #[test]
+    fn test_trigger_key_unbound() {
+        let mut state = SenimeState::new(
+            dummy_engine(),
+            (FCITX_KEY_J, FCITX_MOD_ALT),
+            (0, 0), // 未绑定
+        );
+        // 任何键都不应触发临时中文
+        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_quoteleft, 0));
+        assert!(!accepted);
+        assert!(state.input.is_empty());
     }
 }

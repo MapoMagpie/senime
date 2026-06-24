@@ -1,5 +1,6 @@
 #include "engine.h"
 #include "fcitx-utils/keysym.h"
+#include <fcitx-utils/key.h>
 
 #include <fcitx-utils/log.h>
 #include <fcitx/event.h>
@@ -44,7 +45,7 @@ private:
 
 SenimeState::SenimeState(SenimeEngine *engine, InputContext *ic)
     : engine_(engine), ic_(ic),
-      state_(senime_state_new(engine->engine()), senime_state_free) {}
+      state_(senime_state_new(engine->engine(), &engine->keyConfig()), senime_state_free) {}
 
 SenimeState::~SenimeState() = default;
 
@@ -204,8 +205,22 @@ SenimeEngine::SenimeEngine(Instance *instance)
     : instance_(instance),
       factory_([this](InputContext &ic) { return new SenimeState(this, &ic); }) {
     reloadConfig();
+    keyConfig_ = extractKeyConfig(config_);
     reloadEngine();
     instance_->inputContextManager().registerProperty("senimeState", &factory_);
+}
+
+SenimeKeyConfig SenimeEngine::extractKeyConfig(const SenimeConfig &cfg) {
+    SenimeKeyConfig kc{};
+    auto extract = [](const KeyList &list, uint32_t &sym, uint32_t &states) {
+        if (!list.empty()) {
+            sym = static_cast<uint32_t>(list[0].sym());
+            states = static_cast<uint32_t>(list[0].states());
+        }
+    };
+    extract(*cfg.toggleMode, kc.toggle_sym, kc.toggle_states);
+    extract(*cfg.triggerTempChinese, kc.trigger_sym, kc.trigger_states);
+    return kc;
 }
 
 void SenimeEngine::reloadEngine() {
@@ -238,6 +253,7 @@ void SenimeEngine::reloadConfig() { readAsIni(config_, "conf/senime.conf"); }
 void SenimeEngine::setConfig(const RawConfig &rawConfig) {
     config_.load(rawConfig, true);
     safeSaveAsIni(config_, "conf/senime.conf");
+    keyConfig_ = extractKeyConfig(config_);
     reloadEngine();
     instance_->inputContextManager().foreach([this](InputContext *ic) {
         state(ic)->reset();

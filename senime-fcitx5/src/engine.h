@@ -9,6 +9,7 @@
 #include <fcitx-config/configuration.h>
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/option.h>
+#include <fcitx-utils/key.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputcontext.h>
@@ -24,7 +25,12 @@ namespace fcitx {
 
 FCITX_CONFIGURATION(
     SenimeConfig,
-    Option<std::string> tablePath{this, "TablePath", _("Table Path"), ""};)
+    Option<std::string> tablePath{this, "TablePath", _("Table Path"), ""};
+    Option<KeyList> toggleMode{this, "ToggleMode", _("Toggle Chinese/English"),
+                               KeyList{Key("Alt+J")}};
+    Option<KeyList> triggerTempChinese{
+        this, "TriggerTempChinese", _("Trigger Temporary Chinese"),
+        KeyList{Key("grave")}};)
 
 class SenimeEngine;
 
@@ -68,12 +74,16 @@ public:
     ::SenimeEngine *engine() const { return engine_.get(); }
     Instance *instance() const { return instance_; }
     const SenimeConfig &config() const { return config_; }
+    const SenimeKeyConfig &keyConfig() const { return keyConfig_; }
     void reloadEngine();
 private:
     using EnginePtr = std::unique_ptr<::SenimeEngine, decltype(&senime_engine_free)>;
 
+    static SenimeKeyConfig extractKeyConfig(const SenimeConfig &cfg);
+
     Instance *instance_;
     SenimeConfig config_;
+    SenimeKeyConfig keyConfig_{};
     FactoryFor<SenimeState> factory_;
     EnginePtr engine_{nullptr, senime_engine_free};
 };
