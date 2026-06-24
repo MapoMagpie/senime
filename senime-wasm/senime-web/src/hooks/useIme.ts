@@ -21,6 +21,17 @@ const EMPTY_STATE: ImeState = {
   candidates: [],
 };
 
+/** execCommand 回退，用于 navigator.clipboard 不可用时（如 HTTP 环境） */
+function fallbackCopy(text: string) {
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.style.cssText = "position:fixed;left:-9999px";
+  document.body.appendChild(el);
+  el.select();
+  document.execCommand("copy");
+  document.body.removeChild(el);
+}
+
 /**
  * 对 preedit 调用 wasm completion，更新 state。
  * 中间段自动提交到 textarea，最后一段作为 preedit。
@@ -111,36 +122,30 @@ export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextA
     if (textareaRef.current) textareaRef.current.value = "";
   }, []);
 
+  /** 写入剪贴板，兼容 HTTP 等 navigator.clipboard 不可用的环境 */
+  const writeClipboard = useCallback((text: string) => {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  }, []);
+
   /** 复制全部文本到剪贴板 */
   const copyText = useCallback(() => {
-    const ta = textareaRef.current;
-    const text = ta?.value ?? "";
+    const text = textareaRef.current?.value ?? "";
     if (!text) return;
-    navigator.clipboard.writeText(text).catch(() => {
-      const el = document.createElement("textarea");
-      el.value = text;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand("copy");
-      document.body.removeChild(el);
-    });
-  }, []);
+    writeClipboard(text);
+  }, [writeClipboard]);
 
   const copyAndClear = useCallback(() => {
     const ta = textareaRef.current;
     const text = ta?.value ?? "";
     if (!text) return;
-    navigator.clipboard.writeText(text).catch(() => {
-      const el = document.createElement("textarea");
-      el.value = text;
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand("copy");
-      document.body.removeChild(el);
-    });
+    writeClipboard(text);
     setState(EMPTY_STATE);
     if (ta) ta.value = "";
-  }, []);
+  }, [writeClipboard]);
 
   /** 拦截 textarea 的 keydown，IME 相关键 preventDefault */
   const handleKeyDown = useCallback(
