@@ -10,6 +10,8 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
+use crate::util::resolve_relative_path;
+
 /// 连续内存字符串池，所有字符串的 UTF-8 字节存放在一块连续的 Vec<u8> 中，
 /// 通过 (offset, len) 索引访问，避免大量小 String 的堆分配开销。
 #[derive(Debug)]
@@ -187,11 +189,7 @@ fn parse_candidate<'a>(raw: &'a str, columns: &[Column]) -> Result<ParsedCandida
                 ));
             }
         }
-        Ok(ParsedCandidate {
-            code,
-            text,
-            weight,
-        })
+        Ok(ParsedCandidate { code, text, weight })
     }
 }
 
@@ -314,12 +312,12 @@ impl TryFrom<(i64, i64, &[u8])> for Dict {
         let cfg = config::standard();
         let (arena, n1): (StringArena, usize) =
             bincode::decode_from_slice(buf, cfg).map_err(|_| map_err("无效的二进制数据[ARENA]"))?;
-        let (candidates, n2): (Vec<Candidate>, usize) =
-            bincode::decode_from_slice(&buf[n1..], cfg).map_err(|_| map_err("无效的二进制数据[CANDIDATES]"))?;
-        let (prism, n3): (Prism, usize) =
-            bincode::decode_from_slice(&buf[n1 + n2..], cfg).map_err(|_| map_err("无效的二进制数据[PRISM]"))?;
-        let (config, _): (Config, usize) =
-            bincode::decode_from_slice(&buf[n1 + n2 + n3..], cfg).map_err(|_| map_err("无效的二进制数据[CONFIG]"))?;
+        let (candidates, n2): (Vec<Candidate>, usize) = bincode::decode_from_slice(&buf[n1..], cfg)
+            .map_err(|_| map_err("无效的二进制数据[CANDIDATES]"))?;
+        let (prism, n3): (Prism, usize) = bincode::decode_from_slice(&buf[n1 + n2..], cfg)
+            .map_err(|_| map_err("无效的二进制数据[PRISM]"))?;
+        let (config, _): (Config, usize) = bincode::decode_from_slice(&buf[n1 + n2 + n3..], cfg)
+            .map_err(|_| map_err("无效的二进制数据[CONFIG]"))?;
         Ok(Self {
             arena,
             prism,
@@ -363,11 +361,9 @@ impl Dict {
             }
         }
         // 排序：按 code 字典序，code 相同时按 weight 降序
-        parsed.sort_by(|a, b| {
-            match a.code.cmp(b.code) {
-                std::cmp::Ordering::Equal => b.weight.cmp(&a.weight),
-                ord => ord,
-            }
+        parsed.sort_by(|a, b| match a.code.cmp(b.code) {
+            std::cmp::Ordering::Equal => b.weight.cmp(&a.weight),
+            ord => ord,
         });
         // 将所有字符串一次性 push 到 arena（自动去重）
         let mut arena = StringArena::new();
@@ -389,16 +385,6 @@ impl Dict {
     }
 }
 
-/// 解析相对于基准文件所在目录的路径
-fn resolve_relative_path(base_file: &Path, relative: &str) -> PathBuf {
-    let path: PathBuf = relative.into();
-    if path.is_absolute() {
-        path
-    } else {
-        base_file.parent().map(|p| p.join(&path)).unwrap_or(path)
-    }
-}
-
 fn get_mtime_or(path: &Path, default: i64) -> i64 {
     let Ok(metadata) = path.metadata() else {
         return default;
@@ -417,13 +403,6 @@ fn get_mtime_or(path: &Path, default: i64) -> i64 {
 // }
 
 impl Dict {
-    pub fn load<P>(path: P) -> Self
-    where
-        P: Into<PathBuf>,
-    {
-        Self::try_load(path).unwrap_or_else(|e| panic!("{e}"))
-    }
-
     pub fn try_load<P>(path: P) -> Result<Self, String>
     where
         P: Into<PathBuf>,
@@ -448,7 +427,7 @@ impl Dict {
         let mut config: Config =
             toml::from_str(&content).map_err(|e| format!("无法解析配置文件: {e}"))?;
         let dict_name = config.dict.as_ref().ok_or("配置文件中缺少 dict 字段")?;
-        let dict_path = resolve_relative_path(toml_path, dict_name);
+        let dict_path = PathBuf::from(resolve_relative_path(toml_path, dict_name));
         config.patch_punctuations(default_punctuations());
         match dict_path.extension().and_then(|e| e.to_str()) {
             Some("bin") => Self::load_from_bin(&dict_path),
@@ -558,7 +537,7 @@ impl Dict {
     }
 
     /// 迭代所有 candidates 的借用视图
-    pub fn candidates_iter(&self) -> impl Iterator<Item=CandidateView<'_>> {
+    pub fn candidates_iter(&self) -> impl Iterator<Item = CandidateView<'_>> {
         self.candidates.iter().map(move |c| self.candidate_view(c))
     }
 
@@ -807,15 +786,12 @@ zkc 射 1
     fn test_load() {
         let (config_path, _dict_path) = gen_test_dict_files();
         let time_start = Instant::now();
-        let dict = Dict::load(config_path.clone());
+        let dict = Dict::try_load(config_path.clone()).unwrap();
         let time_dict_loaded = Instant::now();
         println!("loaded {} from {:?}", dict.count(), config_path);
         let candidates = dict.search("a".chars().collect::<Vec<_>>().as_slice());
         let time_searched = Instant::now();
-        println!(
-            "searched: {}",
-            candidates.as_ref().map_or(0, |c| c.len())
-        );
+        println!("searched: {}", candidates.as_ref().map_or(0, |c| c.len()));
         assert!(candidates.is_some_and(|cands| cands.len() > 0));
         println!(
             "dict loaded time: {:?}",

@@ -7,7 +7,7 @@ pub mod util;
 pub use dict::{Config, Dict};
 pub use input_analyzer::{AnalysisResult, CandidateRich, InputAnalyzer};
 pub use lookup_code::Looker;
-pub use util::secondary_dict_path;
+pub use util::resolve_relative_path;
 
 #[cfg(test)]
 pub mod test_utils;

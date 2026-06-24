@@ -1805,6 +1805,7 @@ name = "senime-fcitx5"
 version = "0.0.1"
 dependencies = [
  "arc-swap",
+ "dirs",
  "notify",
  "senime-lib",
 ]
@@ -1828,6 +1829,7 @@ dependencies = [
  "arc-swap",
  "clap",
  "dashmap 6.1.0",
+ "dirs",
  "log",
  "notify",
  "ropey",

@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use log::LevelFilter;
 use notify::{RecursiveMode, Watcher};
 use ropey::Rope;
-use senime_lib::{AnalysisResult, Dict, InputAnalyzer, secondary_dict_path};
+use senime_lib::{AnalysisResult, Dict, InputAnalyzer, resolve_relative_path};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -447,16 +447,19 @@ pub struct Args {
 /// Build a new InputAnalyzer from the given table path.
 fn build_engine(table_path: &str) -> std::result::Result<InputAnalyzer, String> {
     let dict = Dict::try_load(table_path)?;
-    let reverse_dict = dict.config().reverse_dict.as_ref().map(|sec_table_path| {
-        let hint = PathBuf::from(sec_table_path)
-            .file_name()
-            .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-            .unwrap_or("反".to_string());
-        (
-            Dict::load(secondary_dict_path(table_path, sec_table_path)),
-            hint,
-        )
-    });
+    let reverse_dict = dict
+        .config()
+        .reverse_dict
+        .as_ref()
+        .map(|sec_table_path| {
+            let hint = PathBuf::from(sec_table_path)
+                .file_name()
+                .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+                .unwrap_or("反".to_string());
+            Dict::try_load(resolve_relative_path(Path::new(table_path), sec_table_path))
+                .map(|sec_dict| (sec_dict, hint))
+        })
+        .transpose()?;
     Ok(InputAnalyzer::new(dict, reverse_dict))
 }
 
@@ -534,12 +537,12 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let engine = build_engine(&table_path).expect("failed to load dict");
-    let mut watch_paths = vec![table_path];
+    let mut watch_paths = vec![table_path.clone()];
     if let Some(dict_path) = engine.get_dict().config().dict.as_ref() {
-        watch_paths.push(dict_path.to_owned());
+        watch_paths.push(resolve_relative_path(Path::new(&table_path), dict_path));
     }
     if let Some(sec_dict_path) = engine.get_dict().config().reverse_dict.as_ref() {
-        watch_paths.push(sec_dict_path.to_owned());
+        watch_paths.push(resolve_relative_path(Path::new(&table_path), sec_dict_path));
     }
     watch_paths.dedup();
     let engine = Arc::new(ArcSwap::from_pointee(engine));

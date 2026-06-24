@@ -24,7 +24,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 use ratatui::widgets::{Block, Borders};
 
-use senime_lib::secondary_dict_path;
+use senime_lib::resolve_relative_path;
 use senime_lib::{AnalysisResult, Dict, InputAnalyzer, Looker};
 
 use crate::context::{Context, WrappedText};
@@ -171,16 +171,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 输入法引擎
     let (ime, reverse_key) = {
         let dict = Dict::try_load(&table_path)?;
-        let reverse_dict = dict.config().reverse_dict.as_ref().map(|sec_table_path| {
-            let hint = PathBuf::from(sec_table_path)
-                .file_name()
-                .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-                .unwrap_or("反".to_string());
-            (
-                Dict::load(secondary_dict_path(&table_path, sec_table_path)),
-                hint,
-            )
-        });
+        let reverse_dict = dict
+            .config()
+            .reverse_dict
+            .as_ref()
+            .map(|sec_table_path| {
+                let hint = PathBuf::from(sec_table_path)
+                    .file_name()
+                    .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
+                    .unwrap_or("反".to_string());
+                Dict::try_load(resolve_relative_path(
+                    Path::new(&table_path),
+                    sec_table_path,
+                ))
+                .map(|sec_dict| (sec_dict, hint))
+            })
+            .transpose()?;
         let reverse_key = dict.config().reverse_key.unwrap();
         (InputAnalyzer::new(dict, reverse_dict), reverse_key)
     };
