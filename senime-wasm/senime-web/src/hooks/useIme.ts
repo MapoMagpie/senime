@@ -10,11 +10,14 @@ export interface CandidateItem {
 export interface ImeState {
   /** 当前正在编码但未确认的文本（类似 fcitx5 的 preedit） */
   preedit: string;
+  /** 最后一段的查询结果文本（高亮显示） */
+  preeditText: string;
   candidates: CandidateItem[];
 }
 
 const EMPTY_STATE: ImeState = {
   preedit: "",
+  preeditText: "",
   candidates: [],
 };
 
@@ -27,10 +30,11 @@ function runCompletion(
   preedit: string,
   textareaRef: React.RefObject<HTMLTextAreaElement | null>,
   setState: React.Dispatch<React.SetStateAction<ImeState>>,
+  recalc: () => void,
 ) {
   if (!preedit) {
     setState((s) => {
-      if (s.candidates.length > 0) return { preedit: "", candidates: [] };
+      if (s.candidates.length > 0) return { preedit: "", preeditText: "", candidates: [] };
       return s;
     });
     return;
@@ -70,7 +74,8 @@ function runCompletion(
       const pos = ta.selectionStart;
       ta.setRangeText(preedit, pos, pos, "end");
     }
-    setState({ preedit: "", candidates: [] });
+    setState({ preedit: "", preeditText: "", candidates: [] });
+    recalc();
     return;
   }
 
@@ -81,7 +86,8 @@ function runCompletion(
       const pos = ta.selectionStart;
       ta.setRangeText(commitText, pos, pos, "end");
     }
-    setState({ preedit: "", candidates: [] });
+    setState({ preedit: "", preeditText: "", candidates: [] });
+    recalc();
     return;
   }
 
@@ -90,10 +96,11 @@ function runCompletion(
     const pos = ta.selectionStart;
     ta.setRangeText(autoCommit, pos, pos, "end");
   }
-  setState({ preedit: lastSeg.origin, candidates: cands });
+  setState({ preedit: lastSeg.origin, preeditText: lastSeg.text, candidates: cands });
+  recalc();
 }
 
-export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextAreaElement | null>) {
+export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextAreaElement | null>, recalc: () => void) {
   const [state, setState] = useState<ImeState>(EMPTY_STATE);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -177,7 +184,8 @@ export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextA
             const pos = ta.selectionStart;
             ta.setRangeText(s.preedit, pos, pos, "end");
           }
-          setState({ preedit: "", candidates: [] });
+          setState({ preedit: "", preeditText: "", candidates: [] });
+          recalc();
           return;
         }
 
@@ -185,21 +193,21 @@ export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextA
         if (e.key === "Backspace") {
           e.preventDefault();
           const newPreedit = s.preedit.slice(0, -1);
-          runCompletion(newPreedit, textareaRef, setState);
+          runCompletion(newPreedit, textareaRef, setState, recalc);
           return;
         }
 
         // Escape: 清空 preedit
         if (e.key === "Escape") {
           e.preventDefault();
-          setState({ preedit: "", candidates: [] });
+          setState({ preedit: "", preeditText: "", candidates: [] });
           return;
         }
 
         // 字母/数字/空格/符号等可打印字符：追加到 preedit，由 completion API 处理
         if (e.key.length === 1) {
           e.preventDefault();
-          runCompletion(s.preedit + e.key, textareaRef, setState);
+          runCompletion(s.preedit + e.key, textareaRef, setState, recalc);
           return;
         }
 
@@ -210,13 +218,13 @@ export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextA
       // 无 preedit 时：可打印字符开始新的编码（字母、数字、标点等）
       if (e.key.length === 1) {
         e.preventDefault();
-        runCompletion(e.key, textareaRef, setState);
+        runCompletion(e.key, textareaRef, setState, recalc);
         return;
       }
 
       // 其他键：不拦截，textarea 原生处理（Backspace、方向键、Enter 等）
     },
-    [imeReady, copyText, copyAndClear, clear],
+    [imeReady, copyText, copyAndClear, clear, recalc],
   );
 
   return {

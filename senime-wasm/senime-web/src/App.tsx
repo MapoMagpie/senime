@@ -1,16 +1,18 @@
 import { useRef } from "react";
 import { useDictLoader } from "./hooks/useDictLoader";
 import { useIme } from "./hooks/useIme";
+import { useCursorPos } from "./hooks/useCursorPos";
 import { DictLoader } from "./components/DictLoader";
 import { InputArea } from "./components/InputArea";
 import { ActionBar } from "./components/ActionBar";
 
 export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { pos, recalc } = useCursorPos(textareaRef);
   const { status, imeReady, selectionKeys, setSelectionKeys, uploadDict } = useDictLoader();
   const {
     state, handleKeyDown, clear, copyText, copyAndClear,
-  } = useIme(imeReady, textareaRef);
+  } = useIme(imeReady, textareaRef, recalc);
 
   const displayText = textareaRef.current?.value ?? "";
 
@@ -19,6 +21,7 @@ export default function App() {
       <h1 className="app-title">senime-web</h1>
       <DictLoader
         status={status}
+        imeReady={imeReady}
         selectionKeys={selectionKeys}
         onSelectionKeysChange={setSelectionKeys}
         onUpload={uploadDict}
@@ -28,6 +31,7 @@ export default function App() {
         imeReady={imeReady}
         textareaRef={textareaRef}
         onKeyDown={handleKeyDown}
+        cursorPos={pos}
       />
       <ActionBar
         text={displayText}

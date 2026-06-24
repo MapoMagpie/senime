@@ -9,14 +9,18 @@ const PRESETS: { label: string; keys: string[] }[] = [
 
 interface Props {
   status: DictStatus;
+  imeReady: boolean;
   selectionKeys: string[];
   onSelectionKeysChange: (keys: string[]) => void;
   onUpload: (file: File, keys: string[]) => void;
 }
 
-export function DictLoader({ status, selectionKeys, onSelectionKeysChange, onUpload }: Props) {
+export function DictLoader({ status, imeReady, selectionKeys, onSelectionKeysChange, onUpload }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const collapsed = imeReady && !expanded;
 
   const handleConfirm = () => {
     setLocalError(null);
@@ -39,6 +43,15 @@ export function DictLoader({ status, selectionKeys, onSelectionKeysChange, onUpl
     next[index] = ch;
     onSelectionKeysChange(next);
   };
+
+  if (collapsed) {
+    return (
+      <section className="dict-loader dict-collapsed" onClick={() => setExpanded(true)}>
+        <span className="status-ok">✓ 码表已加载</span>
+        <span className="dict-expand-hint">点击重新配置</span>
+      </section>
+    );
+  }
 
   return (
     <section className="dict-loader">
@@ -83,6 +96,11 @@ export function DictLoader({ status, selectionKeys, onSelectionKeysChange, onUpl
           <button onClick={handleConfirm} disabled={status.state === "loading"}>
             确认加载
           </button>
+          {imeReady && (
+            <button onClick={() => setExpanded(false)}>
+              收起
+            </button>
+          )}
           <div className="dict-status">
             {localError && <span className="status-error">✗ {localError}</span>}
             {status.state === "wasm_init" && <span className="status-loading">正在初始化 WASM...</span>}
