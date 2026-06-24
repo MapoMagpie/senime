@@ -374,16 +374,35 @@ fn build_engine(table_path: &str) -> Result<InputAnalyzer, String> {
     Ok(InputAnalyzer::new(dict, reverse_dict))
 }
 
+/// 查找默认码表路径: XDG_CONFIG_HOME/senime/config.toml
+fn get_default_table() -> Result<String, String> {
+    use std::io::{Error, ErrorKind};
+    dirs::config_dir()
+        .map(|dir| dir.join("senime").join("config.toml"))
+        .filter(|path| path.is_file())
+        .map(|path| path.to_str().unwrap().to_owned())
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::NotFound,
+                "未指定配置或码表路径，且无法找到默认配置文件路径",
+            )
+            .to_string()
+        })
+}
+
 /// Spawn a background file watcher that rebuilds the engine on changes.
 fn spawn_watcher(
     inner: Arc<ArcSwap<InputAnalyzer>>,
-    table_path: String,
+    paths: Vec<String>,
 ) -> notify::Result<notify::RecommendedWatcher> {
     let (tx, rx) = mpsc::channel();
 
     // Create the filesystem watcher — events go through the channel.
     let mut watcher = notify::recommended_watcher(tx)?;
-    watcher.watch(Path::new(&table_path), RecursiveMode::NonRecursive)?;
+    let main_path = paths[0].clone();
+    for path in paths {
+        watcher.watch(Path::new(&path), RecursiveMode::NonRecursive)?;
+    }
 
     // Debounce thread: drain events, wait, then rebuild.
     std::thread::spawn(move || {
@@ -400,7 +419,7 @@ fn spawn_watcher(
             // Re-read the filter: events may have been for unrelated files.
             // Since we watch narrow directories (parents of our files),
             // just rebuild unconditionally — it's fast enough.
-            match build_engine(&table_path) {
+            match build_engine(&main_path) {
                 Ok(new_inner) => {
                     inner.swap(Arc::new(new_inner));
                 }
@@ -419,18 +438,39 @@ fn spawn_watcher(
 /// # Safety
 ///
 /// `table_path` 必须是一个有效的、以 NUL 结尾的 C 字符串指针。
+/// 如果 `table_path` 为空字符串，则尝试查找默认配置文件。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEngine {
     clear_last_error();
     let Some(table_path) = cstr_to_str(table_path, "table_path") else {
         return ptr::null_mut();
     };
+    // 空字符串时尝试默认路径
+    let table_path = if table_path.is_empty() {
+        match get_default_table() {
+            Ok(p) => p,
+            Err(msg) => {
+                set_last_error(msg);
+                return ptr::null_mut();
+            }
+        }
+    } else {
+        table_path.to_string()
+    };
     let result: Result<Box<SenimeEngine>, String> = (|| {
-        let engine = build_engine(table_path)?;
+        let engine = build_engine(&table_path)?;
+        let mut watch_paths = vec![table_path];
+        if let Some(dict_path) = engine.get_dict().config().dict.as_ref() {
+            watch_paths.push(dict_path.to_owned());
+        }
+        if let Some(sec_dict_path) = engine.get_dict().config().reverse_dict.as_ref() {
+            watch_paths.push(sec_dict_path.to_owned());
+        }
+        watch_paths.dedup();
         let engine = Arc::new(ArcSwap::from_pointee(engine));
 
         // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
-        let watcher = spawn_watcher(engine.clone(), table_path.to_string())
+        let watcher = spawn_watcher(engine.clone(), watch_paths)
             .map_err(|e| {
                 eprintln!("[senime] file watcher init failed: {e}");
                 e

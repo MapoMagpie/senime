@@ -141,7 +141,7 @@ fn get_default_table() -> Result<String, std::io::Error> {
         .map(|path| path.to_str().unwrap().to_owned())
         .ok_or(Error::new(
             ErrorKind::NotFound,
-            "未指定码表文件或配置文件，且无法找到默认配置文件路径",
+            "未指定 --table 参数，且无法找到默认配置文件路径",
         ))
 }
 

@@ -439,8 +439,9 @@ pub struct Args {
     /// 如果指定的是配置文件，则需要在配置中指定码表文件。
     /// 如果指定的是码表文件，其结构应为: 字词<TAB>编码<TAB>权重(可选) 每行，当没有权重时则以行的顺序判断编码对应的字词的首选还是候选。
     /// 同时，还可以直接指定二进制格式的码表文件，它是由本程序编译码表后产生的bin文件。
+    /// 如果未指定，则默认查找 $XDG_CONFIG_HOME/senime/config.toml。
     #[arg(short, long, verbatim_doc_comment)]
-    pub table: String,
+    pub table: Option<String>,
 }
 
 /// Build a new InputAnalyzer from the given table path.
@@ -461,13 +462,17 @@ fn build_engine(table_path: &str) -> std::result::Result<InputAnalyzer, String> 
 
 /// Spawn a background file watcher that rebuilds the engine on changes.
 fn spawn_watcher(
-    engine: Arc<ArcSwap<InputAnalyzer>>,
-    table_path: &str,
+    inner: Arc<ArcSwap<InputAnalyzer>>,
+    paths: Vec<String>,
 ) -> notify::Result<notify::RecommendedWatcher> {
     let (tx, rx) = mpsc::channel();
+
+    // Create the filesystem watcher — events go through the channel.
     let mut watcher = notify::recommended_watcher(tx)?;
-    let table_path = table_path.to_owned();
-    watcher.watch(Path::new(&table_path), RecursiveMode::NonRecursive)?;
+    let main_path = paths[0].clone();
+    for path in paths {
+        watcher.watch(Path::new(&path), RecursiveMode::NonRecursive)?;
+    }
 
     // Debounce thread: drain events, wait, then rebuild.
     std::thread::spawn(move || {
@@ -475,21 +480,39 @@ fn spawn_watcher(
             // Drain any queued events (batch rapid-fire notifications).
             while rx.try_recv().is_ok() {}
 
+            // Check if any event touches a file we care about.
+            // (We drain above without inspecting — just rebuild on any event
+            //  in the watched directories. The directories are chosen to be
+            //  the parent dirs of our target files, so this is precise enough.)
             std::thread::sleep(Duration::from_millis(200));
 
-            match build_engine(&table_path) {
-                Ok(new_engine) => {
-                    engine.swap(Arc::new(new_engine));
-                    log::info!("[senime] hot-reload succeeded");
+            // Re-read the filter: events may have been for unrelated files.
+            // Since we watch narrow directories (parents of our files),
+            // just rebuild unconditionally — it's fast enough.
+            match build_engine(&main_path) {
+                Ok(new_inner) => {
+                    inner.swap(Arc::new(new_inner));
                 }
                 Err(e) => {
-                    log::warn!("[senime] hot-reload failed: {e}");
+                    eprintln!("[senime] hot-reload failed: {e}");
                 }
             }
         }
     });
 
     Ok(watcher)
+}
+
+fn get_default_table() -> std::result::Result<String, std::io::Error> {
+    use std::io::{Error, ErrorKind};
+    dirs::config_dir()
+        .map(|dir| dir.join("senime").join("config.toml"))
+        .filter(|path| path.is_file())
+        .map(|path| path.to_str().unwrap().to_owned())
+        .ok_or(Error::new(
+            ErrorKind::NotFound,
+            "未指定 --table 参数，且无法找到默认配置文件路径",
+        ))
 }
 
 #[tokio::main]
@@ -499,14 +522,30 @@ async fn main() {
         .unwrap();
     log::info!("start");
 
+    let table_path: String = match args.table {
+        Some(t) => t,
+        None => get_default_table().unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }),
+    };
+
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let engine = build_engine(&args.table).expect("failed to load dict");
+    let engine = build_engine(&table_path).expect("failed to load dict");
+    let mut watch_paths = vec![table_path];
+    if let Some(dict_path) = engine.get_dict().config().dict.as_ref() {
+        watch_paths.push(dict_path.to_owned());
+    }
+    if let Some(sec_dict_path) = engine.get_dict().config().reverse_dict.as_ref() {
+        watch_paths.push(sec_dict_path.to_owned());
+    }
+    watch_paths.dedup();
     let engine = Arc::new(ArcSwap::from_pointee(engine));
 
     // Spawn file watcher — failure is non-fatal.
-    let _watcher = spawn_watcher(engine.clone(), args.table.as_str())
+    let _watcher = spawn_watcher(engine.clone(), watch_paths)
         .map_err(|e| log::warn!("[senime] file watcher init failed: {e}"))
         .ok();
 

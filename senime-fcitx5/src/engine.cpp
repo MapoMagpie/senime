@@ -210,10 +210,6 @@ SenimeEngine::SenimeEngine(Instance *instance)
 
 void SenimeEngine::reloadEngine() {
     engine_.reset();
-    if (config_.tablePath->empty()) {
-        FCITX_WARN() << "Senime table path is empty.";
-        return;
-    }
     engine_.reset(senime_engine_new(config_.tablePath->c_str()));
     if (!engine_) {
         FCITX_WARN() << "Failed to load Senime table: " << lastError();

@@ -11,4 +11,5 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [dependencies]
 senime-lib = { path = "../senime-lib" }
 arc-swap = "1"
+dirs = "6.0.0"
 notify = "7"
