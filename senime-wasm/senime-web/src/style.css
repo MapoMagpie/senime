@@ -169,65 +169,47 @@ button:disabled {
   position: relative;
 }
 
-.hidden-input {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-  top: 0;
-  left: 0;
-  border: none;
-  padding: 0;
-  font-size: 16px; /* 防止 iOS 缩放 */
-}
-
-.input-display {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1rem;
+.ime-textarea {
+  width: 100%;
   min-height: 8rem;
+  padding: 1rem;
   font-family: var(--font-mono);
   font-size: 1.1rem;
   line-height: 1.8;
+  color: var(--fg);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  resize: vertical;
   word-break: break-all;
-  cursor: text;
+  transition: border-color 0.15s;
 }
 
-.hidden-input:focus ~ .input-display {
+.ime-textarea:focus {
   border-color: var(--accent);
 }
 
-.placeholder {
+.ime-textarea::placeholder {
   color: var(--fg-dim);
 }
 
-.confirmed-text {
-  color: var(--fg);
+/* --- preedit bar --- */
+.preedit-bar {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
 }
 
-.pending-text {
+.preedit-text {
   color: var(--accent-secondary);
   text-decoration: underline;
   text-decoration-color: var(--accent-secondary);
   text-underline-offset: 3px;
-}
-
-.cursor-text {
-  color: var(--fg-dim);
-}
-
-.cursor {
-  color: var(--accent);
-  opacity: 1;
-}
-
-.hidden-input:focus ~ .input-display .cursor {
-  animation: blink 1s step-end infinite;
-}
-
-@keyframes blink {
-  50% { opacity: 0; }
 }
 
 /* --- 候选框 --- */

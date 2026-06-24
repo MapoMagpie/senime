@@ -1,19 +1,18 @@
+import { useRef } from "react";
 import { useDictLoader } from "./hooks/useDictLoader";
 import { useIme } from "./hooks/useIme";
 import { DictLoader } from "./components/DictLoader";
 import { InputArea } from "./components/InputArea";
 import { ActionBar } from "./components/ActionBar";
-import { useRef } from "react";
 
 export default function App() {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { status, imeReady, selectionKeys, setSelectionKeys, uploadDict } = useDictLoader();
   const {
-    state, handleKeyDown, handleInput,
-    clear, copyText, copyAndClear, selectCandidate,
-  } = useIme(imeReady, inputRef);
+    state, handleKeyDown, clear, copyText, copyAndClear,
+  } = useIme(imeReady, textareaRef);
 
-  const displayText = state.completedText + state.pendingText + (inputRef.current?.value ?? "");
+  const displayText = textareaRef.current?.value ?? "";
 
   return (
     <div className="app">
@@ -27,10 +26,8 @@ export default function App() {
       <InputArea
         state={state}
         imeReady={imeReady}
-        inputRef={inputRef}
+        textareaRef={textareaRef}
         onKeyDown={handleKeyDown}
-        onInput={handleInput}
-        onSelectCandidate={selectCandidate}
       />
       <ActionBar
         text={displayText}
@@ -39,7 +36,7 @@ export default function App() {
         onCopyAndClear={copyAndClear}
       />
       <div className="help-text">
-        <p>输入编码自动上屏 · <kbd>1</kbd>-<kbd>9</kbd> 选重 · <kbd>Enter</kbd> 提交 · <kbd>Ctrl+C</kbd> 复制 · <kbd>Ctrl+X</kbd> 清空 · <kbd>Ctrl+Shift+X</kbd> 复制并清空</p>
+        <p>输入编码自动上屏 · <kbd>1</kbd>-<kbd>9</kbd> 选重 · <kbd>Enter</kbd> 提交原始编码 · <kbd>Ctrl+C</kbd> 复制 · <kbd>Ctrl+X</kbd> 清空 · <kbd>Ctrl+Shift+X</kbd> 复制并清空</p>
       </div>
     </div>
   );
