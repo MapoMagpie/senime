@@ -1,16 +1,18 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import type { ImeState } from "../hooks/useIme.ts";
 
 interface Props {
   state: ImeState;
   imeReady: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   onKeyDown: (e: KeyboardEvent) => void;
+  onInput: () => void;
   onSelectCandidate: (selectKey: string) => void;
 }
 
-export function InputArea({ state, imeReady, onKeyDown, onSelectCandidate }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const displayRef = useRef<HTMLDivElement>(null);
+export function InputArea({
+  state, imeReady, inputRef, onKeyDown, onInput, onSelectCandidate,
+}: Props) {
 
   // 自动聚焦隐藏 input（触发移动端键盘）
   useEffect(() => {
@@ -19,14 +21,19 @@ export function InputArea({ state, imeReady, onKeyDown, onSelectCandidate }: Pro
     }
   }, [imeReady]);
 
-  // 挂载 keydown 到隐藏 input
+  // 挂载事件到隐藏 input
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    const handler = (e: KeyboardEvent) => onKeyDown(e);
-    el.addEventListener("keydown", handler);
-    return () => el.removeEventListener("keydown", handler);
-  }, [onKeyDown]);
+    const kd = (e: KeyboardEvent) => onKeyDown(e);
+    const inp = () => onInput();
+    el.addEventListener("keydown", kd);
+    el.addEventListener("input", inp);
+    return () => {
+      el.removeEventListener("keydown", kd);
+      el.removeEventListener("input", inp);
+    };
+  }, [onKeyDown, onInput]);
 
   // 点击展示区时聚焦隐藏 input
   const handleClick = () => {
@@ -39,9 +46,11 @@ export function InputArea({ state, imeReady, onKeyDown, onSelectCandidate }: Pro
     inputRef.current?.focus();
   };
 
+  // cursor text 直接从 hidden input 读取（processInput 已同步）
+  const cursorText = inputRef.current?.value ?? "";
+
   return (
     <section className="input-area">
-      {/* 隐藏的真实 input，用于触发移动端键盘 */}
       <input
         ref={inputRef}
         className="hidden-input"
@@ -52,7 +61,6 @@ export function InputArea({ state, imeReady, onKeyDown, onSelectCandidate }: Pro
         spellCheck={false}
       />
       <div
-        ref={displayRef}
         className="input-display"
         onClick={handleClick}
       >
@@ -64,7 +72,7 @@ export function InputArea({ state, imeReady, onKeyDown, onSelectCandidate }: Pro
             {state.pendingText && (
               <span className="pending-text">{state.pendingText}</span>
             )}
-            <span className="cursor-text">{state.userInput}</span>
+            <span className="cursor-text">{cursorText}</span>
             <span className="cursor">|</span>
           </>
         )}
