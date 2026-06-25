@@ -187,8 +187,6 @@ impl SenimeState {
             return (false, vec![]);
         }
         let toggle_key = &self.config.toggle_key;
-        // 单修饰键
-        // let single_mod_key = key_sym_to_states(self.toggle_key.0) == self.toggle_key.1;
         // 中英切换键
         if key.sym == toggle_key.sym && key.states == toggle_key.modifier
         // || (single_mod_key && key.sym == self.toggle_key.0)
