@@ -45,15 +45,11 @@ private:
 
 SenimeState::SenimeState(SenimeEngine *engine, InputContext *ic)
     : engine_(engine), ic_(ic),
-      state_(senime_state_new(engine->engine(), &engine->keyConfig()), senime_state_free) {}
+      state_(senime_state_new(engine->engine()), senime_state_free) {}
 
 SenimeState::~SenimeState() = default;
 
 void SenimeState::processKeyEvent(KeyEvent &event) {
-    if (event.isRelease() || !engine_->engine()) {
-        return;
-    }
-
     const auto &key = event.key();
 
     // Convert Fcitx5 key event to flat C struct
@@ -71,7 +67,7 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
     // FCITX_INFO() << "Senime process_key: " << us << "us";
 
     if (!result) {
-        FCITX_WARN() << "Senime process_key failed: " << lastError();
+        // FCITX_WARN() << "Senime process_key failed: " << lastError();
         return;
     }
 
@@ -104,9 +100,9 @@ void SenimeState::reset() {
 void SenimeState::deactivate() {
     if (!state_) return;
 
-    // Send Return key to commit pending input, then Escape to reset
+    // Send Escape key to commit pending input, then Escape to reset
     SenimeKeyEvent retKey;
-    retKey.sym = FcitxKey_Return;
+    retKey.sym = FcitxKey_Escape;
     retKey.states = 0;
     retKey.is_release = false;
 
@@ -205,27 +201,62 @@ SenimeEngine::SenimeEngine(Instance *instance)
     : instance_(instance),
       factory_([this](InputContext &ic) { return new SenimeState(this, &ic); }) {
     reloadConfig();
-    keyConfig_ = extractKeyConfig(config_);
+    config_ = convertConfig(configDef_);
     reloadEngine();
     instance_->inputContextManager().registerProperty("senimeState", &factory_);
 }
 
-SenimeKeyConfig SenimeEngine::extractKeyConfig(const SenimeConfig &cfg) {
-    SenimeKeyConfig kc{};
+// # 单`Shift_L`在~/.config/fcitx5/conf/senime.conf中的情况
+// Shift+Shift_L
+// # 实际按下左Shift后的key值
+// key event: sym: [65505], state: [0]
+
+// # 单`Shift_R`在~/.config/fcitx5/conf/senime.conf中的情况
+// Shift+Shift_R
+// # 实际按下右Shift后的key值
+// key event: sym: [65506], state: [0]
+
+// # 组合键+字母键在~/.config/fcitx5/conf/senime.conf中的情况
+// Alt+J
+// # 实际按下Alt+j后的key值
+// key event: sym: [74], state: [8]
+
+// # 双组合键在~/.config/fcitx5/conf/senime.conf中的情况
+// Control+Shift+J
+// # 实际按下Ctrl+Shift+J后的key值
+// key event: sym: [74], state: [5]
+
+// # 以下是其他按键对应的SenimeKeyEvent值
+// Shift_L+j
+// key event: sym: [74], state: [0]
+// Shift_R+j
+// key event: sym: [74], state: [0]
+// 单独的j
+// key event: sym: [106], state: [0]
+// Ctrl+Shift_L
+// key event: sym: [65505], state: [4]
+// Shift_L+Return
+// key event: sym: [65293], state: [1]
+// Shift_R+Return
+// key event: sym: [65293], state: [1]
+SenimeConfig SenimeEngine::convertConfig(const SenimeConfigDef &cfg) {
+    SenimeConfig kc{};
     auto extract = [](const KeyList &list, uint32_t &sym, uint32_t &states) {
         if (!list.empty()) {
-            sym = static_cast<uint32_t>(list[0].sym());
-            states = static_cast<uint32_t>(list[0].states());
+            auto key = list[0];
+            sym = static_cast<uint32_t>(key.sym());
+            states = static_cast<uint32_t>(key.states());
         }
     };
     extract(*cfg.toggleMode, kc.toggle_sym, kc.toggle_states);
     extract(*cfg.triggerTempChinese, kc.trigger_sym, kc.trigger_states);
+    kc.table_path = cfg.tablePath->c_str();
     return kc;
 }
 
 void SenimeEngine::reloadEngine() {
     engine_.reset();
-    engine_.reset(senime_engine_new(config_.tablePath->c_str()));
+    engine_.reset(senime_engine_new(&config_));
     if (!engine_) {
         FCITX_WARN() << "Failed to load Senime table: " << lastError();
     }
@@ -248,12 +279,12 @@ void SenimeEngine::deactivate(const InputMethodEntry &entry,
     reset(entry, event);
 }
 
-void SenimeEngine::reloadConfig() { readAsIni(config_, "conf/senime.conf"); }
+void SenimeEngine::reloadConfig() { readAsIni(configDef_, "conf/senime.conf"); }
 
 void SenimeEngine::setConfig(const RawConfig &rawConfig) {
-    config_.load(rawConfig, true);
-    safeSaveAsIni(config_, "conf/senime.conf");
-    keyConfig_ = extractKeyConfig(config_);
+    configDef_.load(rawConfig, true);
+    safeSaveAsIni(configDef_, "conf/senime.conf");
+    config_ = convertConfig(configDef_);
     reloadEngine();
     instance_->inputContextManager().foreach([this](InputContext *ic) {
         state(ic)->reset();

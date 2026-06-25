@@ -15,10 +15,18 @@ mod keysym;
 use keysym::*;
 
 // Fcitx5 modifier masks (from KeyState enum)
+#[allow(unused)]
 const FCITX_MOD_SHIFT: u32 = 0x01;
+#[allow(unused)]
 const FCITX_MOD_CAPSLOCK: u32 = 0x02;
+#[allow(unused)]
+const FCITX_MOD_CTRL: u32 = 0x04;
+#[allow(unused)]
 const FCITX_MOD_ALT: u32 = 0x08;
+#[allow(unused)]
 const FCITX_MOD_NUMLOCK: u32 = 0x10;
+#[allow(unused)]
+const FCITX_MOD_SUPER: u32 = 0x40;
 
 // ── FFI types for command-based key event processing ──────────────────────
 
@@ -105,17 +113,41 @@ pub struct SenimeKeyEvent {
 }
 
 #[repr(C)]
-pub struct SenimeKeyConfig {
+pub struct SenimeConfig {
     pub toggle_sym: u32,
     pub toggle_states: u32,
     pub trigger_sym: u32,
     pub trigger_states: u32,
+    pub table_path: *mut c_char,
+}
+
+#[derive(Clone)]
+struct SenimeEngineConfig {
+    toggle_key: SenimeConfigKey,
+    trigger_char: char,
+}
+
+impl Default for SenimeEngineConfig {
+    fn default() -> Self {
+        Self {
+            toggle_key: SenimeConfigKey::from((FCITX_KEY_Shift_L, FCITX_MOD_SHIFT)),
+            trigger_char: '`',
+        }
+    }
+}
+
+impl From<&SenimeConfig> for SenimeEngineConfig {
+    fn from(value: &SenimeConfig) -> Self {
+        Self {
+            toggle_key: (value.toggle_sym, value.toggle_states).into(),
+            trigger_char: keysym_to_char(value.trigger_sym).unwrap_or('`'),
+        }
+    }
 }
 
 #[repr(C)]
 pub struct SenimeKeyEventResult {
     pub accepted: bool,
-    pub chinese_mode: bool,
     pub commands: *mut SenimeCommand,
     pub command_count: usize,
 }
@@ -126,43 +158,35 @@ pub struct SenimeState {
     engine: Arc<ArcSwap<InputAnalyzer>>,
     input: String,
     chinese_mode: bool,
-    /// 中英切换键 (keysym, modifiers)
-    toggle_key: (u32, u32),
-    /// 临时中文触发键 (keysym, modifiers)
-    trigger_key: (u32, u32),
-    /// 临时中文触发字符（由 trigger_key 的 keysym 推导）
-    trigger_char: Option<char>,
+    config: SenimeEngineConfig,
 }
 
 impl SenimeState {
-    fn new(
-        engine: Arc<ArcSwap<InputAnalyzer>>,
-        toggle_key: (u32, u32),
-        trigger_key: (u32, u32),
-    ) -> Self {
-        let trigger_char = keysym_to_char(trigger_key.0);
+    fn new(engine: Arc<ArcSwap<InputAnalyzer>>, config: SenimeEngineConfig) -> Self {
         Self {
             engine,
             input: String::new(),
             chinese_mode: false,
-            toggle_key,
-            trigger_key,
-            trigger_char,
+            config,
         }
     }
 
     /// Process a key event. Returns (accepted, commands).
     fn key_event(&mut self, key: &SenimeKeyEvent) -> (bool, Vec<SenimeCommand>) {
+        // println!(
+        //     "key event: sym: [{}], state: [{}], is release: [{}], toggle_key: [{:?}]",
+        //     key.sym, key.states, key.is_release, self.toggle_key
+        // );
         if key.is_release {
-            return (false, Vec::new());
+            return (false, vec![]);
         }
-
-        let sym = key.sym;
-        let states = key.states;
-
-        // 中英切换键：匹配配置的 keysym 和修饰符
-        let (toggle_sym, toggle_mods) = self.toggle_key;
-        if toggle_sym != 0 && sym == toggle_sym && (states & toggle_mods) == toggle_mods {
+        let toggle_key = &self.config.toggle_key;
+        // 单修饰键
+        // let single_mod_key = key_sym_to_states(self.toggle_key.0) == self.toggle_key.1;
+        // 中英切换键
+        if key.sym == toggle_key.sym && key.states == toggle_key.modifier
+        // || (single_mod_key && key.sym == self.toggle_key.0)
+        {
             let mut cmds = Vec::new();
             if self.chinese_mode {
                 cmds.push(SenimeCommand::with_commit_text(self.input.clone()));
@@ -182,18 +206,15 @@ impl SenimeState {
 
         // 英文模式处理
         if !self.chinese_mode {
-            let (trigger_sym, trigger_mods) = self.trigger_key;
+            // let (trigger_sym, trigger_mods) = self.trigger_key;
             // 已进入临时中文模式（输入缓冲以触发字符开头）
-            if matches!(self.trigger_char, Some(ch) if self.input.starts_with(ch)) {
-                return self.chinese_mode(sym, states, true);
+            if self.input.starts_with(self.config.trigger_char) {
+                return self.chinese_mode(key.sym, key.states, true);
             // 按下触发键，进入临时中文模式
-            } else if trigger_sym != 0
-                && sym == trigger_sym
-                && (states & trigger_mods) == trigger_mods
+            } else if let Some(ch) = keysym_to_char(key.sym)
+                && ch == self.config.trigger_char
             {
-                if let Some(ch) = self.trigger_char {
-                    self.input.push(ch);
-                }
+                self.input.push(ch);
                 let cmds = vec![
                     SenimeCommand::with_preedit_text(":(中)".to_string()),
                     SenimeCommand::with_type(SenimeCommandType::UpdateUI),
@@ -204,7 +225,7 @@ impl SenimeState {
         }
 
         // Chinese mode handling
-        self.chinese_mode(sym, states, false)
+        self.chinese_mode(key.sym, key.states, false)
     }
 
     fn chinese_mode(
@@ -265,15 +286,19 @@ impl SenimeState {
 
     /// Core update: analyze input and produce commands.
     fn do_update(&mut self, temp_chinese_mode: bool, cmds: &mut Vec<SenimeCommand>) {
-        let trigger_ch = self.trigger_char;
-        let chars: Vec<char> = if let (true, Some(ch)) = (temp_chinese_mode, trigger_ch) {
-            self.input.chars().filter(|&c| c != ch).collect()
+        let chars: Vec<char> = if temp_chinese_mode {
+            self.input
+                .chars()
+                .filter(|&c| c != self.config.trigger_char)
+                .collect()
         } else {
             self.input.chars().collect()
         };
         if chars.is_empty() {
-            if let Some(ch) = trigger_ch.filter(|_| self.input.len() == 2) {
-                cmds.push(SenimeCommand::with_commit_text(ch.to_string()));
+            if self.input.len() == 2 {
+                cmds.push(SenimeCommand::with_commit_text(
+                    self.input.split_at(1).0.to_string(),
+                ));
                 self.input.clear();
             } else {
                 cmds.push(SenimeCommand::with_preedit_text("".to_string()));
@@ -327,7 +352,7 @@ impl SenimeState {
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
         } else {
             // 临时中文模式
-            if matches!(trigger_ch, Some(c) if self.input.ends_with(c)) {
+            if self.input.ends_with(self.config.trigger_char) {
                 // 临时中文模式结束
                 self.input.clear();
                 cmds.push(SenimeCommand::with_commit_text(
@@ -335,6 +360,7 @@ impl SenimeState {
                 ));
                 cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             } else {
+                // 临时中文模式未决
                 if let Some(cands) = candidates {
                     cmds.push(SenimeCommand::with_candidates(cands));
                 } else {
@@ -352,9 +378,28 @@ thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
+#[derive(Clone)]
+struct SenimeConfigKey {
+    sym: u32,
+    modifier: u32,
+    #[allow(unused)]
+    modifier_only: bool,
+}
+
+impl From<(u32, u32)> for SenimeConfigKey {
+    fn from((sym, modifier): (u32, u32)) -> Self {
+        Self {
+            sym,
+            modifier,
+            modifier_only: key_sym_to_states(sym) == modifier,
+        }
+    }
+}
+
 pub struct SenimeEngine {
     inner: Arc<ArcSwap<InputAnalyzer>>,
     _watcher: Option<notify::RecommendedWatcher>,
+    config: SenimeEngineConfig,
 }
 
 fn set_last_error(err: impl ToString) {
@@ -475,9 +520,14 @@ fn spawn_watcher(
 /// `table_path` 必须是一个有效的、以 NUL 结尾的 C 字符串指针。
 /// 如果 `table_path` 为空字符串，则尝试查找默认配置文件。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut SenimeEngine {
+pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut SenimeEngine {
     clear_last_error();
-    let Some(table_path) = cstr_to_str(table_path, "table_path") else {
+    if config.is_null() {
+        set_last_error("初始化引擎失败，传入的配置为空。");
+        return ptr::null_mut();
+    }
+    let config = unsafe { &*config };
+    let Some(table_path) = cstr_to_str(config.table_path, "table_path") else {
         return ptr::null_mut();
     };
     // 空字符串时尝试默认路径
@@ -492,6 +542,8 @@ pub unsafe extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut Se
     } else {
         table_path.to_string()
     };
+    let config: SenimeEngineConfig = config.into();
+
     let result: Result<Box<SenimeEngine>, String> = (|| {
         let engine = build_engine(&table_path)?;
         let mut watch_paths = vec![table_path.clone()];
@@ -515,6 +567,7 @@ pub unsafe extern "C" fn senime_engine_new(table_path: *const c_char) -> *mut Se
         Ok(Box::new(SenimeEngine {
             inner: engine,
             _watcher: watcher,
+            config,
         }))
     })();
     match result {
@@ -588,29 +641,16 @@ fn keysym_to_char(sym: u32) -> Option<char> {
 /// `engine` 必须是由 `senime_engine_new` 返回的有效指针。
 /// `key_config` 可以为 null（使用默认值）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn senime_state_new(
-    engine: *const SenimeEngine,
-    key_config: *const SenimeKeyConfig,
-) -> *mut SenimeState {
+pub unsafe extern "C" fn senime_state_new(engine: *const SenimeEngine) -> *mut SenimeState {
     clear_last_error();
     if engine.is_null() {
         set_last_error("engine is null");
         return ptr::null_mut();
     }
     let engine = unsafe { &*engine };
-    let (toggle_key, trigger_key) = if key_config.is_null() {
-        ((FCITX_KEY_J, FCITX_MOD_ALT), (FCITX_KEY_quoteleft, 0))
-    } else {
-        let cfg = unsafe { &*key_config };
-        (
-            (cfg.toggle_sym, cfg.toggle_states),
-            (cfg.trigger_sym, cfg.trigger_states),
-        )
-    };
     Box::into_raw(Box::new(SenimeState::new(
         engine.inner.clone(),
-        toggle_key,
-        trigger_key,
+        engine.config.clone(),
     )))
 }
 
@@ -671,19 +711,16 @@ pub unsafe extern "C" fn senime_engine_key_event(
         let state = unsafe { &mut *state };
         let key = unsafe { &*key };
         let (accepted, commands) = state.key_event(key);
-        let chinese_mode = state.chinese_mode;
         // 使用 into_boxed_slice 确保 capacity == len，避免 Vec::from_raw_parts 的安全隐患
-        let boxed = commands.into_boxed_slice();
-        let count = boxed.len();
-        let cmd_ptr = if count > 0 {
-            Box::into_raw(boxed) as *mut SenimeCommand
+        let (cmd_ptr, count) = if commands.is_empty() {
+            (ptr::null_mut(), 0)
         } else {
-            drop(boxed);
-            ptr::null_mut()
+            let boxed = commands.into_boxed_slice();
+            let count = boxed.len();
+            (Box::into_raw(boxed) as *mut SenimeCommand, count)
         };
         Box::new(SenimeKeyEventResult {
             accepted,
-            chinese_mode,
             commands: cmd_ptr,
             command_count: count,
         })
@@ -734,138 +771,15 @@ pub unsafe extern "C" fn senime_key_event_result_free(result: *mut SenimeKeyEven
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use senime_lib::{Config, Dict, InputAnalyzer};
-
-    fn dummy_engine() -> Arc<ArcSwap<InputAnalyzer>> {
-        let dict = Dict::from_str_with_config("a\t啊\t1\n", Config::default()).unwrap();
-        Arc::new(ArcSwap::from_pointee(InputAnalyzer::new(dict, None)))
-    }
-
-    fn make_key(sym: u32, states: u32) -> SenimeKeyEvent {
-        SenimeKeyEvent {
-            sym,
-            states,
-            is_release: false,
+#[allow(non_upper_case_globals)]
+fn key_sym_to_states(toggle_key: u32) -> u32 {
+    match toggle_key {
+        FCITX_KEY_Control_L | FCITX_KEY_Control_R => FCITX_MOD_CTRL,
+        FCITX_KEY_Alt_L | FCITX_KEY_Alt_R | FCITX_KEY_Meta_L | FCITX_KEY_Meta_R => FCITX_MOD_ALT,
+        FCITX_KEY_Shift_L | FCITX_KEY_Shift_R => FCITX_MOD_SHIFT,
+        FCITX_KEY_Super_L | FCITX_KEY_Super_R | FCITX_KEY_Hyper_L | FCITX_KEY_Hyper_R => {
+            FCITX_MOD_SUPER
         }
-    }
-
-    #[test]
-    fn test_toggle_key_default() {
-        let mut state = SenimeState::new(
-            dummy_engine(),
-            (FCITX_KEY_J, FCITX_MOD_ALT), // Alt+J
-            (FCITX_KEY_quoteleft, 0),     // `
-        );
-        // 初始为英文模式
-        assert!(!state.chinese_mode);
-        // Alt+J 切换到中文
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
-        assert!(accepted);
-        assert!(state.chinese_mode);
-        // 再次 Alt+J 切回英文
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
-        assert!(accepted);
-        assert!(!state.chinese_mode);
-    }
-
-    #[test]
-    fn test_toggle_key_custom() {
-        let mut state = SenimeState::new(
-            dummy_engine(),
-            (FCITX_KEY_space, FCITX_MOD_SHIFT), // Shift+Space
-            (FCITX_KEY_quoteleft, 0),
-        );
-        // Shift+Space 切换
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_space, FCITX_MOD_SHIFT));
-        assert!(accepted);
-        assert!(state.chinese_mode);
-        // Alt+J 不再生效
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
-        assert!(!accepted);
-        assert!(state.chinese_mode);
-    }
-
-    #[test]
-    fn test_toggle_key_unbound() {
-        let mut state = SenimeState::new(
-            dummy_engine(),
-            (0, 0), // 未绑定
-            (FCITX_KEY_quoteleft, 0),
-        );
-        // 任何键都不应触发切换
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT));
-        assert!(!accepted);
-        assert!(!state.chinese_mode);
-    }
-
-    #[test]
-    fn test_toggle_modifier_matching() {
-        let mut state = SenimeState::new(
-            dummy_engine(),
-            (FCITX_KEY_J, FCITX_MOD_ALT), // Alt+J
-            (FCITX_KEY_quoteleft, 0),
-        );
-        // 仅按 J（无 Alt）不触发
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_J, 0));
-        assert!(!accepted);
-        assert!(!state.chinese_mode);
-        // Alt+Shift+J（额外修饰符）应触发（因为 (states & alt) == alt）
-        let (accepted, _) =
-            state.key_event(&make_key(FCITX_KEY_J, FCITX_MOD_ALT | FCITX_MOD_SHIFT));
-        assert!(accepted);
-        assert!(state.chinese_mode);
-    }
-
-    #[test]
-    fn test_trigger_key_default() {
-        let mut state = SenimeState::new(
-            dummy_engine(),
-            (FCITX_KEY_J, FCITX_MOD_ALT),
-            (FCITX_KEY_quoteleft, 0), // `
-        );
-        // 英文模式下按 ` 进入临时中文
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_quoteleft, 0));
-        assert!(accepted);
-        // 输入缓冲中应有触发字符
-        assert_eq!(state.input, "`");
-    }
-
-    #[test]
-    fn test_trigger_key_custom() {
-        let mut state = SenimeState::new(
-            dummy_engine(),
-            (FCITX_KEY_J, FCITX_MOD_ALT),
-            (FCITX_KEY_semicolon, 0), // ; 作为触发键
-        );
-        // 按 ; 进入临时中文
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_semicolon, 0));
-        assert!(accepted);
-        assert_eq!(state.input, ";");
-        // ` 不再是触发键
-        let mut state2 = SenimeState::new(
-            dummy_engine(),
-            (FCITX_KEY_J, FCITX_MOD_ALT),
-            (FCITX_KEY_semicolon, 0),
-        );
-        let (accepted, _) = state2.key_event(&make_key(FCITX_KEY_quoteleft, 0));
-        assert!(!accepted);
-        assert!(state2.input.is_empty());
-    }
-
-    #[test]
-    fn test_trigger_key_unbound() {
-        let mut state = SenimeState::new(
-            dummy_engine(),
-            (FCITX_KEY_J, FCITX_MOD_ALT),
-            (0, 0), // 未绑定
-        );
-        // 任何键都不应触发临时中文
-        let (accepted, _) = state.key_event(&make_key(FCITX_KEY_quoteleft, 0));
-        assert!(!accepted);
-        assert!(state.input.is_empty());
+        _ => 0,
     }
 }

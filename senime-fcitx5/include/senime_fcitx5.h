@@ -42,29 +42,28 @@ typedef struct SenimeKeyEvent {
     bool is_release;
 } SenimeKeyEvent;
 
-typedef struct SenimeKeyConfig {
+typedef struct SenimeConfig {
     uint32_t toggle_sym;       // 中英切换键 keysym
     uint32_t toggle_states;    // 中英切换键修饰符
     uint32_t trigger_sym;      // 临时中文触发键 keysym
     uint32_t trigger_states;   // 临时中文触发键修饰符
-} SenimeKeyConfig;
+    const char *table_path;
+} SenimeConfig ;
 
 typedef struct SenimeKeyEventResult {
     bool accepted;
-    bool chinese_mode;
     SenimeCommand *commands;
     size_t command_count;
 } SenimeKeyEventResult;
 
 // ── Engine lifecycle ─────────────────────────────────────────────────────
 
-SenimeEngine *senime_engine_new(const char *table_path);
+SenimeEngine *senime_engine_new(const SenimeConfig *config);
 void senime_engine_free(SenimeEngine *engine);
 
 // ── State lifecycle ──────────────────────────────────────────────────────
 
-SenimeState *senime_state_new(const SenimeEngine *engine,
-                              const SenimeKeyConfig *key_config);
+SenimeState *senime_state_new(const SenimeEngine *engine);
 void senime_state_free(SenimeState *state);
 bool senime_state_chinese_mode(const SenimeState *state);
 

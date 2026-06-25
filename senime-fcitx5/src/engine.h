@@ -5,7 +5,6 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 #include <fcitx-config/configuration.h>
 #include <fcitx-config/iniparser.h>
 #include <fcitx-config/option.h>
@@ -24,13 +23,16 @@
 namespace fcitx {
 
 FCITX_CONFIGURATION(
-    SenimeConfig,
+    SenimeConfigDef,
     Option<std::string> tablePath{this, "TablePath", _("Table Path"), ""};
-    Option<KeyList> toggleMode{this, "ToggleMode", _("Toggle Chinese/English"),
-                               KeyList{Key("Alt+J")}};
-    Option<KeyList> triggerTempChinese{
+    Option<KeyList, ListConstrain<KeyConstrain>> toggleMode{
+        this, "ToggleMode", _("Toggle Chinese/English"),
+        KeyList{Key("Shift+Shift_L")},
+        KeyListConstrain(KeyConstrainFlag::AllowModifierOnly)};
+    Option<KeyList, ListConstrain<KeyConstrain>> triggerTempChinese{
         this, "TriggerTempChinese", _("Trigger Temporary Chinese"),
-        KeyList{Key("grave")}};)
+        KeyList{Key("grave")},
+        KeyListConstrain(KeyConstrainFlag::AllowModifierLess)};)
 
 class SenimeEngine;
 
@@ -62,7 +64,7 @@ public:
     void reset(const InputMethodEntry &, InputContextEvent &event) override;
     void deactivate(const InputMethodEntry &entry, InputContextEvent &event) override;
     void reloadConfig() override;
-    const Configuration *getConfig() const override { return &config_; }
+    const Configuration *getConfig() const override { return &configDef_; }
     void setConfig(const RawConfig &rawConfig) override;
 
     std::string subModeIconImpl(const InputMethodEntry &entry,
@@ -73,17 +75,17 @@ public:
     SenimeState *state(InputContext *ic);
     ::SenimeEngine *engine() const { return engine_.get(); }
     Instance *instance() const { return instance_; }
+    const SenimeConfigDef &configDef() const { return configDef_; }
     const SenimeConfig &config() const { return config_; }
-    const SenimeKeyConfig &keyConfig() const { return keyConfig_; }
     void reloadEngine();
 private:
     using EnginePtr = std::unique_ptr<::SenimeEngine, decltype(&senime_engine_free)>;
 
-    static SenimeKeyConfig extractKeyConfig(const SenimeConfig &cfg);
+    static SenimeConfig convertConfig(const SenimeConfigDef &cfg);
 
     Instance *instance_;
-    SenimeConfig config_;
-    SenimeKeyConfig keyConfig_{};
+    SenimeConfigDef configDef_;
+    SenimeConfig config_{};
     FactoryFor<SenimeState> factory_;
     EnginePtr engine_{nullptr, senime_engine_free};
 };
