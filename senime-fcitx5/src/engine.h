@@ -44,6 +44,7 @@ public:
     void processKeyEvent(KeyEvent &event);
     void reset();
     void deactivate();
+    void reloadEngine();
     bool chineseMode() const;
 
 private:

@@ -65,6 +65,7 @@ void senime_engine_free(SenimeEngine *engine);
 
 SenimeState *senime_state_new(const SenimeEngine *engine);
 void senime_state_free(SenimeState *state);
+void senime_state_reset(SenimeState *state);
 bool senime_state_chinese_mode(const SenimeState *state);
 
 // ── Key event processing ─────────────────────────────────────────────────

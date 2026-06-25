@@ -82,19 +82,18 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
 void SenimeState::reset() {
     if (!state_) return;
 
-    // Send Escape key to trigger reset logic in Rust
-    SenimeKeyEvent escKey;
-    escKey.sym = FcitxKey_Escape;
-    escKey.states = 0;
-    escKey.is_release = false;
+    // 直接清空 inputContext 的预编辑和候选框
+    ic_->inputPanel().reset();
+    ic_->updatePreedit();
+    ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
 
-    SenimeKeyEventResult *result = senime_engine_key_event(
-        engine_->engine(), state_.get(), &escKey);
+    // 重置 Rust 侧状态
+    senime_state_reset(state_.get());
+}
 
-    if (result) {
-        executeCommands(result, ic_);
-        senime_key_event_result_free(result);
-    }
+void SenimeState::reloadEngine() {
+    // 销毁旧的 Rust 状态，用新引擎重新创建
+    state_.reset(senime_state_new(engine_->engine()));
 }
 
 void SenimeState::deactivate() {
@@ -287,7 +286,7 @@ void SenimeEngine::setConfig(const RawConfig &rawConfig) {
     config_ = convertConfig(configDef_);
     reloadEngine();
     instance_->inputContextManager().foreach([this](InputContext *ic) {
-        state(ic)->reset();
+        state(ic)->reloadEngine();
         return true;
     });
 }
