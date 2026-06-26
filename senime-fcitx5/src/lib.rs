@@ -254,20 +254,24 @@ impl SenimeState {
             return (false, cmds);
         }
 
-        // Escape / Return
-        if sym == FCITX_KEY_Escape || sym == FCITX_KEY_Return {
-            // 空输入时提交空字符串，非空时提交当前输入
+        // Escape
+        if sym == FCITX_KEY_Escape {
             let cmds = vec![
                 SenimeCommand::with_commit_text(self.input.clone()),
                 SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
                 SenimeCommand::with_type(SenimeCommandType::UpdateUI),
                 SenimeCommand::with_type(SenimeCommandType::UpdateStatusArea),
             ];
-            if sym == FCITX_KEY_Escape {
-                self.chinese_mode = false;
-            }
+            self.chinese_mode = false;
             self.input.clear();
-            return (sym != FCITX_KEY_Return, cmds);
+            return (true, cmds);
+        }
+
+        // Return → 分析后直接提交中文
+        if sym == FCITX_KEY_Return {
+            let mut cmds = Vec::new();
+            self.do_update(temp_chinese_mode, true, &mut cmds);
+            return (false, cmds);
         }
 
         // Backspace
@@ -278,7 +282,7 @@ impl SenimeState {
                 accept = true;
             }
             let mut cmds = Vec::new();
-            self.do_update(temp_chinese_mode, &mut cmds);
+            self.do_update(temp_chinese_mode, false, &mut cmds);
             return (accept, cmds);
         }
 
@@ -286,7 +290,7 @@ impl SenimeState {
         if let Some(ch) = keysym_to_char(sym) {
             self.input.push(ch);
             let mut cmds = Vec::new();
-            self.do_update(temp_chinese_mode, &mut cmds);
+            self.do_update(temp_chinese_mode, false, &mut cmds);
             return (true, cmds);
         }
 
@@ -294,7 +298,12 @@ impl SenimeState {
     }
 
     /// Core update: analyze input and produce commands.
-    fn do_update(&mut self, temp_chinese_mode: bool, cmds: &mut Vec<SenimeCommand>) {
+    fn do_update(
+        &mut self,
+        temp_chinese_mode: bool,
+        just_commit: bool,
+        cmds: &mut Vec<SenimeCommand>,
+    ) {
         let chars: Vec<char> = if temp_chinese_mode {
             self.input
                 .chars()
@@ -334,6 +343,15 @@ impl SenimeState {
         //     "pre_text: [{pre_text}] last_text: [{last_text}] last_input: [{last_input}] last_tag: [{last_tag:?}] candidates: {}",
         //     candidates.as_ref().map_or(0, |cands| cands.len())
         // );
+        if just_commit {
+            self.input.clear();
+            cmds.push(SenimeCommand::with_commit_text(
+                pre_text + last_text.as_str(),
+            ));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+            return;
+        }
         if !temp_chinese_mode {
             // 正常中文模式
             // 如果senime输出了多segment，则将之前的segments的文本作为commit
@@ -361,7 +379,11 @@ impl SenimeState {
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
         } else {
             // 临时中文模式
-            if self.config.trigger_char.is_some_and(|tc| self.input.ends_with(tc)) {
+            if self
+                .config
+                .trigger_char
+                .is_some_and(|tc| self.input.ends_with(tc))
+            {
                 // 临时中文模式结束
                 self.input.clear();
                 cmds.push(SenimeCommand::with_commit_text(
