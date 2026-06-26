@@ -31,7 +31,7 @@ FCITX_CONFIGURATION(
         KeyListConstrain(KeyConstrainFlag::AllowModifierOnly)};
     Option<KeyList, ListConstrain<KeyConstrain>> triggerTempChinese{
         this, "TriggerTempChinese", _("Trigger Temporary Chinese"),
-        KeyList{Key("grave")},
+        KeyList{},
         KeyListConstrain(KeyConstrainFlag::AllowModifierLess)};)
 
 class SenimeEngine;
