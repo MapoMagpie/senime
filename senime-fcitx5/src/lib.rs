@@ -158,6 +158,7 @@ pub struct SenimeState {
     engine: Arc<ArcSwap<InputAnalyzer>>,
     input: String,
     chinese_mode: bool,
+    last_unrelease_key: u32,
     config: SenimeEngineConfig,
 }
 
@@ -167,6 +168,7 @@ impl SenimeState {
             engine,
             input: String::new(),
             chinese_mode: false,
+            last_unrelease_key: 0,
             config,
         }
     }
@@ -179,18 +181,19 @@ impl SenimeState {
 
     /// Process a key event. Returns (accepted, commands).
     fn key_event(&mut self, key: &SenimeKeyEvent) -> (bool, Vec<SenimeCommand>) {
-        // println!(
-        //     "key event: sym: [{}], state: [{}], is release: [{}], toggle_key: [{:?}]",
-        //     key.sym, key.states, key.is_release, self.toggle_key
-        // );
-        if key.is_release {
-            return (false, vec![]);
-        }
         let toggle_key = &self.config.toggle_key;
-        // 中英切换键
-        if key.sym == toggle_key.sym && key.states == toggle_key.modifier
-        // || (single_mod_key && key.sym == self.toggle_key.0)
-        {
+        let mut toggle_chinese_mode =
+            key.sym == toggle_key.sym && key.states == toggle_key.modifier;
+        if key.is_release {
+            toggle_chinese_mode = toggle_key.modifier_only
+                && self.last_unrelease_key == key.sym
+                && toggle_chinese_mode;
+            if !toggle_chinese_mode {
+                return (false, vec![]);
+            }
+        }
+        self.last_unrelease_key = key.sym;
+        if toggle_chinese_mode {
             let mut cmds = Vec::new();
             if self.chinese_mode {
                 cmds.push(SenimeCommand::with_commit_text(self.input.clone()));
@@ -205,12 +208,11 @@ impl SenimeState {
             cmds.push(SenimeCommand::with_type(
                 SenimeCommandType::UpdateStatusArea,
             ));
-            return (true, cmds);
+            // !key.is_release防止下级应用接收到此key的按下事件，但释放事件却被fcitx5拦截，导致该key一直repeat。
+            return (!key.is_release, cmds);
         }
-
         // 英文模式处理
         if !self.chinese_mode {
-            // let (trigger_sym, trigger_mods) = self.trigger_key;
             // 已进入临时中文模式（输入缓冲以触发字符开头）
             if self.input.starts_with(self.config.trigger_char) {
                 return self.chinese_mode(key.sym, key.states, true);
@@ -395,7 +397,7 @@ impl From<(u32, u32)> for SenimeConfigKey {
         Self {
             sym,
             modifier,
-            modifier_only: key_sym_to_states(sym) == modifier,
+            modifier_only: keysym_to_states(sym) == modifier,
         }
     }
 }
@@ -789,7 +791,7 @@ pub unsafe extern "C" fn senime_key_event_result_free(result: *mut SenimeKeyEven
     }
 }
 #[allow(non_upper_case_globals)]
-fn key_sym_to_states(toggle_key: u32) -> u32 {
+fn keysym_to_states(toggle_key: u32) -> u32 {
     match toggle_key {
         FCITX_KEY_Control_L | FCITX_KEY_Control_R => FCITX_MOD_CTRL,
         FCITX_KEY_Alt_L | FCITX_KEY_Alt_R | FCITX_KEY_Meta_L | FCITX_KEY_Meta_R => FCITX_MOD_ALT,
@@ -800,3 +802,20 @@ fn key_sym_to_states(toggle_key: u32) -> u32 {
         _ => 0,
     }
 }
+// println!(
+//     "key event: sym: [{}], state: [{}], is release: [{}], toggle_key: sym [{}] mod [{}] mod only [{}]",
+//     key.sym,
+//     key.states,
+//     key.is_release,
+//     toggle_key.sym,
+//     toggle_key.modifier,
+//     toggle_key.modifier_only
+// );
+// 假设shift_l是切换键，
+// 当按下大写J时到结束，接收的事件为
+// sym: [65505], state: [0], release: [false], toggle_key: sym [65505] mod [1] mod only [false]
+// sym: [74],    state: [0], release: [false], toggle_key: sym [65505] mod [1] mod only [false]
+// sym: [74],    state: [0], release: [true],  toggle_key: sym [65505] mod [1] mod only [false]
+// sym: [65505], state: [1], release: [true],  toggle_key: sym [65505] mod [1] mod only [false]
+// 如果在key.is_release时判断是否是trigger_key，那么本意是输出大写字母J的操作就会触发中文模式切换，这是不对的。
+// 所以，当key.is_release为false时，要记录当前key的状态，用于key.is_release为true时的判断
