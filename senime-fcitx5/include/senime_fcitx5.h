@@ -45,7 +45,7 @@ typedef struct SenimeKeyEvent {
 typedef struct SenimeConfig {
     uint32_t toggle_sym;       // 中英切换键 keysym
     uint32_t toggle_states;    // 中英切换键修饰符
-    uint32_t trigger_sym;      // 临时中文触发键 keysym
+    uint32_t trigger_sym;      // 临时中文触发键 keysym (0 = 禁用)
     uint32_t trigger_states;   // 临时中文触发键修饰符
     const char *table_path;
 } SenimeConfig ;

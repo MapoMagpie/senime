@@ -124,14 +124,15 @@ pub struct SenimeConfig {
 #[derive(Clone)]
 struct SenimeEngineConfig {
     toggle_key: SenimeConfigKey,
-    trigger_char: char,
+    /// 当为 None 时，禁用临时中文模式
+    trigger_char: Option<char>,
 }
 
 impl Default for SenimeEngineConfig {
     fn default() -> Self {
         Self {
             toggle_key: SenimeConfigKey::from((FCITX_KEY_Shift_L, FCITX_MOD_SHIFT)),
-            trigger_char: '`',
+            trigger_char: None,
         }
     }
 }
@@ -140,7 +141,7 @@ impl From<&SenimeConfig> for SenimeEngineConfig {
     fn from(value: &SenimeConfig) -> Self {
         Self {
             toggle_key: (value.toggle_sym, value.toggle_states).into(),
-            trigger_char: keysym_to_char(value.trigger_sym).unwrap_or('`'),
+            trigger_char: keysym_to_char(value.trigger_sym),
         }
     }
 }
@@ -213,20 +214,22 @@ impl SenimeState {
         }
         // 英文模式处理
         if !self.chinese_mode {
-            // 已进入临时中文模式（输入缓冲以触发字符开头）
-            if self.input.starts_with(self.config.trigger_char) {
-                return self.chinese_mode(key.sym, key.states, true);
-            // 按下触发键，进入临时中文模式
-            } else if let Some(ch) = keysym_to_char(key.sym)
-                && ch == self.config.trigger_char
-            {
-                self.input.push(ch);
-                let cmds = vec![
-                    SenimeCommand::with_preedit_text(":(中)".to_string()),
-                    SenimeCommand::with_type(SenimeCommandType::UpdateUI),
-                ];
-                return (true, cmds);
-            };
+            if let Some(trigger_char) = self.config.trigger_char {
+                // 已进入临时中文模式（输入缓冲以触发字符开头）
+                if self.input.starts_with(trigger_char) {
+                    return self.chinese_mode(key.sym, key.states, true);
+                // 按下触发键，进入临时中文模式
+                } else if let Some(ch) = keysym_to_char(key.sym)
+                    && ch == trigger_char
+                {
+                    self.input.push(ch);
+                    let cmds = vec![
+                        SenimeCommand::with_preedit_text(":(中)".to_string()),
+                        SenimeCommand::with_type(SenimeCommandType::UpdateUI),
+                    ];
+                    return (true, cmds);
+                };
+            }
             return (false, vec![]);
         }
 
@@ -295,7 +298,7 @@ impl SenimeState {
         let chars: Vec<char> = if temp_chinese_mode {
             self.input
                 .chars()
-                .filter(|&c| c != self.config.trigger_char)
+                .filter(|&c| self.config.trigger_char.is_none_or(|tc| c != tc))
                 .collect()
         } else {
             self.input.chars().collect()
@@ -358,7 +361,7 @@ impl SenimeState {
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
         } else {
             // 临时中文模式
-            if self.input.ends_with(self.config.trigger_char) {
+            if self.config.trigger_char.is_some_and(|tc| self.input.ends_with(tc)) {
                 // 临时中文模式结束
                 self.input.clear();
                 cmds.push(SenimeCommand::with_commit_text(
