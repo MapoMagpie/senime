@@ -23,7 +23,7 @@
 namespace fcitx {
 
 FCITX_CONFIGURATION(
-    SenimeConfigDef,
+    SenimeFcitxConfig,
     Option<std::string> tablePath{this, "TablePath", _("Table Path"), ""};
     Option<KeyList, ListConstrain<KeyConstrain>> toggleMode{
         this, "ToggleMode", _("Toggle Chinese/English"),
@@ -76,16 +76,16 @@ public:
     SenimeState *state(InputContext *ic);
     ::SenimeEngine *engine() const { return engine_.get(); }
     Instance *instance() const { return instance_; }
-    const SenimeConfigDef &configDef() const { return configDef_; }
+    const SenimeFcitxConfig &configDef() const { return configDef_; }
     const SenimeConfig &config() const { return config_; }
     void reloadEngine();
 private:
     using EnginePtr = std::unique_ptr<::SenimeEngine, decltype(&senime_engine_free)>;
 
-    static SenimeConfig convertConfig(const SenimeConfigDef &cfg);
+    static SenimeConfig convertConfig(const SenimeFcitxConfig &cfg);
 
     Instance *instance_;
-    SenimeConfigDef configDef_;
+    SenimeFcitxConfig configDef_;
     SenimeConfig config_{};
     FactoryFor<SenimeState> factory_;
     EnginePtr engine_{nullptr, senime_engine_free};

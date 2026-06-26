@@ -238,7 +238,7 @@ SenimeEngine::SenimeEngine(Instance *instance)
 // key event: sym: [65293], state: [1]
 // Shift_R+Return
 // key event: sym: [65293], state: [1]
-SenimeConfig SenimeEngine::convertConfig(const SenimeConfigDef &cfg) {
+SenimeConfig SenimeEngine::convertConfig(const SenimeFcitxConfig &cfg) {
     SenimeConfig kc{};
     auto extract = [](const KeyList &list, uint32_t &sym, uint32_t &states) {
         if (!list.empty()) {

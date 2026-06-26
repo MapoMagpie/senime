@@ -122,22 +122,22 @@ pub struct SenimeConfig {
 }
 
 #[derive(Clone)]
-struct SenimeEngineConfig {
-    toggle_key: SenimeConfigKey,
+struct SenimeResolvedConfig {
+    toggle_key: SenimeKeyBinding,
     /// 当为 None 时，禁用临时中文模式
     trigger_char: Option<char>,
 }
 
-impl Default for SenimeEngineConfig {
+impl Default for SenimeResolvedConfig {
     fn default() -> Self {
         Self {
-            toggle_key: SenimeConfigKey::from((FCITX_KEY_Shift_L, FCITX_MOD_SHIFT)),
+            toggle_key: SenimeKeyBinding::from((FCITX_KEY_Shift_L, FCITX_MOD_SHIFT)),
             trigger_char: None,
         }
     }
 }
 
-impl From<&SenimeConfig> for SenimeEngineConfig {
+impl From<&SenimeConfig> for SenimeResolvedConfig {
     fn from(value: &SenimeConfig) -> Self {
         Self {
             toggle_key: (value.toggle_sym, value.toggle_states).into(),
@@ -160,11 +160,11 @@ pub struct SenimeState {
     input: String,
     chinese_mode: bool,
     last_unrelease_key: u32,
-    config: SenimeEngineConfig,
+    config: SenimeResolvedConfig,
 }
 
 impl SenimeState {
-    fn new(engine: Arc<ArcSwap<InputAnalyzer>>, config: SenimeEngineConfig) -> Self {
+    fn new(engine: Arc<ArcSwap<InputAnalyzer>>, config: SenimeResolvedConfig) -> Self {
         Self {
             engine,
             input: String::new(),
@@ -388,14 +388,14 @@ thread_local! {
 }
 
 #[derive(Clone)]
-struct SenimeConfigKey {
+struct SenimeKeyBinding {
     sym: u32,
     modifier: u32,
     #[allow(unused)]
     modifier_only: bool,
 }
 
-impl From<(u32, u32)> for SenimeConfigKey {
+impl From<(u32, u32)> for SenimeKeyBinding {
     fn from((sym, modifier): (u32, u32)) -> Self {
         Self {
             sym,
@@ -408,7 +408,7 @@ impl From<(u32, u32)> for SenimeConfigKey {
 pub struct SenimeEngine {
     inner: Arc<ArcSwap<InputAnalyzer>>,
     _watcher: Option<notify::RecommendedWatcher>,
-    config: SenimeEngineConfig,
+    config: SenimeResolvedConfig,
 }
 
 fn set_last_error(err: impl ToString) {
@@ -551,7 +551,7 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
     } else {
         table_path.to_string()
     };
-    let config: SenimeEngineConfig = config.into();
+    let config: SenimeResolvedConfig = config.into();
 
     let result: Result<Box<SenimeEngine>, String> = (|| {
         let engine = build_engine(&table_path)?;
