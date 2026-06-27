@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -10,7 +9,8 @@ use dashmap::DashMap;
 use log::LevelFilter;
 use notify::{RecursiveMode, Watcher};
 use ropey::Rope;
-use senime_lib::{AnalysisResult, Dict, InputAnalyzer, resolve_relative_path};
+use senime_lib::input_analyzer::load_input_analyzer;
+use senime_lib::{AnalysisResult, InputAnalyzer, resolve_relative_path};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -444,25 +444,6 @@ pub struct Args {
     pub table: Option<String>,
 }
 
-/// Build a new InputAnalyzer from the given table path.
-fn build_engine(table_path: &str) -> std::result::Result<InputAnalyzer, String> {
-    let dict = Dict::try_load(table_path)?;
-    let reverse_dict = dict
-        .config()
-        .reverse_dict
-        .as_ref()
-        .map(|sec_table_path| {
-            let hint = PathBuf::from(sec_table_path)
-                .file_name()
-                .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-                .unwrap_or("反".to_string());
-            Dict::try_load(resolve_relative_path(Path::new(table_path), sec_table_path))
-                .map(|sec_dict| (sec_dict, hint))
-        })
-        .transpose()?;
-    Ok(InputAnalyzer::new(dict, reverse_dict))
-}
-
 /// Spawn a background file watcher that rebuilds the engine on changes.
 fn spawn_watcher(
     inner: Arc<ArcSwap<InputAnalyzer>>,
@@ -492,7 +473,7 @@ fn spawn_watcher(
             // Re-read the filter: events may have been for unrelated files.
             // Since we watch narrow directories (parents of our files),
             // just rebuild unconditionally — it's fast enough.
-            match build_engine(&main_path) {
+            match load_input_analyzer(&main_path) {
                 Ok(new_inner) => {
                     inner.swap(Arc::new(new_inner));
                 }
@@ -536,13 +517,13 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let engine = build_engine(&table_path).expect("failed to load dict");
+    let engine = load_input_analyzer(&table_path).expect("failed to load dict");
     let mut watch_paths = vec![table_path.clone()];
-    if let Some(dict_path) = engine.get_dict().config().dict.as_ref() {
-        watch_paths.push(resolve_relative_path(Path::new(&table_path), dict_path));
-    }
-    if let Some(sec_dict_path) = engine.get_dict().config().reverse_dict.as_ref() {
-        watch_paths.push(resolve_relative_path(Path::new(&table_path), sec_dict_path));
+    for dict_meta in engine.dict_metas() {
+        watch_paths.push(resolve_relative_path(
+            Path::new(&table_path),
+            &dict_meta.path,
+        ));
     }
     watch_paths.dedup();
     let engine = Arc::new(ArcSwap::from_pointee(engine));

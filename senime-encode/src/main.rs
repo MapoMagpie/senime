@@ -29,10 +29,7 @@ pub struct Args {
 fn main() {
     let args = Args::parse();
     let start = Instant::now();
-    let dict = Dict::try_load(args.table).unwrap_or_else(|e| {
-        eprintln!("加载码表失败: {}", e);
-        std::process::exit(1);
-    });
+    let dict = Dict::try_load(&args.table).expect("读取码表失败");
     // let looker_new = Instant::now();
     let looker = Looker::new(dict.candidates_iter());
     // println!("初始化looker耗时: {:?}", looker_new.elapsed());

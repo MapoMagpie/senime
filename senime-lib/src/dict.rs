@@ -1,16 +1,12 @@
 use bincode::{Decode, Encode, config};
-use serde::Deserialize;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fs::File,
     io::{Error, ErrorKind, Read, Write},
-    mem,
     path::{Path, PathBuf},
     str::{self, FromStr},
     time::{Duration, UNIX_EPOCH},
 };
-
-use crate::util::resolve_relative_path;
 
 /// 连续内存字符串池，所有字符串的 UTF-8 字节存放在一块连续的 Vec<u8> 中，
 /// 通过 (offset, len) 索引访问，避免大量小 String 的堆分配开销。
@@ -276,7 +272,7 @@ impl<Context> Decode<Context> for Prism {
     }
 }
 
-const VERSION: i64 = 12;
+const VERSION: i64 = 13;
 
 // Dict 结构
 #[derive(Debug)]
@@ -284,7 +280,6 @@ pub struct Dict {
     arena: StringArena,
     prism: Prism,
     candidates: Vec<Candidate>,
-    config: Config,
 }
 
 impl TryFrom<(i64, i64, &[u8])> for Dict {
@@ -314,15 +309,12 @@ impl TryFrom<(i64, i64, &[u8])> for Dict {
             bincode::decode_from_slice(buf, cfg).map_err(|_| map_err("无效的二进制数据[ARENA]"))?;
         let (candidates, n2): (Vec<Candidate>, usize) = bincode::decode_from_slice(&buf[n1..], cfg)
             .map_err(|_| map_err("无效的二进制数据[CANDIDATES]"))?;
-        let (prism, n3): (Prism, usize) = bincode::decode_from_slice(&buf[n1 + n2..], cfg)
+        let (prism, _): (Prism, usize) = bincode::decode_from_slice(&buf[n1 + n2..], cfg)
             .map_err(|_| map_err("无效的二进制数据[PRISM]"))?;
-        let (config, _): (Config, usize) = bincode::decode_from_slice(&buf[n1 + n2 + n3..], cfg)
-            .map_err(|_| map_err("无效的二进制数据[CONFIG]"))?;
         Ok(Self {
             arena,
             prism,
             candidates,
-            config,
         })
     }
 }
@@ -331,13 +323,6 @@ impl FromStr for Dict {
     type Err = String;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        Self::from_str_with_config(raw, Config::default())
-    }
-}
-
-impl Dict {
-    /// 使用指定配置解析码表文本
-    pub fn from_str_with_config(raw: &str, config: Config) -> Result<Self, String> {
         let mut parsed = Vec::new();
         let mut columns: Option<Vec<Column>> = None;
         let mut parse_columns_times = 0;
@@ -380,8 +365,23 @@ impl Dict {
             arena,
             candidates,
             prism,
-            config,
         })
+    }
+}
+
+impl Dict {
+    /// 从文件路径加载纯码表（.txt 或 .bin），不处理 .toml 配置。
+    /// 如需加载含配置的完整引擎，请使用 `InputAnalyzer::load_analyzer`。
+    pub fn try_load<P>(path: P) -> Result<Self, String>
+    where
+        P: Into<PathBuf>,
+    {
+        let path = path.into();
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("txt") => Self::load_from_txt(&path),
+            Some("bin") => Self::load_from_bin(&path),
+            _ => Err(format!("不支持的文件类型: {:?}", path)),
+        }
     }
 }
 
@@ -403,52 +403,15 @@ fn get_mtime_or(path: &Path, default: i64) -> i64 {
 // }
 
 impl Dict {
-    pub fn try_load<P>(path: P) -> Result<Self, String>
-    where
-        P: Into<PathBuf>,
-    {
-        let path = path.into();
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("toml") => Self::load_from_toml(&path),
-            Some("txt") => Self::load_from_txt_and_config(&path, Config::default(), 0),
-            Some("bin") => Self::load_from_bin(&path),
-            _ => Err(format!("不支持的文件类型: {:?}", path)),
-        }
-    }
-
-    /// 从 .toml 配置文件加载
-    fn load_from_toml(toml_path: &Path) -> Result<Self, String> {
-        let toml_mtime = get_mtime_or(toml_path, 0);
-        let mut content = String::new();
-        File::open(toml_path)
-            .map_err(|e| format!("无法读取配置文件 {:?}: {e}", toml_path))?
-            .read_to_string(&mut content)
-            .map_err(|e| format!("无法读取配置文件内容: {e}"))?;
-        let mut config: Config =
-            toml::from_str(&content).map_err(|e| format!("无法解析配置文件: {e}"))?;
-        let dict_name = config.dict.as_ref().ok_or("配置文件中缺少 dict 字段")?;
-        let dict_path = PathBuf::from(resolve_relative_path(toml_path, dict_name));
-        config.patch_punctuations(default_punctuations());
-        match dict_path.extension().and_then(|e| e.to_str()) {
-            Some("bin") => Self::load_from_bin(&dict_path),
-            Some("txt") => Self::load_from_txt_and_config(&dict_path, config, toml_mtime),
-            _ => Err(format!("不支持的 dict 文件类型: {:?}", dict_path)),
-        }
-    }
-
-    /// 从纯码表 .txt 文件加载，使用指定配置
-    fn load_from_txt_and_config(
-        txt_path: &Path,
-        config: Config,
-        config_mtime: i64,
-    ) -> Result<Self, String> {
+    /// 从纯码表 .txt 文件加载
+    pub(crate) fn load_from_txt(txt_path: &Path) -> Result<Self, String> {
         let txt_mtime = get_mtime_or(txt_path, 0);
         let bin_path = txt_path.with_extension("txt.bin");
         // 尝试加载 bin 缓存
         if let Ok(mut file) = File::open(&bin_path) {
             let mut buf = Vec::new();
             if file.read_to_end(&mut buf).is_ok()
-                && let Ok(dict) = Self::try_from((txt_mtime, config_mtime, buf.as_slice()))
+                && let Ok(dict) = Self::try_from((txt_mtime, 0, buf.as_slice()))
             {
                 return Ok(dict);
             }
@@ -460,11 +423,10 @@ impl Dict {
             .map_err(|e| format!("无法读取码表文件 {:?}: {e}", txt_path))?
             .read_to_string(&mut raw)
             .map_err(|e| format!("无法读取码表内容: {e}"))?;
-        let dict =
-            Self::from_str_with_config(&raw, config).map_err(|e| format!("解析码表失败: {e}"))?;
+        let dict = Self::from_str(&raw).map_err(|e| format!("解析码表失败: {e}"))?;
         // 写入 bin 缓存
         if let Ok(mut bin_file) = File::create(&bin_path) {
-            let _ = bin_file.write_all(&dict.to_bin(txt_mtime, config_mtime));
+            let _ = bin_file.write_all(&dict.to_bin(txt_mtime, 0));
         }
         Ok(dict)
     }
@@ -494,11 +456,10 @@ impl Dict {
         let mut head = [0u8; 30];
         bincode::encode_into_slice(meta, &mut head, cfg).unwrap();
         buf.extend_from_slice(&head);
-        // 按顺序编码 arena, candidates, prism, config
+        // 按顺序编码 arena, candidates, prism
         buf.extend(bincode::encode_to_vec(&self.arena, cfg).unwrap());
         buf.extend(bincode::encode_to_vec(&self.candidates, cfg).unwrap());
         buf.extend(bincode::encode_to_vec(&self.prism, cfg).unwrap());
-        buf.extend(bincode::encode_to_vec(&self.config, cfg).unwrap());
         buf
     }
 
@@ -522,9 +483,6 @@ impl Dict {
 
     pub fn count(&self) -> usize {
         self.candidates.len()
-    }
-    pub fn config(&self) -> &Config {
-        &self.config
     }
 
     /// 获取某个 Candidate 的借用视图
@@ -592,108 +550,6 @@ fn try_parse_columns(line: &str) -> Result<Vec<Column>, std::io::Error> {
     Err(Error::new(ErrorKind::InvalidData, "无法确认[列] 顺序"))
 }
 
-#[derive(Debug, Clone, Decode, Encode, Deserialize)]
-#[serde(default)]
-pub struct Config {
-    pub dict: Option<String>,
-    pub selection_keys: [char; 9],
-    pub punctuations: HashMap<char, Vec<String>>,
-    pub escape_pair: Option<[char; 2]>,
-    pub reverse_key: Option<char>,
-    pub reverse_dict: Option<String>,
-}
-
-impl Config {
-    fn patch_punctuations(&mut self, patch: HashMap<char, Vec<String>>) {
-        let mut patch = patch;
-        mem::swap(&mut self.punctuations, &mut patch);
-        self.punctuations.extend(patch);
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            dict: None,
-            selection_keys: default_selection_keys(),
-            punctuations: default_punctuations(),
-            escape_pair: default_escape_pair(),
-            reverse_key: default_reverse_key(),
-            reverse_dict: None,
-        }
-    }
-}
-
-fn default_selection_keys() -> [char; 9] {
-    // ['U', 'I', 'O', 'H', 'J', 'K', 'B', 'N', 'M']
-    ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-}
-// ',' : { commit: ， }
-// '.' : { commit: 。 }
-// '<' : [ 《, 〈, «, ‹, ˂, ˱ ]
-// '>' : [ 》, 〉, », ›, ˃, ˲ ]
-// '?' : { commit: ？ }
-// ';' : { commit: ； }
-// ';' : [ ；, ：, ":" ]
-// ':' : { commit: ： }
-// "'": { pair: [ '‘', '’' ] }
-// '"' : { pair: [ '“', '”' ] }
-// '\' : [ 、, '\', ＼ ]
-// '/' : [ ？, 、, '/', ／, ÷ ]
-// '|' : [ '|', ·, '·' , ｜, '§', '¦', '‖', ︴ ]
-// '`' : [ '`', ‵, ‶, ‷, ′, ″, ‴, ⁗ ]
-// '~' : [ '~', ～, ~~~, ˜, ˷, ⸯ, ≈, ≋, ≃, ≅, ≇, ∽, ⋍, ≌, ﹏, ﹋, ﹌, ︴ ]
-// '!' : { commit: ！ }
-// # '@' : [ '@', ©, ®, ℗ ]
-// '#' : [ '#', № ]
-// '%' : [ '%', ％, '°', '℃', ‰, ‱, ℉, ℅, ℆, ℀, ℁, ⅍ ]
-// '$' : [ ￥, '$', '€', '£', '¥', '¢', '¤', ₩ ]
-// '^' : { commit: …… }
-// '&' : '&'
-// '*' : [ '*', ＊, ·, ‧, ・, ･, ×, ※, ❂, ⁂, ☮, ☯, ☣ ]
-// '(' : （
-// ')' : ）
-// '-' : '-'
-// '_' : ——
-// '+' : '+'
-// '=' : [ '=', 々, 〃 ]
-// '[' : [ 「, '“', 【, 〔, ［, 〚, 〘 ]
-// ']' : [ 」, '”', 】, 〕, ］, 〛, 〙 ]
-// '{' : [ "{", 〖, 『 , ｛ ]
-// '}' : [ "}", 〗, 』 , ｝ ]
-fn default_punctuations() -> HashMap<char, Vec<String>> {
-    let punctuations = vec![
-        (',', vec!["，", ",", "……"]),
-        ('.', vec!["。", ".", "……"]),
-        ('!', vec!["！", "!"]),
-        ('/', vec!["？", "/"]),
-        (';', vec!["；", "：", ";"]),
-        ('[', vec!["「", "“", "[", "【"]),
-        (']', vec!["」", "”", "]", "】"]),
-        ('\\', vec!["、", "\\"]),
-        ('|', vec!["·", "|"]),
-        ('_', vec!["——", "_"]),
-        ('<', vec!["《", "<"]),
-        ('>', vec!["》", ">"]),
-        ('\'', vec!["‘", "’"]),
-        ('~', vec!["~", "～", "~~~"]),
-        ('(', vec!["（", "(", "『"]),
-        (')', vec!["）", ")", "』"]),
-    ];
-    let mut map = HashMap::new();
-    punctuations.into_iter().for_each(|(ch, puncs)| {
-        map.insert(ch, puncs.iter().map(|s| s.to_string()).collect());
-    });
-    map
-}
-
-fn default_escape_pair() -> Option<[char; 2]> {
-    Some(['`', '`'])
-}
-fn default_reverse_key() -> Option<char> {
-    Some('@')
-}
-
 // https://github.com/rime/librime/blob/47033202f986f4dced82eceb90440285fcb9501e/src/rime/gear/charset_filter.cc#L18
 fn is_extended_cjk(c: char) -> bool {
     let c = c as u32;
@@ -739,7 +595,7 @@ zkc 射 1
 
     #[test]
     fn test_dict() {
-        let dict = Dict::from_str_with_config(&gen_entries(), Config::default()).unwrap();
+        let dict = Dict::from_str(&gen_entries()).unwrap();
         println!("dict loaded: {}", dict.count());
         let result = dict.search("ah".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(3, result.map_or(0, |candidates| candidates.len()));
@@ -784,11 +640,11 @@ zkc 射 1
     // search time: 11.27µs
     #[test]
     fn test_load() {
-        let (config_path, _dict_path) = gen_test_dict_files();
+        let (_config_path, dict_path) = gen_test_dict_files();
         let time_start = Instant::now();
-        let dict = Dict::try_load(config_path.clone()).unwrap();
+        let dict = Dict::load_from_txt(&dict_path).unwrap();
         let time_dict_loaded = Instant::now();
-        println!("loaded {} from {:?}", dict.count(), config_path);
+        println!("loaded {} from {:?}", dict.count(), dict_path);
         let candidates = dict.search("a".chars().collect::<Vec<_>>().as_slice());
         let time_searched = Instant::now();
         println!("searched: {}", candidates.as_ref().map_or(0, |c| c.len()));

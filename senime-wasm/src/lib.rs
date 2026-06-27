@@ -1,6 +1,6 @@
-use std::sync::Mutex;
+use std::{str::FromStr, sync::Mutex};
 
-use senime_lib::{AnalysisResult, CandidateRich, Config, Dict, InputAnalyzer};
+use senime_lib::{AnalysisResult, CandidateRich, Config, Dict, DictMeta, InputAnalyzer};
 use wasm_bindgen::prelude::*;
 
 static IME: Mutex<Option<InputAnalyzer>> = Mutex::new(None);
@@ -10,10 +10,10 @@ static IME: Mutex<Option<InputAnalyzer>> = Mutex::new(None);
 pub fn init_ime(content: &str, config: &str) -> Result<Vec<u8>, JsValue> {
     let cfg: Config =
         serde_json::from_str(config).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let dict = Dict::from_str_with_config(content, cfg).map_err(|e| JsValue::from_str(&e))?;
+    let dict = Dict::from_str(content).map_err(|e| JsValue::from_str(&e))?;
     let bin = dict.to_bin(0, 0);
     let mut ime = IME.lock().unwrap();
-    ime.replace(InputAnalyzer::new(dict, None));
+    ime.replace(InputAnalyzer::new(cfg, vec![(DictMeta::default(), dict)]));
     Ok(bin)
 }
 
@@ -22,7 +22,10 @@ pub fn init_ime(content: &str, config: &str) -> Result<Vec<u8>, JsValue> {
 pub fn load_bin(bs: &[u8]) -> Result<(), JsValue> {
     let dict = Dict::try_from((0i64, 0i64, bs)).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut ime = IME.lock().unwrap();
-    ime.replace(InputAnalyzer::new(dict, None));
+    ime.replace(InputAnalyzer::new(
+        Config::default(),
+        vec![(DictMeta::default(), dict)],
+    ));
     Ok(())
 }
 

@@ -1,11 +1,15 @@
 use arc_swap::ArcSwap;
 use notify::{RecursiveMode, Watcher};
-use senime_lib::{AnalysisResult, Dict, InputAnalyzer, input_analyzer::Tag, resolve_relative_path};
+use senime_lib::{
+    AnalysisResult, InputAnalyzer,
+    input_analyzer::{Tag, load_input_analyzer},
+    resolve_relative_path,
+};
 use std::{
     cell::RefCell,
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
-    path::{Path, PathBuf},
+    path::Path,
     ptr,
     sync::{Arc, mpsc},
     time::Duration,
@@ -466,25 +470,6 @@ fn into_c_string(value: String) -> *mut c_char {
         .into_raw()
 }
 
-/// Build a new engine inner from the given table path.
-fn build_engine(table_path: &str) -> Result<InputAnalyzer, String> {
-    let dict = Dict::try_load(table_path)?;
-    let reverse_dict = dict
-        .config()
-        .reverse_dict
-        .as_ref()
-        .map(|sec_table_path| {
-            let hint = PathBuf::from(sec_table_path)
-                .file_name()
-                .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-                .unwrap_or("反".to_string());
-            Dict::try_load(resolve_relative_path(Path::new(table_path), sec_table_path))
-                .map(|sec_dict| (sec_dict, hint))
-        })
-        .transpose()?;
-    Ok(InputAnalyzer::new(dict, reverse_dict))
-}
-
 /// 查找默认码表路径: XDG_CONFIG_HOME/senime/config.toml
 fn get_default_table() -> Result<String, String> {
     use std::io::{Error, ErrorKind};
@@ -530,7 +515,7 @@ fn spawn_watcher(
             // Re-read the filter: events may have been for unrelated files.
             // Since we watch narrow directories (parents of our files),
             // just rebuild unconditionally — it's fast enough.
-            match build_engine(&main_path) {
+            match load_input_analyzer(&main_path) {
                 Ok(new_inner) => {
                     inner.swap(Arc::new(new_inner));
                 }
@@ -576,13 +561,13 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
     let config: SenimeResolvedConfig = config.into();
 
     let result: Result<Box<SenimeEngine>, String> = (|| {
-        let engine = build_engine(&table_path)?;
+        let engine = load_input_analyzer(&table_path)?;
         let mut watch_paths = vec![table_path.clone()];
-        if let Some(dict_path) = engine.get_dict().config().dict.as_ref() {
-            watch_paths.push(resolve_relative_path(Path::new(&table_path), dict_path));
-        }
-        if let Some(sec_dict_path) = engine.get_dict().config().reverse_dict.as_ref() {
-            watch_paths.push(resolve_relative_path(Path::new(&table_path), sec_dict_path));
+        for dict_meta in engine.dict_metas() {
+            watch_paths.push(resolve_relative_path(
+                Path::new(&table_path),
+                &dict_meta.path,
+            ));
         }
         watch_paths.dedup();
         let engine = Arc::new(ArcSwap::from_pointee(engine));

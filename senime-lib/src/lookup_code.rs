@@ -246,9 +246,10 @@ impl<'a> Segment<'a> {
 #[cfg(test)]
 mod test {
     use crate::{
-        dict::{Config, Dict},
+        dict::Dict,
         lookup_code::Looker,
     };
+    use std::str::FromStr;
 
     fn create_dict() -> Dict {
         let entries = r#"
@@ -271,7 +272,7 @@ djv	喻	0
 jdm	人民网	0
 jdma	人民网world	0
         "#;
-        Dict::from_str_with_config(entries, Config::default()).unwrap()
+        Dict::from_str(entries).unwrap()
     }
 
     #[test]

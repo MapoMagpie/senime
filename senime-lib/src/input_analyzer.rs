@@ -1,12 +1,178 @@
-use std::{collections::HashMap, iter::Peekable, slice::Iter};
+use std::{collections::HashMap, fs::File, io::Read, iter::Peekable, path::PathBuf, slice::Iter};
 
 use ahash::AHashMap;
+use serde::Deserialize;
 
-use crate::dict::{CandidateView, Config, Dict};
+use crate::dict::{CandidateView, Dict};
+use crate::util::resolve_relative_path;
+
+/// 码表元信息，描述一个码表的触发字符、提示文字和路径。
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DictMeta {
+    /// 触发该码表的前缀字符。主码表为 '\0'，反查码表通常为 '@'。
+    #[serde(default)]
+    pub trigger_char: char,
+    /// 提示文字，如 "反"。主码表通常为空。
+    #[serde(default)]
+    pub hint: String,
+    /// 码表文件路径（相对于配置文件）
+    pub path: String,
+}
+
+/// 输入法配置。可从 TOML 或 JSON 反序列化。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    /// 码表列表。第一个元素为主码表，其余为反查码表等。
+    pub dicts: Vec<DictMeta>,
+    /// 选重键列表
+    pub selection_keys: [char; 9],
+    /// 标点映射
+    pub punctuations: HashMap<char, Vec<String>>,
+    /// 逃逸符对（开闭字符）
+    pub escape_pair: Option<[char; 2]>,
+}
+
+impl Config {
+    pub(crate) fn patch_punctuations(&mut self, patch: HashMap<char, Vec<String>>) {
+        let mut patch = patch;
+        std::mem::swap(&mut self.punctuations, &mut patch);
+        self.punctuations.extend(patch);
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            dicts: vec![],
+            selection_keys: default_selection_keys(),
+            punctuations: default_punctuations(),
+            escape_pair: default_escape_pair(),
+        }
+    }
+}
+
+fn default_selection_keys() -> [char; 9] {
+    ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+}
+
+// ',' : { commit: ， }
+// '.' : { commit: 。 }
+// '<' : [ 《, 〈, «, ‹, ˂, ˱ ]
+// '>' : [ 》, 〉, », ›, ˃, ˲ ]
+// '?' : { commit: ？ }
+// ';' : { commit: ； }
+// ';' : [ ；, ：, ":" ]
+// ':' : { commit: ： }
+// "'": { pair: [ '‘', '’' ] }
+// '"' : { pair: [ '“', '”' ] }
+// '\' : [ 、, '\', ＼ ]
+// '/' : [ ？, 、, '/', ／, ÷ ]
+// '|' : [ '|', ·, '·' , ｜, '§', '¦', '‖', ︴ ]
+// '`' : [ '`', ‵, ‶, ‷, ′, ″, ‴, ⁗ ]
+// '~' : [ '~', ～, ~~~, ˜, ˷, ⸯ, ≈, ≋, ≃, ≅, ≇, ∽, ⋍, ≌, ﹏, ﹋, ﹌, ︴ ]
+// '!' : { commit: ！ }
+// # '@' : [ '@', ©, ®, ℗ ]
+// '#' : [ '#', № ]
+// '%' : [ '%', ％, '°', '℃', ‰, ‱, ℉, ℅, ℆, ℀, ℁, ⅍ ]
+// '$' : [ ￥, '$', '€', '£', '¥', '¢', '¤', ₩ ]
+// '^' : { commit: …… }
+// '&' : '&'
+// '*' : [ '*', ＊, ·, ‧, ・, ･, ×, ※, ❂, ⁂, ☮, ☯, ☣ ]
+// '(' : （
+// ')' : ）
+// '-' : '-'
+// '_' : ——
+// '+' : '+'
+// '=' : [ '=', 々, 〃 ]
+// '[' : [ 「, '“', 【, 〔, ［, 〚, 〘 ]
+// ']' : [ 」, '”', 】, 〕, ］, 〛, 〙 ]
+// '{' : [ "{", 〖, 『 , ｛ ]
+// '}' : [ "}", 〗, 』 , ｝ ]
+fn default_punctuations() -> HashMap<char, Vec<String>> {
+    let punctuations = vec![
+        (',', vec!["，", ",", "……"]),
+        ('.', vec!["。", ".", "……"]),
+        ('!', vec!["！", "!"]),
+        ('/', vec!["？", "/"]),
+        (';', vec!["；", "：", ";"]),
+        ('[', vec!["「", "“", "[", "【"]),
+        (']', vec!["」", "”", "]", "】"]),
+        ('\\', vec!["、", "\\"]),
+        ('|', vec!["·", "|"]),
+        ('_', vec!["——", "_"]),
+        ('<', vec!["《", "<"]),
+        ('>', vec!["》", ">"]),
+        ('\'', vec!["‘", "’"]),
+        ('~', vec!["~", "～", "~~~"]),
+        ('(', vec!["（", "(", "『"]),
+        (')', vec!["）", ")", "』"]),
+    ];
+    let mut map = HashMap::new();
+    punctuations.into_iter().for_each(|(ch, puncs)| {
+        map.insert(ch, puncs.iter().map(|s| s.to_string()).collect());
+    });
+    map
+}
+
+fn default_escape_pair() -> Option<[char; 2]> {
+    Some(['`', '`'])
+}
+
+/// 从配置文件路径构建完整的 `InputAnalyzer`。
+///
+/// 支持 `.toml` 配置文件（自动解析码表路径、标点覆盖、反查字典），
+/// 或直接传入 `.txt` / `.bin` 码表文件路径（使用默认配置）。
+pub fn load_input_analyzer<P: Into<PathBuf>>(path: P) -> Result<InputAnalyzer, String> {
+    let path = path.into();
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("toml") => {
+            let mut content = String::new();
+            File::open(&path)
+                .map_err(|e| format!("无法读取配置文件 {:?}: {e}", path))?
+                .read_to_string(&mut content)
+                .map_err(|e| format!("无法读取配置文件内容: {e}"))?;
+            let mut config: Config =
+                toml::from_str(&content).map_err(|e| format!("无法解析配置文件: {e}"))?;
+            if config.dicts.is_empty() {
+                return Err("配置文件中 dicts 为空，请指定至少一个码表".to_string());
+            }
+            config.patch_punctuations(default_punctuations());
+            // 第一个元素的 trigger_char 设为空字符
+            config.dicts[0].trigger_char = '\0';
+            // 加载所有码表
+            let mut dicts: Vec<(DictMeta, Dict)> = Vec::with_capacity(config.dicts.len());
+            for meta in &config.dicts {
+                let dict_path = resolve_relative_path(&path, &meta.path);
+                let dict = Dict::try_load(dict_path)?;
+                dicts.push((meta.clone(), dict));
+            }
+            Ok(InputAnalyzer::new(config, dicts))
+        }
+        _ => {
+            let dict = Dict::try_load(&path)?;
+            Ok(InputAnalyzer::new(
+                Config::default(),
+                vec![(
+                    DictMeta {
+                        trigger_char: '\0',
+                        hint: String::new(),
+                        path: path.to_str().unwrap_or("").to_string(),
+                    },
+                    dict,
+                )],
+            ))
+        }
+    }
+}
+
+// ⇞ (U+21DE) 和 ⇟ (U+21DF)
+const PAGE_UP: char = '⇞';
+const PAGE_DOWN: char = '⇟';
 
 #[derive(Debug)]
 pub struct InputAnalyzer {
-    dicts: Vec<(char, String, Dict)>,
+    dicts: Vec<(DictMeta, Dict)>,
     main_dict_code_map: AHashMap<char, String>,
     escape_pair: Option<[char; 2]>,
     selection_keys: [char; 9],
@@ -14,25 +180,23 @@ pub struct InputAnalyzer {
     page_count: usize,
 }
 
-// ⇞ (U+21DE) 和 ⇟ (U+21DF)
-const PAGE_UP: char = '⇞';
-const PAGE_DOWN: char = '⇟';
-
 impl InputAnalyzer {
-    pub fn new(dict: Dict, secondary: Option<(Dict, String)>) -> Self {
+    /// 创建 InputAnalyzer。
+    ///
+    /// - `config`: 输入法配置（标点、选重键等）
+    /// - `dicts`: 码表数组，与 config.dicts 一一对应
+    pub fn new(config: Config, dicts: Vec<(DictMeta, Dict)>) -> Self {
         let Config {
-            dict: _,
+            dicts: _,
             selection_keys,
             punctuations,
             escape_pair,
-            reverse_key: _,
-            reverse_dict: _,
-        } = dict.config().clone();
-        let mut dicts = vec![];
+        } = config;
         let mut main_dict_code_map = AHashMap::<char, String>::new();
-        if let Some((sec_dict, hint)) = secondary {
-            // 从dict.candidates中筛选单字，存入该单字的最长编码
-            for cand in dict.candidates_iter() {
+        // 如果有副码表（非主码表），从主码表中构建单字→最长编码的映射
+        if dicts.len() > 1 {
+            let main_dict = &dicts[0].1;
+            for cand in main_dict.candidates_iter() {
                 if cand.text.chars().count() == 1 {
                     let ch = cand.text.chars().next().unwrap();
                     let code = cand.code.to_string();
@@ -45,10 +209,8 @@ impl InputAnalyzer {
                     }
                 }
             }
-            dicts.push(('@', hint, sec_dict));
-        };
-        dicts.push(('\0', "".to_string(), dict));
-        dicts.reverse();
+        }
+        // 确保主码表在第一个位置（trigger_char == '\0'）
         Self {
             dicts,
             selection_keys,
@@ -59,12 +221,13 @@ impl InputAnalyzer {
         }
     }
 
-    pub fn get_dict(&self) -> &Dict {
-        &self.dicts[0].2
+    pub fn main_dict(&self) -> &Dict {
+        &self.dicts[0].1
     }
 
-    pub fn get_sec_dict(&self) -> Option<&Dict> {
-        self.dicts.get(1).as_ref().map(|d| &d.2)
+    /// 获取码表元信息列表
+    pub fn dict_metas(&self) -> Vec<&DictMeta> {
+        self.dicts.iter().map(|(m, _)| m).collect()
     }
 }
 
@@ -159,7 +322,7 @@ impl InputAnalyzer {
         selection: &CodeSelection,
         no_cands: bool,
     ) -> Option<(Vec<CandidateView<'a>>, bool)> {
-        let dict = &self.dicts[selection.dict_idx].2;
+        let dict = &self.dicts[selection.dict_idx].1;
         let mut code = code;
         if selection.dict_idx > 0 {
             code = &code[1..];
@@ -370,9 +533,9 @@ impl InputAnalyzer {
                 .dicts
                 .iter()
                 .enumerate()
-                .find_map(|(i, d)| (d.0 == first).then(|| (i, true)))
+                .find_map(|(i, d)| (d.0.trigger_char == first).then(|| (i, true)))
                 .unwrap_or((0, false));
-            let dict = &self.dicts[dict_idx].2;
+            let dict = &self.dicts[dict_idx].1;
             let mut codes = vec![];
             if has_prefix {
                 chars.next();
@@ -522,6 +685,7 @@ mod tests {
     use crate::test_utils::gen_test_config;
 
     use super::*;
+    use std::str::FromStr;
 
     fn gen_entries() -> String {
         r#"
@@ -556,10 +720,20 @@ dd 弟弟 1"#
         toml::from_str(raw).unwrap()
     }
 
+    fn test_config_with_sec() -> Config {
+        let mut cfg = test_config();
+        cfg.dicts.push(DictMeta {
+            trigger_char: '@',
+            hint: "R".to_string(),
+            path: String::new(),
+        });
+        cfg
+    }
+
     #[test]
     fn test_analyzer() {
-        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
-        let analyzer = InputAnalyzer::new(dict, None);
+        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let analyzer = InputAnalyzer::new(test_config(), vec![(DictMeta::default(), dict)]);
         let inputs = vec![
             ("a cIzk", vec!["嗯", "", "渗嗯", "zk"]),
             ("a cI@abc", vec!["嗯", "", "渗嗯", "@", "嗯毕渗"]),
@@ -581,9 +755,27 @@ dd 弟弟 1"#
 
     #[test]
     fn test_analyzer_with_sec_dict() {
-        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
-        let dict_sec = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
-        let analyzer = InputAnalyzer::new(dict, Some((dict_sec, "R".to_string())));
+        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict_sec = Dict::from_str(&gen_entries()).unwrap();
+        let analyzer = InputAnalyzer::new(
+            test_config_with_sec(),
+            vec![
+                (
+                    DictMeta {
+                        trigger_char: '\0',
+                        ..Default::default()
+                    },
+                    dict,
+                ),
+                (
+                    DictMeta {
+                        trigger_char: '@',
+                        ..Default::default()
+                    },
+                    dict_sec,
+                ),
+            ],
+        );
         let inputs = vec![
             (
                 "aaaaaa aaaaa",
@@ -646,9 +838,27 @@ dd 弟弟 1"#
 
     #[test]
     fn test_segments_with_sec_dict() {
-        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
-        let dict_sec = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
-        let analyzer = InputAnalyzer::new(dict, Some((dict_sec, "R".to_string())));
+        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict_sec = Dict::from_str(&gen_entries()).unwrap();
+        let analyzer = InputAnalyzer::new(
+            test_config_with_sec(),
+            vec![
+                (
+                    DictMeta {
+                        trigger_char: '\0',
+                        ..Default::default()
+                    },
+                    dict,
+                ),
+                (
+                    DictMeta {
+                        trigger_char: '@',
+                        ..Default::default()
+                    },
+                    dict_sec,
+                ),
+            ],
+        );
         let samples: Vec<(usize, &str, Vec<&str>, Vec<Tag>)> = vec![
             (
                 1,
@@ -720,8 +930,8 @@ dd 弟弟 1"#
 
     #[test]
     fn test_segments() {
-        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
-        let analyzer = InputAnalyzer::new(dict, None);
+        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let analyzer = InputAnalyzer::new(test_config(), vec![(DictMeta::default(), dict)]);
         let samples: Vec<(usize, &str, Vec<&str>, Vec<Tag>)> = vec![
             (
                 0,

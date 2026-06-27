@@ -17,7 +17,6 @@ impl<'a> Popup<'a> {
         candidates: &'a [CandidateRich],
         root_area: Rect,
         cursor: Position,
-        input_byte_len: usize,
     ) -> (Self, Rect) {
         let cand_count = candidates.len();
         let mut cand_max_width = 0;
@@ -27,9 +26,7 @@ impl<'a> Popup<'a> {
             cand_line.push_span(Span::from(cand.select_key.to_string()).green());
             cand_line.push_span("]: ");
             cand_line.push_span(Span::from(&cand.text));
-            if cand.code.len() > input_byte_len {
-                cand_line.push_span(Span::from(&cand.code[input_byte_len..]).red());
-            }
+            cand_line.push_span(Span::from(&cand.code).red());
             cand_max_width = cand_line.width().max(cand_max_width);
             if i == 0 {
                 cand_line = cand_line.style(Style::new().on_dark_gray());

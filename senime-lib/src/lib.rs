@@ -4,8 +4,8 @@ pub mod input_analyzer;
 pub mod lookup_code;
 pub mod util;
 
-pub use dict::{Config, Dict};
-pub use input_analyzer::{AnalysisResult, CandidateRich, InputAnalyzer};
+pub use dict::Dict;
+pub use input_analyzer::{AnalysisResult, CandidateRich, Config, DictMeta, InputAnalyzer};
 pub use lookup_code::Looker;
 pub use util::resolve_relative_path;
 

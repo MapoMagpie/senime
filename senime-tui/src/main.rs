@@ -2,7 +2,7 @@ use std::fs::DirBuilder;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use std::path::PathBuf;
+
 use std::str::FromStr;
 use std::time::Instant;
 
@@ -24,8 +24,8 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 use ratatui::widgets::{Block, Borders};
 
-use senime_lib::resolve_relative_path;
-use senime_lib::{AnalysisResult, Dict, InputAnalyzer, Looker};
+use senime_lib::input_analyzer::load_input_analyzer;
+use senime_lib::{AnalysisResult, Looker};
 
 use crate::context::{Context, WrappedText};
 use crate::popup::Popup;
@@ -169,30 +169,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let time_id = generate_time_id();
     // 输入法引擎
-    let (ime, reverse_key) = {
-        let dict = Dict::try_load(&table_path)?;
-        let reverse_dict = dict
-            .config()
-            .reverse_dict
-            .as_ref()
-            .map(|sec_table_path| {
-                let hint = PathBuf::from(sec_table_path)
-                    .file_name()
-                    .and_then(|name| name.to_str().map(|n| n.chars().take(1).collect::<String>()))
-                    .unwrap_or("反".to_string());
-                Dict::try_load(resolve_relative_path(
-                    Path::new(&table_path),
-                    sec_table_path,
-                ))
-                .map(|sec_dict| (sec_dict, hint))
-            })
-            .transpose()?;
-        let reverse_key = dict.config().reverse_key.unwrap();
-        (InputAnalyzer::new(dict, reverse_dict), reverse_key)
-    };
+    let ime = load_input_analyzer(&table_path)?;
 
     // 分词器
-    let encoder = Looker::new(ime.get_dict().candidates_iter());
+    let encoder = Looker::new(ime.main_dict().candidates_iter());
     // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
     let mut ctx = Context::new(encoder);
     ctx.set_preset(preset);
@@ -303,13 +283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame.set_cursor_position(cursor);
 
             if let Some(cands) = candidates {
-                let input = ctx.get_input();
-                let input_len = if !input.is_empty() && input[0] == reverse_key {
-                    input[1..].iter().map(|c| c.len_utf8()).sum()
-                } else {
-                    input.iter().map(|c| c.len_utf8()).sum()
-                };
-                let (popup, p_area) = Popup::create(&cands, t_area, cursor, input_len);
+                let (popup, p_area) = Popup::create(&cands, t_area, cursor);
                 frame.render_widget(popup, p_area);
             }
             frame.render_widget(Block::default().borders(Borders::ALL).title("计量"), m_area);
