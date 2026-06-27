@@ -19,11 +19,13 @@ pub fn init_ime(content: &str, config: &str) -> Result<Vec<u8>, JsValue> {
 
 /// 从二进制码表加载 IME 实例（用于从 IndexedDB 缓存恢复）
 #[wasm_bindgen]
-pub fn load_bin(bs: &[u8]) -> Result<(), JsValue> {
+pub fn load_bin(bs: &[u8], config: &str) -> Result<(), JsValue> {
     let dict = Dict::try_from((0i64, 0i64, bs)).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let cfg: Config =
+        serde_json::from_str(config).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut ime = IME.lock().unwrap();
     ime.replace(InputAnalyzer::new(
-        Config::default(),
+        cfg,
         vec![(DictMeta::default(), dict)],
     ));
     Ok(())

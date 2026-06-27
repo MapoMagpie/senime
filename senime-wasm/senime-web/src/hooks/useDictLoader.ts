@@ -32,7 +32,7 @@ export function useDictLoader() {
           if (cfg.selection_keys) {
             setSelectionKeys(cfg.selection_keys);
           }
-          load_bin(cached);
+          load_bin(cached, cachedConfig);
           setImeReady(true);
           setStatus({ state: "cached", message: "已从缓存加载码表" });
         } else {
