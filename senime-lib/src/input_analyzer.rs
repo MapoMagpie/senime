@@ -11,7 +11,7 @@ use crate::util::resolve_relative_path;
 pub struct DictMeta {
     /// 触发该码表的前缀字符。主码表为 '\0'，反查码表通常为 '@'。
     #[serde(default)]
-    pub trigger_char: char,
+    pub trigger: char,
     /// 提示文字，如 "反"。主码表通常为空。
     #[serde(default)]
     pub hint: String,
@@ -139,7 +139,7 @@ pub fn load_input_analyzer<P: Into<PathBuf>>(path: P) -> Result<InputAnalyzer, S
             }
             config.patch_punctuations(default_punctuations());
             // 第一个元素的 trigger_char 设为空字符
-            config.dicts[0].trigger_char = '\0';
+            config.dicts[0].trigger = '\0';
             // 加载所有码表
             let mut dicts: Vec<(DictMeta, Dict)> = Vec::with_capacity(config.dicts.len());
             for meta in &config.dicts {
@@ -155,7 +155,7 @@ pub fn load_input_analyzer<P: Into<PathBuf>>(path: P) -> Result<InputAnalyzer, S
                 Config::default(),
                 vec![(
                     DictMeta {
-                        trigger_char: '\0',
+                        trigger: '\0',
                         hint: String::new(),
                         path: path.to_str().unwrap_or("").to_string(),
                     },
@@ -533,7 +533,7 @@ impl InputAnalyzer {
                 .dicts
                 .iter()
                 .enumerate()
-                .find_map(|(i, d)| (d.0.trigger_char == first).then(|| (i, true)))
+                .find_map(|(i, d)| (d.0.trigger == first).then(|| (i, true)))
                 .unwrap_or((0, false));
             let dict = &self.dicts[dict_idx].1;
             let mut codes = vec![];
@@ -723,7 +723,7 @@ dd 弟弟 1"#
     fn test_config_with_sec() -> Config {
         let mut cfg = test_config();
         cfg.dicts.push(DictMeta {
-            trigger_char: '@',
+            trigger: '@',
             hint: "R".to_string(),
             path: String::new(),
         });
@@ -762,14 +762,14 @@ dd 弟弟 1"#
             vec![
                 (
                     DictMeta {
-                        trigger_char: '\0',
+                        trigger: '\0',
                         ..Default::default()
                     },
                     dict,
                 ),
                 (
                     DictMeta {
-                        trigger_char: '@',
+                        trigger: '@',
                         ..Default::default()
                     },
                     dict_sec,
@@ -845,14 +845,14 @@ dd 弟弟 1"#
             vec![
                 (
                     DictMeta {
-                        trigger_char: '\0',
+                        trigger: '\0',
                         ..Default::default()
                     },
                     dict,
                 ),
                 (
                     DictMeta {
-                        trigger_char: '@',
+                        trigger: '@',
                         ..Default::default()
                     },
                     dict_sec,
