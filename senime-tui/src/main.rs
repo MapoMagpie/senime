@@ -62,15 +62,15 @@ pub struct Args {
     pub pick: Option<String>,
 
     /// 将标准输入流中的内容作为预设文本，与--preset功能一样
-    #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
+    #[arg(short = 'i', long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub stdin: bool,
 
     /// 退出程序时，将输入的内容输出到标准输出流
-    #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
+    #[arg(short = 'o', long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub stdout: bool,
 
     /// 是否保存输入记录，退出程序后，会将输入内容与额外信息(速度、击键、耗时、码长等)保存到`XDG_DATA_HOME/senitui`中
-    #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
+    #[arg(short = 'r', long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub record: bool,
 }
 
