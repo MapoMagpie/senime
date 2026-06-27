@@ -10,7 +10,7 @@ pub fn test_tmp_dir() -> PathBuf {
 
 pub fn gen_test_config() -> String {
     r#"
-selection_keys = ["U","I","O","H","J","K","B","N","M"]
+selection_keys = ["U","I","O","P","5","6","7","8","9"]
 dict = "senime-test-dict.txt"
 [punctuations]
 ',' = ["，", ",", "……"]

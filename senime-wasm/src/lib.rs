@@ -49,7 +49,6 @@ pub struct JsSegment {
     text: String,
     origin: String,
     tag_name: String,
-    tag_index: usize,
 }
 
 #[wasm_bindgen]
@@ -67,32 +66,20 @@ impl JsSegment {
     pub fn tag_name(&self) -> String {
         self.tag_name.clone()
     }
-    /// Selection/SelectionForPunc/SelectionForSecondary 变体中的索引，其他为 0
-    #[wasm_bindgen(getter)]
-    pub fn tag_index(&self) -> usize {
-        self.tag_index
-    }
 }
 
 impl From<(String, Vec<char>, senime_lib::input_analyzer::Tag)> for JsSegment {
     fn from((text, origin, tag): (String, Vec<char>, senime_lib::input_analyzer::Tag)) -> Self {
-        let (tag_name, tag_index) = match tag {
-            senime_lib::input_analyzer::Tag::Normal => ("Normal", 0),
-            senime_lib::input_analyzer::Tag::Selection(i) => ("Selection", i),
-            senime_lib::input_analyzer::Tag::Punctuation => ("Punctuation", 0),
-            senime_lib::input_analyzer::Tag::SelectionForPunc(i) => ("SelectionForPunc", i),
-            senime_lib::input_analyzer::Tag::Escape(_) => ("Escape", 0),
-            senime_lib::input_analyzer::Tag::Secondary => ("Secondary", 0),
-            senime_lib::input_analyzer::Tag::SelectionForSecondary(i) => {
-                ("SelectionForSecondary", i)
-            }
-            senime_lib::input_analyzer::Tag::Unknown => ("Unknown", 0),
+        let tag_name = match tag {
+            senime_lib::input_analyzer::Tag::Code(_) => "Code",
+            senime_lib::input_analyzer::Tag::Punctuation(_) => "Punctuation",
+            senime_lib::input_analyzer::Tag::Escape(_) => "Escape",
+            senime_lib::input_analyzer::Tag::Unknown => "Unknown",
         };
         Self {
             text,
             origin: origin.into_iter().collect(),
             tag_name: tag_name.to_string(),
-            tag_index,
         }
     }
 }

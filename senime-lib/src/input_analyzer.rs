@@ -1,32 +1,22 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, iter::Peekable, slice::Iter};
 
 use ahash::AHashMap;
 
 use crate::dict::{CandidateView, Config, Dict};
 
 #[derive(Debug)]
-enum InputType {
-    Selection(usize),
-    Punctuation(Vec<String>),
-    Secondary,
-    EscapePair(char),
-    Unknown,
+pub struct InputAnalyzer {
+    dicts: Vec<(char, String, Dict)>,
+    main_dict_code_map: AHashMap<char, String>,
+    escape_pair: Option<[char; 2]>,
+    selection_keys: [char; 9],
+    punctuations: HashMap<char, Vec<String>>,
+    page_count: usize,
 }
 
-#[derive(Debug)]
-pub struct InputAnalyzer {
-    // 主码表
-    dict: Dict,
-    // 反查码表
-    secondary_dict: Option<Dict>,
-    // 反查提示符 (code, text, weight)
-    secondary_hint: Option<(String, String, i32)>,
-    // 单字对应编码，来自主码表，当反查时，根据单字从这里找对应的编码
-    reverse_code_map: Option<AHashMap<char, String>>,
-    // 键位，除 26 个小写字母外，设定其他键位对应的功能：选择候选、标点符号、触发反查、原始输入标记
-    key_map: HashMap<char, InputType>,
-    selection_keys: [char; 9],
-}
+// ⇞ (U+21DE) 和 ⇟ (U+21DF)
+const PAGE_UP: char = '⇞';
+const PAGE_DOWN: char = '⇟';
 
 impl InputAnalyzer {
     pub fn new(dict: Dict, secondary: Option<(Dict, String)>) -> Self {
@@ -35,60 +25,46 @@ impl InputAnalyzer {
             selection_keys,
             punctuations,
             escape_pair,
-            reverse_key,
+            reverse_key: _,
             reverse_dict: _,
         } = dict.config().clone();
-        let mut key_map = HashMap::new();
-        for (i, key) in selection_keys.iter().enumerate() {
-            key_map.insert(*key, InputType::Selection(i));
-        }
-        for (key, values) in punctuations.into_iter() {
-            key_map.insert(key, InputType::Punctuation(values));
-        }
-        if let Some([left, right]) = escape_pair {
-            key_map.insert(left, InputType::EscapePair(right));
-        }
-        if let Some(char) = reverse_key {
-            key_map.insert(char, InputType::Secondary);
-        }
-        let (secondary_dict, secondary_hint, reverse_code_map) = match secondary {
-            Some((sec_dict, hint)) => {
-                let hint_tuple = ("r".to_string(), format!(":({hint})"), 0i32);
-                let mut single_text_code_map = AHashMap::<char, String>::new();
-                // 从dict.candidates中筛选单字，存入该单字的最长编码
-                for cand in dict.candidates_iter() {
-                    if cand.text.chars().count() == 1 {
-                        let ch = cand.text.chars().next().unwrap();
-                        let code = cand.code.to_string();
-                        if let Some(existing) = single_text_code_map.get_mut(&ch) {
-                            if code.len() > existing.len() {
-                                *existing = code;
-                            }
-                        } else {
-                            single_text_code_map.insert(ch, code);
+        let mut dicts = vec![];
+        let mut main_dict_code_map = AHashMap::<char, String>::new();
+        if let Some((sec_dict, hint)) = secondary {
+            // 从dict.candidates中筛选单字，存入该单字的最长编码
+            for cand in dict.candidates_iter() {
+                if cand.text.chars().count() == 1 {
+                    let ch = cand.text.chars().next().unwrap();
+                    let code = cand.code.to_string();
+                    if let Some(existing) = main_dict_code_map.get_mut(&ch) {
+                        if code.len() > existing.len() {
+                            *existing = code;
                         }
+                    } else {
+                        main_dict_code_map.insert(ch, code);
                     }
                 }
-                (Some(sec_dict), Some(hint_tuple), Some(single_text_code_map))
             }
-            _ => (None, None, None),
+            dicts.push(('@', hint, sec_dict));
         };
+        dicts.push(('\0', "".to_string(), dict));
+        dicts.reverse();
         Self {
-            dict,
-            secondary_dict,
-            secondary_hint,
-            key_map,
+            dicts,
             selection_keys,
-            reverse_code_map,
+            main_dict_code_map,
+            escape_pair,
+            punctuations,
+            page_count: 9,
         }
     }
 
     pub fn get_dict(&self) -> &Dict {
-        &self.dict
+        &self.dicts[0].2
     }
 
     pub fn get_sec_dict(&self) -> Option<&Dict> {
-        self.secondary_dict.as_ref()
+        self.dicts.get(1).as_ref().map(|d| &d.2)
     }
 }
 
@@ -107,12 +83,10 @@ impl InputAnalyzer {
         let mut candidates: Option<Vec<CandidateRich>> = None;
         for (i, (codes, tag)) in segments.into_iter().enumerate() {
             let at_last = i == segment_len - 1;
-            let get_count = if at_last { 9 } else { 1 };
-            let use_secondary_dict = matches!(tag, Tag::Secondary | Tag::SelectionForSecondary(_));
             match tag {
-                Tag::Normal | Tag::Secondary => {
+                Tag::Code(selection) => {
                     if let Some((cands, unique)) =
-                        self.search_candidates(&codes, 0, get_count, use_secondary_dict)
+                        self.search_candidates(&codes, &selection, !at_last)
                     {
                         reduce_space = !unique;
                         segments_ret.push((cands[0].text.to_string(), codes.clone(), tag));
@@ -133,45 +107,21 @@ impl InputAnalyzer {
                             candidates = Some(cands.iter().enumerate().map(to_rich).collect());
                         }
                     } else {
+                        // Dict中无结果，直接返回
                         segments_ret.push((codes.iter().collect(), codes, tag));
                     }
                 }
-                Tag::Selection(i_cand) | Tag::SelectionForSecondary(i_cand) => {
-                    if let Some((cands, _unique)) = self.search_candidates(
-                        &codes[..codes.len() - 1],
-                        i_cand,
-                        get_count,
-                        use_secondary_dict,
-                    ) {
-                        segments_ret.push((cands[0].text.to_string(), codes, tag));
-                    }
-                }
-                Tag::Punctuation | Tag::SelectionForPunc(_) => {
-                    let mut compacted = compact_vec(&codes);
-                    let selections = if let Tag::SelectionForPunc(i_cand) = tag {
-                        // 如果tag是SelectionForPunc，select_key必然处于最后
-                        compacted.pop().map(|c| (i_cand, c.0))
-                    } else {
-                        reduce_space = true;
-                        None
-                    };
-                    let last_i = compacted.len() - 1;
-                    for (i, (punc, repeat)) in compacted.into_iter().enumerate() {
-                        let select = if i == last_i { selections } else { None };
-                        let mut origin = [punc].repeat(repeat);
-                        if let Some((_, k)) = select {
-                            origin.push(k);
+                Tag::Punctuation((idx, has_selection)) => {
+                    match self.get_punctuation(&codes, idx, has_selection, !at_last) {
+                        Some((punc_text, cands)) => {
+                            reduce_space = !cands.is_empty();
+                            segments_ret.push((punc_text, codes, tag));
+                            if at_last && !cands.is_empty() {
+                                candidates = Some(cands);
+                            }
                         }
-                        match self.get_punctuation(&punc, repeat, select.map(|s| s.0)) {
-                            Some((punc_text, cands)) => {
-                                segments_ret.push((punc_text, origin, tag));
-                                if at_last {
-                                    candidates = cands;
-                                }
-                            }
-                            _ => {
-                                segments_ret.push((origin.iter().collect(), origin, tag));
-                            }
+                        _ => {
+                            segments_ret.push((codes.iter().collect(), codes, tag));
                         }
                     }
                 }
@@ -186,6 +136,7 @@ impl InputAnalyzer {
                     segments_ret.push((text, codes, tag));
                 }
                 _ => {
+                    // 如果unknow段
                     let start = (reduce_space && codes[0] == ' ') as usize;
                     if reduce_space {
                         reduce_space = false;
@@ -205,284 +156,324 @@ impl InputAnalyzer {
     fn search_candidates<'a>(
         &'a self,
         code: &[char],
-        index: usize,
-        count: usize,
-        use_secondary_dict: bool,
+        selection: &CodeSelection,
+        no_cands: bool,
     ) -> Option<(Vec<CandidateView<'a>>, bool)> {
-        // codes为空（排除反查触发字符后)时，展示反查提示（通常为码表名)
-        if use_secondary_dict && code.len() <= 1 {
-            return self.secondary_hint.as_ref().map(|(code, text, weight)| {
-                (
-                    vec![CandidateView {
-                        code,
-                        text,
-                        weight: *weight,
-                    }],
-                    false,
-                )
-            });
+        let dict = &self.dicts[selection.dict_idx].2;
+        let mut code = code;
+        if selection.dict_idx > 0 {
+            code = &code[1..];
         }
-        let (dict, codes) = if use_secondary_dict {
-            (self.secondary_dict.as_ref()?, &code[1..])
-        } else {
-            (&self.dict, code)
-        };
-        let c = dict.search(codes)?;
-        let (slice, unique) = if index == 0 {
-            (&c[0..c.len().min(count)], c.len() == 1)
-        } else {
-            let index = if index >= c.len() { 0 } else { index };
-            (&c[index..index + 1], true)
-        };
-        if use_secondary_dict {
-            // 反查时需要从 reverse_code_map 构建新的 code
-            let reverse_map = self.reverse_code_map.as_ref()?;
-            let cands: Vec<CandidateView<'a>> = slice
+        if selection.has_selection {
+            code = &code[..code.len() - 1];
+        }
+        let slice = if selection.has_pagination {
+            // 过滤PAGE_UP和PAGE_DOWN
+            let code = code
                 .iter()
-                .map(|cand| {
-                    let mut code = String::new();
-                    for (i, ch) in cand.text.chars().enumerate() {
-                        if i > 0 {
-                            code.push(' ');
-                        }
-                        let part = reverse_map.get(&ch).map(String::as_str).unwrap_or("_");
-                        code.push_str(part);
-                    }
-                    // 由于 code 是动态生成的，需要泄漏字符串以获得 'a 生命周期
-                    // 这里只在反查时发生，数量很少，可以接受
-                    let code: &'a str = Box::leak(code.into_boxed_str());
-                    CandidateView {
-                        code,
-                        text: cand.text,
-                        weight: cand.weight,
-                    }
-                })
-                .collect();
-            Some((cands, false))
+                .filter(|&&c| c != PAGE_UP && c != PAGE_DOWN)
+                .copied()
+                .collect::<Vec<_>>();
+            dict.search(&code)?
         } else {
-            Some((slice.to_vec(), unique))
+            dict.search(code)?
+        };
+        // 翻页后的窗口
+        let start = (selection.page_no * self.page_count).min(slice.len() % self.page_count);
+        let slice = &slice[start..(start + self.page_count).min(slice.len())];
+        // 是否唯一只针对实际的查询结果，与selection无关。
+        let unique = slice.len() <= 1;
+        let cands = if selection.sel_idx > 0 || no_cands {
+            let index = if selection.sel_idx >= slice.len() {
+                0
+            } else {
+                selection.sel_idx
+            };
+            &slice[index..index + 1]
+        } else {
+            slice
+        };
+        if selection.dict_idx > 0 {
+            // 反查时需要从 main_dict_code_map 构建新的 code
+            self.candidates_remap_code(cands)
+                .map(|cands| (cands, unique))
+        } else {
+            Some((cands.to_vec(), unique))
         }
     }
 
+    fn candidates_remap_code<'a>(
+        &self,
+        cands: &[CandidateView<'a>],
+    ) -> Option<Vec<CandidateView<'a>>> {
+        let code_map = &self.main_dict_code_map;
+        let cands: Vec<CandidateView<'a>> = cands
+            .iter()
+            .map(|cand| {
+                let mut code = String::new();
+                for (i, ch) in cand.text.chars().enumerate() {
+                    if i > 0 {
+                        code.push(' ');
+                    }
+                    let part = code_map.get(&ch).map(String::as_str).unwrap_or("_");
+                    code.push_str(part);
+                }
+                // 由于 code 是动态生成的，需要泄漏字符串以获得 'a 生命周期
+                // 这里只在反查时发生，数量很少，可以接受
+                let code: &'a str = Box::leak(code.into_boxed_str());
+                CandidateView {
+                    code,
+                    text: cand.text,
+                    weight: cand.weight,
+                }
+            })
+            .collect();
+        Some(cands)
+    }
+
     fn segments(&self, input: &[char]) -> Vec<(Vec<char>, Tag)> {
-        // (候选位置，要显示的字符<可以是正常被选的text，可以是标点，也可以是原始的输入字符>)
         let mut segments: Vec<(Vec<char>, Tag)> = vec![];
-        let mut codes = vec![];
-        let mut last_tag = None;
-        let mut escape: Option<(char, char)> = None;
-        let push_before = |c: &mut Vec<char>, seg: &mut Vec<(Vec<char>, Tag)>, t: Tag| {
-            if c.len() > 1 {
-                let before = c[0..c.len() - 1].to_vec();
-                seg.push((before, t));
-            }
-            *c = c.split_off(c.len() - 1);
-        };
-        for c in input.iter().chain(std::iter::once(&'\n')) {
-            codes.push(*c);
-
-            // 进入escape状态
-            if let Some((left, right)) = escape {
-                let is_lf = *c == '\n';
-                if *c == right || is_lf {
-                    if is_lf {
-                        codes.pop();
-                    }
-                    segments.push((codes.clone(), Tag::Escape((left, right))));
-                    codes.clear();
-                    escape = None;
-                }
-                last_tag = None;
+        let mut iter = input.iter().peekable();
+        let mut unknown_chars = vec![];
+        while (&iter.peek()).is_some() {
+            let seg = if let Some(seg) = self.match_seg_escape(&mut iter) {
+                // println!("matched escape");
+                seg
+            } else if let Some(seg) = self.match_seg_puncs(&mut iter) {
+                // println!("matched puncs");
+                seg
+            } else if let Some(seg) = self.match_seg_code(&mut iter) {
+                // println!("matched code: {:?}", seg.0);
+                seg
+            } else {
+                let ch = iter.next().unwrap();
+                unknown_chars.push(*ch);
+                // println!("matched unknown: {:?}", unknown_chars);
+                // 使连续的unknown字符为一段，而不是每个字符单独分段
                 continue;
+            };
+            if !unknown_chars.is_empty() {
+                segments.push((unknown_chars.to_vec(), Tag::Unknown));
+                unknown_chars.clear();
             }
-
-            // (reachable = false) codes到此处时已无法到达
-            match self.key_map.get(c).unwrap_or(&InputType::Unknown) {
-                InputType::EscapePair(char) => {
-                    push_before(&mut codes, &mut segments, last_tag.unwrap_or(Tag::Normal));
-                    escape = Some((*c, *char));
-                }
-                InputType::Selection(index) => {
-                    match last_tag {
-                        // 当前char是Selection，当last_tag是Normal或Punctuation或Secondary，则将codes作为segment，并清空codes
-                        Some(Tag::Normal) | Some(Tag::Punctuation) | Some(Tag::Secondary) => {
-                            let tag = match last_tag {
-                                Some(Tag::Normal) => Tag::Selection(*index),
-                                Some(Tag::Punctuation) => Tag::SelectionForPunc(*index),
-                                Some(Tag::Secondary) => Tag::SelectionForSecondary(*index),
-                                _ => Tag::Unknown,
-                            };
-                            segments.push((codes.clone(), tag));
-                            codes.clear();
-                            last_tag = None;
-                        }
-                        _ => {
-                            // last_tag为其他，将当前char认为unknown
-                            last_tag = Some(Tag::Unknown);
-                        }
-                    }
-                }
-                InputType::Punctuation(_) => {
-                    match last_tag {
-                        // 当last_tag为punctuation时，继续向codes追加
-                        Some(Tag::Punctuation) => {}
-                        // 当last_tag是其他时，将之前的codes加入segments
-                        _ => {
-                            push_before(
-                                &mut codes,
-                                &mut segments,
-                                last_tag.unwrap_or(Tag::Unknown),
-                            );
-                        }
-                    }
-                    last_tag = Some(Tag::Punctuation);
-                }
-                InputType::Secondary => {
-                    // 反查标记
-                    push_before(&mut codes, &mut segments, last_tag.unwrap_or(Tag::Unknown));
-                    last_tag = Some(Tag::Secondary);
-                }
-                _ => {
-                    let is_code = c.is_ascii_lowercase();
-                    let reachable = match last_tag {
-                        Some(Tag::Unknown) => false,
-                        Some(Tag::Secondary) => match self.secondary_dict.as_ref() {
-                            Some(sec_dict) if codes.len() > 1 => sec_dict.reachable(&codes[1..]),
-                            // 当secondary_dict(反查)不存在时，保持codes(是连续的字母)继续追加
-                            _ => is_code,
-                        },
-                        _ => self.dict.reachable(&codes),
-                    };
-                    // 仍是有效code
-                    if reachable {
-                        last_tag = if last_tag == Some(Tag::Secondary) {
-                            Some(Tag::Secondary)
-                        } else {
-                            Some(Tag::Normal)
-                        };
-                        continue;
-                    }
-                    // 不可到达(码表中无此码)
-                    if is_code {
-                        // 不可到达，但当前字符仍是code，截取之前的codes为segment
-                        push_before(&mut codes, &mut segments, last_tag.unwrap_or(Tag::Normal));
-                        // 是否允许Secondary(反查)能连续输入(组句)？目前设计不允许，使下一段codes成为Normal
-                        last_tag = Some(Tag::Normal);
-                    } else {
-                        // 当前char，不是code是unknown，如果last_tag是normal或none，则截取之前的codes为segment
-                        match last_tag {
-                            Some(Tag::Normal)
-                            | Some(Tag::Punctuation)
-                            | Some(Tag::Secondary)
-                            | None => {
-                                push_before(
-                                    &mut codes,
-                                    &mut segments,
-                                    last_tag.unwrap_or(Tag::Normal),
-                                );
-                            }
-                            _ => {
-                                if *c == '\n' && codes.len() > 1 {
-                                    push_before(
-                                        &mut codes,
-                                        &mut segments,
-                                        last_tag.unwrap_or(Tag::Unknown),
-                                    );
-                                    codes.clear();
-                                }
-                            }
-                        }
-                        last_tag = Some(Tag::Unknown);
-                    }
-                }
-            }
+            segments.push(seg);
+        }
+        if !unknown_chars.is_empty() {
+            segments.push((unknown_chars.to_vec(), Tag::Unknown));
         }
         segments
     }
 
     fn get_punctuation(
         &self,
-        punc: &char,
-        repeat: usize,
-        select: Option<usize>,
-    ) -> Option<(String, Option<Vec<CandidateRich>>)> {
-        self.key_map.get(punc).map(|t| match t {
-            InputType::Punctuation(ps) => {
-                // 如果ps["a", "b"]的长度为2，而repeat为5，最终result将变成bba
-                // 另外如果有select，则在最后一轮时直接从cands中选择对应的punc
-                let mut result: Vec<&str> = vec![];
-                let mut cands: &[String] = &ps[..];
-                let mut c = repeat;
-                while c > 0 {
-                    let index = if (c - 1) >= ps.len() {
-                        ps.len() - 1
-                    } else {
-                        c - 1
-                    };
-                    result.push(&ps[index]);
-                    cands = &ps[index..];
-                    c = c - ps.len().min(c);
+        chars: &[char],
+        sel_idx: usize,
+        has_selection: bool,
+        no_cands: bool,
+    ) -> Option<(String, Vec<CandidateRich>)> {
+        self.punctuations.get(&chars[0]).map(|ps| {
+            // 如果ps["a", "b", "c"]的长度为3，而chars.len()为7，最终result将变成cca
+            // 如果ps["a", "b", "c"]的长度为3，而chars.len()为2，最终result将变成b
+            // 另外如果有select，则在最后一轮时直接从cands中选择对应的punc
+            let mut result: Vec<&str> = vec![];
+            let mut cands: &[String] = &ps[..];
+            let mut c = if has_selection {
+                chars.len() - 1
+            } else {
+                chars.len()
+            };
+            while c > 0 {
+                // 如果当前c小于等于ps.len，这是最后一轮，选择c - 1的元素
+                // 如果当前c大于ps.len，此轮从ps中选择最后一个元素(ps.len() - 1)。
+                let i = if c <= ps.len() { c - 1 } else { ps.len() - 1 };
+                result.push(&ps[i]);
+                cands = &ps[i..];
+                c = c - ps.len().min(c);
+            }
+            let cands: Vec<CandidateRich> = if has_selection || no_cands {
+                // 将result最后一个元素修改为cands[i_cand]对应的内容
+                if let (Some(punc), Some(last)) =
+                    (cands.get(sel_idx.min(cands.len() - 1)), result.last_mut())
+                {
+                    *last = punc;
                 }
-                let cands: Option<Vec<CandidateRich>> = if cands.len() > 1 {
-                    if let Some(i_cand) = select {
-                        // 将result最后一个元素修改为cands[i_cand]对应的内容
-                        if let (Some(punc), Some(last)) = (cands.get(i_cand), result.last_mut()) {
-                            *last = punc;
-                        }
-                        None
+                vec![]
+            } else {
+                let cands = cands
+                    .iter()
+                    .enumerate()
+                    .map(|(i, pu)| CandidateRich {
+                        code: String::new(),
+                        text: pu.clone(),
+                        weight: 0,
+                        origin: chars.to_vec(),
+                        order: i,
+                        select_key: self.selection_keys.get(i).copied().unwrap_or('_'),
+                        unique: false,
+                    })
+                    .collect();
+                cands
+            };
+            Some((result.join(""), cands))
+        })?
+    }
+
+    fn match_seg_escape(&self, chars: &mut Peekable<Iter<'_, char>>) -> Option<(Vec<char>, Tag)> {
+        if let (Some(first), Some(pair)) = (chars.peek(), self.escape_pair)
+            && **first == pair[0]
+        {
+            let mut result = vec![**first];
+            chars.next();
+            while let Some(ch) = chars.next() {
+                result.push(*ch);
+                if *ch == pair[1] {
+                    break;
+                }
+            }
+            Some((result, Tag::Escape((pair[0], pair[1]))))
+        } else {
+            None
+        }
+    }
+
+    fn match_seg_puncs(&self, chars: &mut Peekable<Iter<'_, char>>) -> Option<(Vec<char>, Tag)> {
+        if let Some(first) = chars.peek()
+            && self.punctuations.contains_key(*first)
+        {
+            let first = **first;
+            let mut result = vec![first];
+            chars.next();
+            while let Some(ch) = chars.peek() {
+                if **ch == first {
+                    // 只追加相同的标点符号映射字符
+                    result.push(**ch);
+                    chars.next();
+                } else if let Some(i) = self.selection_keys.iter().position(|&k| k == **ch) {
+                    // 如果与首个不同，检查是否是selection_key
+                    result.push(**ch);
+                    chars.next();
+                    return Some((result, Tag::Punctuation((i, true))));
+                } else {
+                    break;
+                }
+            }
+            Some((result, Tag::Punctuation((0, false))))
+        } else {
+            None
+        }
+    }
+
+    fn match_seg_code(&self, chars: &mut Peekable<Iter<'_, char>>) -> Option<(Vec<char>, Tag)> {
+        if let Some(first) = chars.peek() {
+            let first = **first;
+            let (dict_idx, has_prefix) = self
+                .dicts
+                .iter()
+                .enumerate()
+                .find_map(|(i, d)| (d.0 == first).then(|| (i, true)))
+                .unwrap_or((0, false));
+            let dict = &self.dicts[dict_idx].2;
+            let mut codes = vec![];
+            if has_prefix {
+                chars.next();
+            }
+            let mut page_no = 0;
+            let mut sel_idx = 0;
+            let mut has_selection = false;
+            let mut has_pagination = false;
+            while let Some(ch) = chars.peek() {
+                codes.push(**ch);
+                if dict.reachable(&codes) {
+                    chars.next();
+                    continue;
+                }
+                // 只有存在一个有效的code时，才可以继续判断后面是否跟着翻页或选择的字符
+                if codes.len() > 1 {
+                    if **ch == PAGE_DOWN {
+                        // 检查当前字符是否是翻页键
+                        page_no += 1;
+                        has_pagination = true;
+                        chars.next();
+                    } else if **ch == PAGE_UP {
+                        // 检查当前字符是否是翻页键
+                        page_no -= 1;
+                        has_pagination = true;
+                        chars.next();
+                    } else if let Some(i) = self.selection_keys.iter().position(|&k| k == **ch) {
+                        // 检查当前字符是否是selection_key
+                        sel_idx = i;
+                        has_selection = true;
+                        chars.next();
+                        break;
                     } else {
-                        let cands = cands
-                            .iter()
-                            .enumerate()
-                            .map(|(i, pu)| CandidateRich {
-                                code: String::new(),
-                                text: pu.clone(),
-                                weight: 0,
-                                origin: [*punc].repeat(repeat),
-                                order: i,
-                                select_key: self.selection_keys.get(i).copied().unwrap_or('_'),
-                                unique: false,
-                            })
-                            .collect();
-                        Some(cands)
+                        // codes在Dict中已无结果，将当前字符吐出，但当前字符还未取出，因此下一轮仍将计算当前字符
+                        codes.pop();
+                        break;
                     }
                 } else {
-                    None
-                };
-                Some((result.join(""), cands))
+                    if has_prefix {
+                        // 除prefix外，首字符在Dict中无结果，下一阶段，当前未被取出的字符会被当作unknown
+                        // 由于prefix被取出，因此将其当作unknown
+                        return Some((vec![first], Tag::Unknown));
+                    } else {
+                        // 下一阶段，当前未被取出的字符会被当作unknown
+                        return None;
+                    }
+                }
             }
-            _ => None,
-        })?
+            // 添加first到result的首位
+            if has_prefix {
+                codes.insert(0, first);
+            }
+            Some((
+                codes,
+                Tag::Code(CodeSelection {
+                    page_no,
+                    sel_idx,
+                    dict_idx,
+                    has_selection,
+                    has_pagination,
+                }),
+            ))
+        } else {
+            None
+        }
     }
 }
 
 // code = ['.', '.', '!', '!', ';', '!']
 // want convert to [('.', 2), ('!', 2), (';', 1), ('!', 1)]
-fn compact_vec(v: &[char]) -> Vec<(char, usize)> {
-    let mut result = Vec::new();
-    let mut count = 1;
-    let mut last_char = v[0];
-    for c in v.iter().skip(1) {
-        if *c == last_char {
-            count += 1;
-        } else {
-            result.push((last_char, count));
-            last_char = *c;
-            count = 1;
-        }
-    }
-    result.push((last_char, count));
-    result
+// fn compact_vec(v: &[char]) -> Vec<(char, usize)> {
+//     let mut result = Vec::new();
+//     let mut count = 1;
+//     let mut last_char = v[0];
+//     for c in v.iter().skip(1) {
+//         if *c == last_char {
+//             count += 1;
+//         } else {
+//             result.push((last_char, count));
+//             last_char = *c;
+//             count = 1;
+//         }
+//     }
+//     result.push((last_char, count));
+//     result
+// }
+
+#[derive(Debug, Copy, Clone, PartialEq, PartialOrd, Default)]
+pub struct CodeSelection {
+    pub page_no: usize,
+    pub sel_idx: usize,
+    pub dict_idx: usize,
+    pub has_selection: bool,
+    pub has_pagination: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
 pub enum Tag {
-    Normal,
-    Selection(usize),
-    Punctuation,
-    SelectionForPunc(usize),
+    Code(CodeSelection),
+    Punctuation((usize, bool)),
     Escape((char, char)),
-    Secondary,
-    SelectionForSecondary(usize),
     Unknown,
 }
 
@@ -534,18 +525,29 @@ mod tests {
 
     fn gen_entries() -> String {
         r#"
-ahb 来 1
-ahc 麦克 1
-ahcg 疲惫不堪 1
-c 不 10
-c 不是 1
-cu 还 1
-cb 层 1
-cb 不 1
-z 可 1
-z 可以 1
-zk 可能 1
-zkc 射 1"#
+a 嗯 1
+aa 嗯嗯 1
+ab 嗯毕 1
+ac 嗯渗 1
+ad 嗯弟 1
+aaa 嗯嗯嗯 1
+abc 嗯毕渗 1
+abcd 嗯毕渗弟 1
+b 毕 1
+ba 毕嗯 1
+bb 毕毕 1
+bc 毕渗 1
+bd 毕弟 1
+c 渗 1
+ca 渗嗯 1
+cb 渗毕 1
+cc 渗渗 1
+cd 渗弟 1
+d 弟 1
+da 弟嗯 1
+db 弟毕 1
+dc 弟渗 1
+dd 弟弟 1"#
             .replace(' ', "\t")
     }
 
@@ -559,28 +561,15 @@ zkc 射 1"#
         let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
         let analyzer = InputAnalyzer::new(dict, None);
         let inputs = vec![
-            ("a cIzk", vec!["来", "", "不是", "可能"]),
-            ("a cIzk@abc", vec!["来", "", "不是", "可能", "@abc"]),
+            ("a cIzk", vec!["嗯", "", "渗嗯", "zk"]),
+            ("a cI@abc", vec!["嗯", "", "渗嗯", "@", "嗯毕渗"]),
             (
-                "a cIzk,,,[]I]]",
-                vec!["来", "", "不是", "可能", "……", "「", "”", "”"],
-            ),
-            ("acIzk", vec!["来", "不是", "可能"]),
-            ("zk  cuahcI", vec!["可能", " ", "还", "疲惫不堪"]),
-            ("zk ,cuahcI", vec!["可能", "", "，", "还", "疲惫不堪"]),
-            (
-                "zk  c,cua.hcI",
-                vec!["可能", " ", "不", "，", "还", "来", "。", "h", "不是"],
+                "a  cIzk,,,[]I]]",
+                vec!["嗯", " ", "渗嗯", "zk", "……", "「", "”", "”"],
             ),
             (
-                "zk`zk`c,cua.hcI",
-                vec!["可能", "zk", "不", "，", "还", "来", "。", "h", "不是"],
-            ),
-            (
-                "zk `zk` c,cua.hcI`hhh",
-                vec![
-                    "可能", "", "zk", " ", "不", "，", "还", "来", "。", "h", "不是", "`hhh",
-                ],
+                "zk`zk`c,cua.hcP",
+                vec!["zk", "zk", "渗", "，", "渗", "u", "嗯", "。", "h", "渗渗"],
             ),
         ];
         for (input, expect) in inputs.into_iter() {
@@ -591,222 +580,255 @@ zkc 射 1"#
     }
 
     #[test]
-    fn test_segments() {
-        let trie = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
-        let analyzer = InputAnalyzer::new(trie, None);
-        let samples: Vec<(&str, Vec<&str>, Vec<Tag>)> = vec![
+    fn test_analyzer_with_sec_dict() {
+        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
+        let dict_sec = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
+        let analyzer = InputAnalyzer::new(dict, Some((dict_sec, "R".to_string())));
+        let inputs = vec![
             (
-                "c zk,,zkcI",
-                vec!["c", " ", "zk", ",,", "zkcI"],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Selection(1),
-                ],
+                "aaaaaa aaaaa",
+                vec!["嗯嗯嗯", "嗯嗯嗯", " ", "嗯嗯嗯", "嗯嗯"],
             ),
-            (
-                "c   A  zk,,zkcI",
-                vec!["c", "   A  ", "zk", ",,", "zkcI"],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Selection(1),
-                ],
-            ),
-            (
-                "IOczk,,zkcI",
-                vec!["IO", "c", "zk", ",,", "zkcI"],
-                vec![
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Selection(1),
-                ],
-            ),
-            (
-                "IOczk,I,,O.. zkcI",
-                vec!["IO", "c", "zk", ",I", ",,O", "..", " ", "zkcI"],
-                vec![
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::SelectionForPunc(1),
-                    Tag::SelectionForPunc(2),
-                    Tag::Punctuation,
-                    Tag::Unknown,
-                    Tag::Selection(1),
-                ],
-            ),
-            (
-                "ahcgahccb cIII;...",
-                vec!["ahcg", "ahc", "cb", " ", "cI", "II", ";..."],
-                vec![
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Selection(1),
-                    Tag::Unknown,
-                    Tag::Punctuation,
-                ],
-            ),
-            (
-                "8  8ahcgahccb  cIII;...",
-                vec!["8  8", "ahcg", "ahc", "cb", "  ", "cI", "II", ";..."],
-                vec![
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Selection(1),
-                    Tag::Unknown,
-                    Tag::Punctuation,
-                ],
-            ),
-            (
-                "zk  c,cua.hcI",
-                vec!["zk", "  ", "c", ",", "cu", "a", ".", "h", "cI"],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Selection(1),
-                ],
-            ),
-            (
-                "zk  ,c,cua.hcI",
-                vec!["zk", "  ", ",", "c", ",", "cu", "a", ".", "h", "cI"],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Selection(1),
-                ],
-            ),
-            (
-                "zk ,c,cua.hcI",
-                vec!["zk", " ", ",", "c", ",", "cu", "a", ".", "h", "cI"],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Selection(1),
-                ],
-            ),
-            (
-                "zk  `hello``world`c,cua.hcI",
-                vec![
-                    "zk", "  ", "`hello`", "`world`", "c", ",", "cu", "a", ".", "h", "cI",
-                ],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Escape(('`', '`')),
-                    Tag::Escape(('`', '`')),
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Selection(1),
-                ],
-            ),
-            (
-                "zk  c,cua.hcI`hello",
-                vec!["zk", "  ", "c", ",", "cu", "a", ".", "h", "cI", "`hello"],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Selection(1),
-                    Tag::Escape(('`', '`')),
-                ],
-            ),
-            (
-                "zk  c,cua.hcI`hello`",
-                vec!["zk", "  ", "c", ",", "cu", "a", ".", "h", "cI", "`hello`"],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Selection(1),
-                    Tag::Escape(('`', '`')),
-                ],
-            ),
-            (
-                "zk  c,cua.hcI@abc@abcI cu",
-                vec![
-                    "zk", "  ", "c", ",", "cu", "a", ".", "h", "cI", "@abc", "@abcI", " ", "cu",
-                ],
-                vec![
-                    Tag::Normal,
-                    Tag::Unknown,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Normal,
-                    Tag::Punctuation,
-                    Tag::Normal,
-                    Tag::Selection(1),
-                    Tag::Secondary,
-                    Tag::SelectionForSecondary(1),
-                    Tag::Unknown,
-                    Tag::Normal,
-                ],
-            ),
+            ("aaa8 ", vec!["嗯嗯嗯", " "]),
+            ("a cI@abc", vec!["嗯", "", "渗嗯", "嗯毕渗"]),
+            ("@aaac@cP@@@", vec!["嗯嗯嗯", "渗", "渗渗", "@", "@", "@"]),
         ];
-        for (i, (input, expected, expected_tags)) in samples.into_iter().enumerate() {
-            let segments = analyzer.segments(input.chars().collect::<Vec<_>>().as_slice());
-            // println!("Segments: {:?}", segments);
-            let (segments, tags): (Vec<String>, Vec<Tag>) = segments
-                .into_iter()
-                .map(|seg| (seg.0.iter().collect::<String>(), seg.1))
-                .unzip();
-            println!("sample: [{i}] {input}");
-            assert_eq!(segments, expected);
-            assert_eq!(tags, expected_tags);
+        for (input, expect) in inputs.into_iter() {
+            let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
+            let texts: Vec<String> = result.segments.into_iter().map(|seg| seg.0).collect();
+            assert_eq!(texts, expect);
+        }
+    }
+
+    impl CodeSelection {
+        fn with_sel(sel_idx: usize) -> Self {
+            Self {
+                sel_idx,
+                has_selection: true,
+                ..Default::default()
+            }
+        }
+        fn with_sec_dict(dict_idx: usize) -> Self {
+            Self {
+                dict_idx,
+                ..Default::default()
+            }
+        }
+        fn with_sec_dict_and_sel(dict_idx: usize, sel_idx: usize) -> Self {
+            Self {
+                dict_idx,
+                sel_idx,
+                has_selection: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    impl ToString for Tag {
+        fn to_string(&self) -> String {
+            match self {
+                Tag::Code(code_selection) => format!(
+                    "C_di={}_si={}_pn={}_hs={}_hp={}",
+                    code_selection.dict_idx,
+                    code_selection.sel_idx,
+                    code_selection.page_no,
+                    code_selection.has_selection,
+                    code_selection.has_pagination
+                ),
+                Tag::Punctuation((idx, has_selection)) => {
+                    format!("P_i={}_hs={}", idx, has_selection)
+                }
+                Tag::Escape(_) => "escape".to_string(),
+                Tag::Unknown => "unknown".to_string(),
+            }
         }
     }
 
     #[test]
-    fn test_compact_vec() {
-        let input = vec!['.', '.', '!', '!', ';', '!'];
-        let expected = vec![('.', 2), ('!', 2), (';', 1), ('!', 1)];
-        let result = compact_vec(&input);
-        assert_eq!(result, expected);
+    fn test_segments_with_sec_dict() {
+        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
+        let dict_sec = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
+        let analyzer = InputAnalyzer::new(dict, Some((dict_sec, "R".to_string())));
+        let samples: Vec<(usize, &str, Vec<&str>, Vec<Tag>)> = vec![
+            (
+                1,
+                "IIII@abc@ahI cu",
+                vec!["IIII", "@abc", "@a", "hI ", "c", "u"],
+                vec![
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::with_sec_dict(1)),
+                    Tag::Code(CodeSelection::with_sec_dict(1)),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                ],
+            ),
+            (
+                2,
+                "a@a@xa @a",
+                vec!["a", "@a", "@", "x", "a", " ", "@a"],
+                vec![
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Code(CodeSelection::with_sec_dict(1)),
+                    Tag::Unknown,
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::with_sec_dict(1)),
+                ],
+            ),
+            (
+                3,
+                "aaxx@abca@xx@aPPP@P",
+                vec!["aa", "xx", "@abc", "a", "@", "xx", "@aP", "PP", "@", "P"],
+                vec![
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::with_sec_dict(1)),
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::with_sec_dict_and_sel(1, 3)),
+                    Tag::Unknown,
+                    Tag::Unknown,
+                    Tag::Unknown,
+                ],
+            ),
+        ];
+        for (no, input, expected, expected_tags) in samples.into_iter() {
+            let segments = analyzer.segments(input.chars().collect::<Vec<_>>().as_slice());
+            // println!("Segments: {:?}", segments);
+            println!("sample: [{no}] {input}");
+            let (segments, tags): (Vec<String>, Vec<Tag>) = segments
+                .into_iter()
+                .map(|seg| (seg.0.iter().collect::<String>(), seg.1))
+                .unzip();
+            assert_eq!(segments, expected);
+            assert_eq!(
+                tags.into_iter()
+                    .enumerate()
+                    .map(|(i, tag)| format!("[{i}]<{}>", tag.to_string()))
+                    .collect::<Vec<_>>(),
+                expected_tags
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, tag)| format!("[{i}]<{}>", tag.to_string()))
+                    .collect::<Vec<_>>(),
+            );
+        }
     }
+
+    #[test]
+    fn test_segments() {
+        let dict = Dict::from_str_with_config(&gen_entries(), test_config()).unwrap();
+        let analyzer = InputAnalyzer::new(dict, None);
+        let samples: Vec<(usize, &str, Vec<&str>, Vec<Tag>)> = vec![
+            (
+                0,
+                "a zk,,cO",
+                vec!["a", " zk", ",,", "cO"],
+                vec![
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Punctuation((0, false)),
+                    Tag::Code(CodeSelection::with_sel(2)),
+                ],
+            ),
+            (
+                1,
+                "   A  zk,,;IaII",
+                vec!["   A  zk", ",,", ";I", "aI", "I"],
+                vec![
+                    Tag::Unknown,
+                    Tag::Punctuation((0, false)),
+                    Tag::Punctuation((1, true)),
+                    Tag::Code(CodeSelection::with_sel(1)),
+                    Tag::Unknown,
+                ],
+            ),
+            (
+                2,
+                "IOcaK  ",
+                vec!["IO", "ca", "K  "],
+                vec![
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                ],
+            ),
+            (
+                3,
+                "8  8ahcgccbPPP;8...8",
+                vec!["8  8", "a", "h", "c", "g", "cc", "bP", "PP", ";8", "...8"],
+                vec![
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Code(CodeSelection::with_sel(3)),
+                    Tag::Unknown,
+                    Tag::Punctuation((7, true)),
+                    Tag::Punctuation((7, true)),
+                ],
+            ),
+            (
+                4,
+                "aaxx  `hello`world`@a,cua.hcI",
+                vec!["aa", "xx  ", "`hello`", "worl", "d", "`@a,cua.hcI"],
+                vec![
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Escape(('`', '`')),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Escape(('`', '`')),
+                ],
+            ),
+            (
+                5,
+                "aaxx@abca@xx@aPPP@P",
+                vec!["aa", "xx@", "abc", "a", "@xx@", "aP", "PP@P"],
+                vec![
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Code(CodeSelection::default()),
+                    Tag::Unknown,
+                    Tag::Code(CodeSelection::with_sel(3)),
+                    Tag::Unknown,
+                ],
+            ),
+        ];
+        for (no, input, expected, expected_tags) in samples.into_iter() {
+            let segments = analyzer.segments(input.chars().collect::<Vec<_>>().as_slice());
+            // println!("Segments: {:?}", segments);
+            println!("sample: [{no}] {input}");
+            let (segments, tags): (Vec<String>, Vec<Tag>) = segments
+                .into_iter()
+                .map(|seg| (seg.0.iter().collect::<String>(), seg.1))
+                .unzip();
+            assert_eq!(segments, expected);
+            assert_eq!(
+                tags.into_iter()
+                    .enumerate()
+                    .map(|(i, tag)| format!("[{i}]<{}>", tag.to_string()))
+                    .collect::<Vec<_>>(),
+                expected_tags
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, tag)| format!("[{i}]<{}>", tag.to_string()))
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    // #[test]
+    // fn test_compact_vec() {
+    //     let input = vec!['.', '.', '!', '!', ';', '!'];
+    //     let expected = vec![('.', 2), ('!', 2), (';', 1), ('!', 1)];
+    //     let result = compact_vec(&input);
+    //     assert_eq!(result, expected);
+    // }
 }
