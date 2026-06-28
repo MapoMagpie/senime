@@ -172,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ime = load_input_analyzer(&table_path)?;
 
     // 分词器
-    let encoder = Looker::new(ime.main_dict().candidates_iter());
+    let encoder = Looker::new(ime.main_dict());
     // 上下文，存储输入记录、分词结果，aka.缓存一些计算结果，提升性能
     let mut ctx = Context::new(encoder);
     ctx.set_preset(preset);
@@ -232,6 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let calc_start = Instant::now();
         let AnalysisResult {
             candidates,
+            pending,
             mut segments,
         } = ime.analyze(ctx.get_input());
 
@@ -244,10 +245,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some((text, chars, _)) = poped {
             // 会出现text为空，而chars为 ' '(空格)
             let text_chars: Vec<char> = text.chars().collect();
-            if candidates.is_none() && text_chars != chars {
-                ctx.push(text_chars, chars);
-            } else {
+            if pending {
                 ctx.set_pending(text_chars, chars);
+            } else {
+                ctx.push(text_chars, chars);
             }
         }
         ctx.calc_measurement();

@@ -54,6 +54,7 @@ function runCompletion(
   const result = completion(preedit);
   const segCount = result.segment_count;
 
+  let pending = result.pending;
   const segments: { text: string; origin: string }[] = [];
   for (let i = 0; i < segCount; i++) {
     const seg = result.segment(i);
@@ -75,9 +76,12 @@ function runCompletion(
   for (let i = 0; i < segments.length - 1; i++) {
     autoCommit += segments[i].text;
   }
-
-  const lastSeg = segments[segments.length - 1];
   const ta = textareaRef.current;
+  if (autoCommit && ta) {
+    const pos = ta.selectionStart;
+    ta.setRangeText(autoCommit, pos, pos, "end");
+  }
+  const lastSeg = segments[segments.length - 1];
 
   // 无分段：整段提交
   if (!lastSeg) {
@@ -90,25 +94,21 @@ function runCompletion(
     return;
   }
 
-  // 无候选：全部提交（含最后一段）
-  if (cands.length === 0) {
-    const commitText = autoCommit + lastSeg.text;
+  // 未决中
+  if (pending) {
+    // 有候选：中间段提交到 textarea，最后一段作为 preedit
+    setState({ preedit: lastSeg.origin, preeditText: lastSeg.text, candidates: cands });
+    recalc();
+  } else {
     if (ta) {
       const pos = ta.selectionStart;
-      ta.setRangeText(commitText, pos, pos, "end");
+      ta.setRangeText(lastSeg.text, pos, pos, "end");
     }
     setState({ preedit: "", preeditText: "", candidates: [] });
     recalc();
-    return;
+
   }
 
-  // 有候选：中间段提交到 textarea，最后一段作为 preedit
-  if (autoCommit && ta) {
-    const pos = ta.selectionStart;
-    ta.setRangeText(autoCommit, pos, pos, "end");
-  }
-  setState({ preedit: lastSeg.origin, preeditText: lastSeg.text, candidates: cands });
-  recalc();
 }
 
 export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextAreaElement | null>, recalc: () => void) {

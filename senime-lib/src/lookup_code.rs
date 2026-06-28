@@ -11,7 +11,7 @@ use trie::Trie;
 
 use ahash::AHashMap;
 
-use crate::dict::CandidateView;
+use crate::Dict;
 
 #[derive(Debug, Clone)]
 struct CodePos(Vec<char>, u16);
@@ -25,23 +25,24 @@ pub struct Looker {
 
 const INFINITY: usize = 100000000;
 impl Looker {
-    pub fn new<'a>(candidates: impl IntoIterator<Item = CandidateView<'a>>) -> Self {
+    pub fn new<'a>(dict: &'a Dict) -> Self {
         let mut map: AHashMap<Vec<char>, Vec<CodePos>> = AHashMap::new();
         let mut code_trie = Trie::new();
         let mut code = "";
         let mut pos = 0;
         let mut max_text_len = 0;
 
-        for cand in candidates {
-            if code == cand.code {
+        for cand in dict.candidates.iter() {
+            let code_new = dict.get_str(cand.code);
+            if code == code_new {
                 pos += 1;
             } else {
-                code_trie.insert(cand.code.chars());
-                code = cand.code;
+                code_trie.insert(code_new.chars());
+                code = code_new;
                 pos = 0;
             }
-            let chars = cand.text.chars().collect::<Vec<_>>();
-            let codes = cand.code.chars().collect::<Vec<_>>();
+            let chars = dict.get_str(cand.text).chars().collect::<Vec<_>>();
+            let codes = code_new.chars().collect::<Vec<_>>();
             max_text_len = max_text_len.max(chars.len());
             match map.get_mut(&chars) {
                 Some(v) => {
@@ -245,10 +246,7 @@ impl<'a> Segment<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        dict::Dict,
-        lookup_code::Looker,
-    };
+    use crate::{dict::Dict, lookup_code::Looker};
     use std::str::FromStr;
 
     fn create_dict() -> Dict {
@@ -278,7 +276,7 @@ jdma	人民网world	0
     #[test]
     fn test_analyze_segments() {
         let dict = create_dict();
-        let looker = Looker::new(dict.candidates_iter());
+        let looker = Looker::new(&dict);
         let text = "中华人民是中华人民共和国的公民中华人民是中华人民共和国的公民，共和hello国人民网world。"
             .chars()
             .collect::<Vec<_>>();

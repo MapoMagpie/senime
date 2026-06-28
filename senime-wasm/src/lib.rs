@@ -24,10 +24,7 @@ pub fn load_bin(bs: &[u8], config: &str) -> Result<(), JsValue> {
     let cfg: Config =
         serde_json::from_str(config).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut ime = IME.lock().unwrap();
-    ime.replace(InputAnalyzer::new(
-        cfg,
-        vec![(DictMeta::default(), dict)],
-    ));
+    ime.replace(InputAnalyzer::new(cfg, vec![(DictMeta::default(), dict)]));
     Ok(())
 }
 
@@ -41,6 +38,7 @@ pub fn completion(input: &str) -> JsAnalysisResult {
     } else {
         JsAnalysisResult {
             segments: vec![],
+            pending: false,
             candidates: None,
         }
     }
@@ -98,7 +96,6 @@ pub struct JsCandidate {
     origin: String,
     order: usize,
     select_key: char,
-    unique: bool,
 }
 
 #[wasm_bindgen]
@@ -127,10 +124,6 @@ impl JsCandidate {
     pub fn select_key(&self) -> char {
         self.select_key
     }
-    #[wasm_bindgen(getter)]
-    pub fn unique(&self) -> bool {
-        self.unique
-    }
 }
 
 impl From<CandidateRich> for JsCandidate {
@@ -142,7 +135,6 @@ impl From<CandidateRich> for JsCandidate {
             origin: c.origin.into_iter().collect(),
             order: c.order,
             select_key: c.select_key,
-            unique: c.unique,
         }
     }
 }
@@ -150,6 +142,7 @@ impl From<CandidateRich> for JsCandidate {
 #[wasm_bindgen]
 pub struct JsAnalysisResult {
     segments: Vec<JsSegment>,
+    pending: bool,
     candidates: Option<Vec<JsCandidate>>,
 }
 
@@ -163,6 +156,11 @@ impl JsAnalysisResult {
     /// 获取第 i 个分段
     pub fn segment(&self, i: usize) -> JsSegment {
         self.segments[i].clone()
+    }
+    /// 是否未决
+    #[wasm_bindgen(getter)]
+    pub fn pending(&self) -> bool {
+        self.pending
     }
     /// 是否有候选列表
     #[wasm_bindgen(getter)]
@@ -184,6 +182,7 @@ impl From<AnalysisResult> for JsAnalysisResult {
     fn from(r: AnalysisResult) -> Self {
         Self {
             segments: r.segments.into_iter().map(JsSegment::from).collect(),
+            pending: r.pending,
             candidates: r
                 .candidates
                 .map(|v| v.into_iter().map(JsCandidate::from).collect()),

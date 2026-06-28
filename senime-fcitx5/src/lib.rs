@@ -1,9 +1,7 @@
 use arc_swap::ArcSwap;
 use notify::{RecursiveMode, Watcher};
 use senime_lib::{
-    AnalysisResult, InputAnalyzer,
-    input_analyzer::{Tag, load_input_analyzer},
-    resolve_relative_path,
+    AnalysisResult, InputAnalyzer, input_analyzer::load_input_analyzer, resolve_relative_path,
 };
 use std::{
     cell::RefCell,
@@ -330,18 +328,20 @@ impl SenimeState {
             return;
         }
         // 先 load() 获取 guard，分析后 drop guard，再调用 &self 方法
-        let (pre_text, last_text, last_input, last_tag, candidates) = {
+        let (pre_text, last_text, last_input, candidates, pending) = {
             let guard = self.engine.load();
             let AnalysisResult {
                 mut segments,
+                pending,
                 candidates,
             } = guard.analyze(&chars);
-            let (last_text, last_input, last_tag) = segments.pop().map_or(
-                ("".to_string(), "".to_string(), Tag::Unknown),
-                |(text, origin, tag)| (text, origin.into_iter().collect(), tag),
-            );
+            let (last_text, last_input) = segments
+                .pop()
+                .map_or(("".to_string(), "".to_string()), |(text, origin, _)| {
+                    (text, origin.into_iter().collect())
+                });
             let pre_text: String = segments.into_iter().map(|seg| seg.0).collect();
-            (pre_text, last_text, last_input, last_tag, candidates)
+            (pre_text, last_text, last_input, candidates, pending)
         };
         // println!(
         //     "pre_text: [{pre_text}] last_text: [{last_text}] last_input: [{last_input}] last_tag: [{last_tag:?}] candidates: {}",
@@ -360,27 +360,19 @@ impl SenimeState {
             // 正常中文模式
             // 如果senime输出了多segment，则将之前的segments的文本作为commit
             if !pre_text.is_empty() {
-                self.input = last_input.clone();
                 cmds.push(SenimeCommand::with_commit_text(pre_text));
             }
-            if let Some(cands) = candidates
-                && !cands.is_empty()
-            {
-                cmds.push(SenimeCommand::with_preedit_text(last_text));
+            if let Some(cands) = candidates {
                 cmds.push(SenimeCommand::with_candidates(cands));
-            } else {
-                cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
-                // 无候选，且Escape还未结束
-                if let Tag::Escape((_, escape_end)) = last_tag
-                    && (last_input.len() < 2 || !last_input.ends_with(escape_end))
-                {
-                    cmds.push(SenimeCommand::with_preedit_text(last_text));
-                } else {
-                    self.input.clear();
-                    cmds.push(SenimeCommand::with_commit_text(last_text));
-                }
             }
-            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+            if pending {
+                cmds.push(SenimeCommand::with_preedit_text(last_text));
+                self.input = last_input.clone();
+            } else {
+                cmds.push(SenimeCommand::with_commit_text(last_text));
+                cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+                self.input.clear();
+            }
         } else {
             // 临时中文模式
             if self
@@ -389,23 +381,24 @@ impl SenimeState {
                 .is_some_and(|tc| self.input.ends_with(tc))
             {
                 // 临时中文模式结束
-                self.input.clear();
                 cmds.push(SenimeCommand::with_commit_text(
                     pre_text + last_text.as_str(),
                 ));
                 cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+                self.input.clear();
             } else {
                 // 临时中文模式未决
-                if let Some(cands) = candidates {
-                    cmds.push(SenimeCommand::with_candidates(cands));
-                } else {
-                    cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
-                }
                 let text = pre_text + last_text.as_str();
                 cmds.push(SenimeCommand::with_preedit_text(text));
+                if let Some(cands) = candidates {
+                    cmds.push(SenimeCommand::with_candidates(cands));
+                }
+                if !pending {
+                    cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+                }
             }
-            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
         }
+        cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
     }
 }
 

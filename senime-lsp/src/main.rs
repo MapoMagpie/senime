@@ -205,6 +205,7 @@ impl LanguageServer for Backend {
         };
         let AnalysisResult {
             segments,
+            pending: _,
             candidates,
         } = self.engine.load().analyze(analysis_chars);
         let sentence: String = segments.into_iter().map(|seg| seg.0).collect();

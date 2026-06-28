@@ -81,39 +81,9 @@ struct ParsedCandidate<'a> {
 /// 每个 Candidate 仅占 16 字节（vs 原来 ~120 字节），零堆分配。
 #[derive(Debug, Clone)]
 pub struct Candidate {
-    code: (u32, u16),
-    text: (u32, u16),
+    pub code: (u32, u16),
+    pub text: (u32, u16),
     pub weight: i32,
-}
-
-impl Candidate {
-    /// 从 arena 获取 code
-    pub fn code<'a>(&self, arena: &'a StringArena) -> &'a str {
-        arena.get(self.code.0, self.code.1)
-    }
-
-    /// 从 arena 获取 text
-    pub fn text<'a>(&self, arena: &'a StringArena) -> &'a str {
-        arena.get(self.text.0, self.text.1)
-    }
-}
-
-/// 借用视图，持有 arena 中的 &str 引用，用于对外 API 返回。
-#[derive(Debug, Clone)]
-pub struct CandidateView<'a> {
-    pub code: &'a str,
-    pub text: &'a str,
-    pub weight: i32,
-}
-
-impl CandidateView<'_> {
-    pub fn to_owned_candidate(&self, arena: &mut StringArena) -> Candidate {
-        Candidate {
-            code: arena.push(self.code),
-            text: arena.push(self.text),
-            weight: self.weight,
-        }
-    }
 }
 
 impl Encode for Candidate {
@@ -204,7 +174,7 @@ impl Prism {
     fn new_with_arena(candidates: &[Candidate], arena: &StringArena) -> Self {
         let mut map: BTreeMap<Vec<u8>, (usize, usize)> = BTreeMap::new();
         for (i, cand) in candidates.iter().enumerate() {
-            let code_bytes = cand.code(arena).as_bytes();
+            let code_bytes = arena.get(cand.code.0, cand.code.1).as_bytes();
             for len in 1..=code_bytes.len() {
                 let prefix = &code_bytes[..len];
                 map.entry(prefix.to_vec())
@@ -279,7 +249,7 @@ const VERSION: i64 = 13;
 pub struct Dict {
     arena: StringArena,
     prism: Prism,
-    candidates: Vec<Candidate>,
+    pub candidates: Vec<Candidate>,
 }
 
 impl TryFrom<(i64, i64, &[u8])> for Dict {
@@ -350,7 +320,7 @@ impl FromStr for Dict {
             std::cmp::Ordering::Equal => b.weight.cmp(&a.weight),
             ord => ord,
         });
-        // 将所有字符串一次性 push 到 arena（自动去重）
+        // 将所有字符串一次性 push 到 arena
         let mut arena = StringArena::new();
         let candidates: Vec<Candidate> = parsed
             .into_iter()
@@ -383,6 +353,10 @@ impl Dict {
             _ => Err(format!("不支持的文件类型: {:?}", path)),
         }
     }
+
+    pub(crate) fn get_str<'a>(&'a self, range: (u32, u16)) -> &'a str {
+        self.arena.get(range.0, range.1)
+    }
 }
 
 fn get_mtime_or(path: &Path, default: i64) -> i64 {
@@ -396,11 +370,6 @@ fn get_mtime_or(path: &Path, default: i64) -> i64 {
         0
     }
 }
-
-// #[cfg(not(unix))]
-// fn get_mtime(path: &PathBuf) -> i64 {
-//     0
-// }
 
 impl Dict {
     /// 从纯码表 .txt 文件加载
@@ -467,15 +436,9 @@ impl Dict {
         self.prism.lookup(chars).is_some()
     }
 
-    pub fn search(&self, chars: &[char]) -> Option<Vec<CandidateView<'_>>> {
+    pub fn search(&self, chars: &[char]) -> Option<&[Candidate]> {
         if let Some(range) = self.prism.lookup(chars) {
-            let end = range.1.min(range.0 + 9);
-            Some(
-                self.candidates[range.0..end]
-                    .iter()
-                    .map(|c| self.candidate_view(c))
-                    .collect(),
-            )
+            Some(&self.candidates[range.0..range.1])
         } else {
             None
         }
@@ -483,30 +446,6 @@ impl Dict {
 
     pub fn count(&self) -> usize {
         self.candidates.len()
-    }
-
-    /// 获取某个 Candidate 的借用视图
-    pub fn candidate_view<'a>(&'a self, cand: &'a Candidate) -> CandidateView<'a> {
-        CandidateView {
-            code: cand.code(&self.arena),
-            text: cand.text(&self.arena),
-            weight: cand.weight,
-        }
-    }
-
-    /// 迭代所有 candidates 的借用视图
-    pub fn candidates_iter(&self) -> impl Iterator<Item = CandidateView<'_>> {
-        self.candidates.iter().map(move |c| self.candidate_view(c))
-    }
-
-    /// 获取 arena 的引用（用于外部直接构造 Candidate 等场景）
-    pub fn arena(&self) -> &StringArena {
-        &self.arena
-    }
-
-    /// 获取可变 arena 的引用（用于外部向 arena 添加字符串）
-    pub fn arena_mut(&mut self) -> &mut StringArena {
-        &mut self.arena
     }
 }
 
@@ -577,20 +516,30 @@ mod tests {
 
     fn gen_entries() -> String {
         r#"
-ahb 来 1
-ahc 麦克 1
-ahcg 疲惫不堪 1
-c 不 1
-c 不是 1
-cu 还 1
-cb 层 1
-cb 不 1
-z 可 1
-z 可以 1
-zk 可能 1
-zkc 射 1
-"#
-        .replace(" ", "\t")
+a 嗯 1
+aa 嗯嗯 1
+ab 嗯毕 1
+ac 嗯渗 1
+ad 嗯弟 1
+aaa 嗯嗯嗯 1
+abc 嗯毕渗 1
+abcd 嗯毕渗弟 1
+b 毕 1
+ba 毕嗯 1
+bb 毕毕 1
+bc 毕渗 1
+bd 毕弟 1
+c 渗 1
+ca 渗嗯 1
+cb 渗毕 1
+cc 渗渗 1
+cd 渗弟 1
+d 弟 1
+da 弟嗯 1
+db 弟毕 1
+dc 弟渗 1
+dd 弟弟 1"#
+            .replace(' ', "\t")
     }
 
     #[test]
@@ -598,15 +547,15 @@ zkc 射 1
         let dict = Dict::from_str(&gen_entries()).unwrap();
         println!("dict loaded: {}", dict.count());
         let result = dict.search("ah".chars().collect::<Vec<_>>().as_slice());
-        assert_eq!(3, result.map_or(0, |candidates| candidates.len()));
-        let result = dict.search("ahb".chars().collect::<Vec<_>>().as_slice());
-        assert_eq!(1, result.map_or(0, |candidates| candidates.len()));
-        let result = dict.search("aha".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(0, result.map_or(0, |candidates| candidates.len()));
-        let result = dict.search("c".chars().collect::<Vec<_>>().as_slice());
-        assert_eq!(5, result.map_or(0, |candidates| candidates.len()));
-        let result = dict.search("cb".chars().collect::<Vec<_>>().as_slice());
-        assert_eq!(2, result.map_or(0, |candidates| candidates.len()));
+        let result = dict.search("a".chars().collect::<Vec<_>>().as_slice());
+        assert_eq!(8, result.map_or(0, |candidates| candidates.len()));
+        let result = dict.search("abd".chars().collect::<Vec<_>>().as_slice());
+        assert_eq!(0, result.map_or(0, |candidates| candidates.len()));
+        let result = dict.search("da".chars().collect::<Vec<_>>().as_slice());
+        assert_eq!(1, result.map_or(0, |candidates| candidates.len()));
+        let result = dict.search("@".chars().collect::<Vec<_>>().as_slice());
+        assert_eq!(0, result.map_or(0, |candidates| candidates.len()));
     }
 
     // 初版

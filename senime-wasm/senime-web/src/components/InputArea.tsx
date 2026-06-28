@@ -71,7 +71,6 @@ export function InputArea({ state, imeReady, textareaRef, onKeyDown, cursorPos }
                 {state.preedit && (
                   <span className="preedit-code">{state.preedit}</span>
                 )}
-                <span className="preedit-cursor" />
               </>
             )}
             {value.substring(sel)}
