@@ -362,11 +362,13 @@ impl SenimeState {
             if !pre_text.is_empty() {
                 cmds.push(SenimeCommand::with_commit_text(pre_text));
             }
-            if let Some(cands) = candidates {
-                cmds.push(SenimeCommand::with_candidates(cands));
-            }
             if pending {
                 cmds.push(SenimeCommand::with_preedit_text(last_text));
+                if let Some(cands) = candidates {
+                    cmds.push(SenimeCommand::with_candidates(cands));
+                } else {
+                    cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+                }
                 self.input = last_input.clone();
             } else {
                 cmds.push(SenimeCommand::with_commit_text(last_text));
@@ -390,10 +392,13 @@ impl SenimeState {
                 // 临时中文模式未决
                 let text = pre_text + last_text.as_str();
                 cmds.push(SenimeCommand::with_preedit_text(text));
-                if let Some(cands) = candidates {
-                    cmds.push(SenimeCommand::with_candidates(cands));
-                }
-                if !pending {
+                if pending {
+                    if let Some(cands) = candidates {
+                        cmds.push(SenimeCommand::with_candidates(cands));
+                    } else {
+                        cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+                    }
+                } else {
                     cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
                 }
             }
