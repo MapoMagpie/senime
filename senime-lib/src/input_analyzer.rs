@@ -292,13 +292,14 @@ impl InputAnalyzer {
                 Tag::Punctuation((idx, has_selection)) => {
                     match self.get_punctuation(&codes, idx, has_selection, !at_last) {
                         Some((punc_text, cands)) => {
-                            reduce_space = !cands.is_empty();
                             segments.push((punc_text, codes, tag));
                             if at_last && !cands.is_empty() {
                                 candidates = Some(cands);
                             }
                             if has_selection {
                                 pending = false;
+                            } else {
+                                reduce_space = true;
                             }
                         }
                         _ => {
