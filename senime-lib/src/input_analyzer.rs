@@ -396,6 +396,7 @@ impl InputAnalyzer {
         };
         if selection.dict_idx > 0 {
             let code_map = &self.main_dict_code_map;
+            let main_dict = &self.dicts[0].1;
             // 反查时需要从 main_dict_code_map 构建新的 code
             // self.candidates_remap_code(cands)
             //     .map(|cands| (cands, unique))
@@ -409,7 +410,7 @@ impl InputAnalyzer {
                     }
                     let part = code_map
                         .get(&ch)
-                        .map(|range| dict.get_str(*range))
+                        .map(|range| main_dict.get_str(*range))
                         .unwrap_or("_");
                     re_code.push_str(part);
                 }
