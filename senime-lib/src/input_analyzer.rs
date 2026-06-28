@@ -173,8 +173,8 @@ pub fn load_input_analyzer<P: Into<PathBuf>>(path: P) -> Result<InputAnalyzer, S
 }
 
 // ⇞ (U+21DE) 和 ⇟ (U+21DF)
-const PAGE_UP: char = '⇞';
-const PAGE_DOWN: char = '⇟';
+pub const PAGE_UP: char = '⇞';
+pub const PAGE_DOWN: char = '⇟';
 
 #[derive(Debug)]
 pub struct InputAnalyzer {
@@ -262,17 +262,26 @@ impl InputAnalyzer {
             let at_last = i == segment_len - 1;
             match tag {
                 Tag::Code(selection) => {
-                    // println!("codes selection: {}", selection.page_no);
                     match self.search_candidates(&codes, &selection, !at_last) {
-                        Some((cands, unique)) => {
+                        Some((cands, unique, rel_page_no)) => {
                             reduce_space = !unique;
+                            let mut codes = codes;
+                            if selection.has_pagination {
+                                codes = codes
+                                    .into_iter()
+                                    .filter(|c| c != &PAGE_UP && c != &PAGE_DOWN)
+                                    .collect::<Vec<_>>();
+                                if selection.page_no > 0 {
+                                    (0..rel_page_no).for_each(|_| codes.push(PAGE_DOWN));
+                                }
+                            }
                             // 当前是最后一段时，若当前所查询的码表不是主码表，则在text前面加上`hint`
                             if at_last && selection.dict_idx > 0 {
                                 let hint = self.dicts[selection.dict_idx].0.hint.clone();
-                                segments.push((hint + "|" + &cands[0].text, codes.clone(), tag));
+                                segments.push((hint + "|" + &cands[0].text, codes, tag));
                                 pending = true;
                             } else {
-                                segments.push((cands[0].text.to_string(), codes.clone(), tag));
+                                segments.push((cands[0].text.to_string(), codes, tag));
                                 if unique {
                                     pending = false;
                                 }
@@ -341,7 +350,7 @@ impl InputAnalyzer {
                         pending = false;
                     }
                     let text = &codes[start..];
-                    segments.push((text.iter().collect(), codes.to_vec(), tag));
+                    segments.push((text.iter().collect(), codes, tag));
                 }
             };
         }
@@ -355,38 +364,44 @@ impl InputAnalyzer {
     /// 搜索候选。普通模式返回 CandidateView 切片（借用 arena），反查模式返回 owned 的 CandidateRich。
     fn search_candidates<'a>(
         &'a self,
-        code: &[char],
+        codes: &[char],
         selection: &CodeSelection,
         no_cands: bool,
-    ) -> Option<(Vec<CandidateRich>, bool)> {
+    ) -> Option<(Vec<CandidateRich>, bool, usize)> {
         let dict = &self.dicts[selection.dict_idx].1;
-        let mut code = code;
+        let mut s_codes = codes;
         if selection.dict_idx > 0 {
-            code = &code[1..];
+            s_codes = &s_codes[1..];
         }
         if selection.has_selection {
-            code = &code[..code.len() - 1];
+            s_codes = &s_codes[..s_codes.len() - 1];
         }
-        if code.is_empty() {
+        if s_codes.is_empty() {
             return None;
         }
         let slice = if selection.has_pagination {
             // 过滤PAGE_UP和PAGE_DOWN
             dict.search(
-                &code
+                &s_codes
                     .iter()
                     .filter(|&&c| c != PAGE_UP && c != PAGE_DOWN)
                     .copied()
                     .collect::<Vec<_>>(),
             )?
         } else {
-            dict.search(code)?
+            dict.search(s_codes)?
         };
         // 翻页后的窗口
         let mut start = selection.page_no * self.page_count;
         if start >= slice.len() {
-            start = slice.len() - (slice.len() % self.page_count);
+            let m0d = slice.len() % self.page_count;
+            if m0d == 0 {
+                start = slice.len() - self.page_count;
+            } else {
+                start = slice.len() - m0d;
+            }
         }
+        let rel_page_no = start / self.page_count;
         let slice = &slice[start..(start + self.page_count).min(slice.len())];
         // 是否唯一，如果实际的查询结果只有一个，或者直接存在selection_key
         // let unique = slice.len() <= 1 || selection.has_selection;
@@ -425,12 +440,16 @@ impl InputAnalyzer {
                     re_code,
                     text.to_owned(),
                     cand.weight,
-                    code.to_vec(),
+                    codes.to_vec(),
                     i,
                     select_key,
                 )
             };
-            Some((cands.iter().enumerate().map(enrich).collect(), unique))
+            Some((
+                cands.iter().enumerate().map(enrich).collect(),
+                unique,
+                rel_page_no,
+            ))
         } else {
             let enrich = |(i, cand): (usize, &Candidate)| -> CandidateRich {
                 let select_key = self.selection_keys.get(i).copied().unwrap_or(' ');
@@ -438,12 +457,16 @@ impl InputAnalyzer {
                     dict.get_str(cand.code).to_owned(),
                     dict.get_str(cand.text).to_owned(),
                     cand.weight,
-                    code.to_vec(),
+                    codes.to_vec(),
                     i,
                     select_key,
                 )
             };
-            Some((cands.iter().enumerate().map(enrich).collect(), unique))
+            Some((
+                cands.iter().enumerate().map(enrich).collect(),
+                unique,
+                rel_page_no,
+            ))
         }
     }
 
@@ -792,6 +815,12 @@ q 其10 1
 q 其11 1
 q 其12 1
 q 其13 1
+y 伊0 1
+y 伊1 1
+y 伊2 1
+y 伊3 1
+y 伊4 1
+y 伊5 1
 "#
         .replace(' ', "\t")
     }
@@ -1154,6 +1183,8 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
             ("q⇟2", "其4"),
             ("q⇟⇟⇟⇟⇟⇟⇟⇟⇟", "其12"),
             ("qqqqq⇟⇟⇟⇟⇟⇟⇟⇟⇟", "其12"),
+            ("y⇟", "伊3"),
+            ("y⇟⇟", "伊3"),
         ];
         for (i, (input, expected)) in samples.into_iter().enumerate() {
             let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());

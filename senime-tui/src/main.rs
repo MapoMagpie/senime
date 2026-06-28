@@ -24,6 +24,8 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 use ratatui::widgets::{Block, Borders};
 
+use senime_lib::PAGE_DOWN;
+use senime_lib::PAGE_UP;
 use senime_lib::input_analyzer::load_input_analyzer;
 use senime_lib::{AnalysisResult, Looker};
 
@@ -202,6 +204,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                         ctx.calc_measurement();
                         let _ = record_input_data(&time_id, &ctx);
+                    }
+                    KeyCode::PageUp => {
+                        ctx.push_input(PAGE_UP);
+                    }
+                    KeyCode::PageDown => {
+                        ctx.push_input(PAGE_DOWN);
                     }
                     KeyCode::Esc => {
                         break;

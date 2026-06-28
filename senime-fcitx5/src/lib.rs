@@ -1,7 +1,8 @@
 use arc_swap::ArcSwap;
 use notify::{RecursiveMode, Watcher};
 use senime_lib::{
-    AnalysisResult, InputAnalyzer, input_analyzer::load_input_analyzer, resolve_relative_path,
+    AnalysisResult, InputAnalyzer, PAGE_DOWN, PAGE_UP, input_analyzer::load_input_analyzer,
+    resolve_relative_path,
 };
 use std::{
     cell::RefCell,
@@ -279,13 +280,32 @@ impl SenimeState {
         // Backspace
         if sym == FCITX_KEY_BackSpace {
             let mut accept = false;
+            // remove ⇞ and ⇟ from self.input first
             if !self.input.is_empty() {
-                self.input.pop();
+                while let Some(ch) = self.input.pop() {
+                    if ch != PAGE_UP && ch != PAGE_DOWN {
+                        break;
+                    }
+                }
                 accept = true;
             }
             let mut cmds = Vec::new();
             self.do_update(temp_chinese_mode, false, &mut cmds);
             return (accept, cmds);
+        }
+
+        // PageUp / PageDown → 翻页（仅在有输入时生效）
+        if (sym == FCITX_KEY_Page_Up || sym == FCITX_KEY_KP_Page_Up) && !self.input.is_empty() {
+            self.input.push(PAGE_UP); // ⇞
+            let mut cmds = Vec::new();
+            self.do_update(temp_chinese_mode, false, &mut cmds);
+            return (true, cmds);
+        }
+        if (sym == FCITX_KEY_Page_Down || sym == FCITX_KEY_KP_Page_Down) && !self.input.is_empty() {
+            self.input.push(PAGE_DOWN); // ⇟
+            let mut cmds = Vec::new();
+            self.do_update(temp_chinese_mode, false, &mut cmds);
+            return (true, cmds);
         }
 
         // All other keys → append and analyze

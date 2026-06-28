@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::slice::Iter;
 
 use crossterm::event::KeyCode;
+use senime_lib::{PAGE_DOWN, PAGE_UP};
 pub type SentenceChars<'a> =
     Chain<Chain<Chain<Iter<'a, char>, Iter<'a, char>>, Iter<'a, char>>, Iter<'a, char>>;
 
@@ -75,7 +76,11 @@ impl Sentence {
 
     pub(crate) fn pop(&mut self) {
         if !self.pending.is_empty() {
-            self.pending_origin.pop();
+            while let Some(ch) = self.pending_origin.pop() {
+                if ch != PAGE_DOWN && ch != PAGE_UP {
+                    break;
+                }
+            }
             if self.pending_origin.is_empty() {
                 self.clear_pending();
             }

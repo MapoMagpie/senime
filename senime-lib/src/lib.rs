@@ -5,7 +5,9 @@ pub mod lookup_code;
 pub mod util;
 
 pub use dict::Dict;
-pub use input_analyzer::{AnalysisResult, CandidateRich, Config, DictMeta, InputAnalyzer};
+pub use input_analyzer::{
+    AnalysisResult, CandidateRich, Config, DictMeta, InputAnalyzer, PAGE_DOWN, PAGE_UP,
+};
 pub use lookup_code::Looker;
 pub use util::resolve_relative_path;
 
