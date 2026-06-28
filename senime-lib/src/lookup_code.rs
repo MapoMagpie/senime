@@ -25,7 +25,7 @@ pub struct Looker {
 
 const INFINITY: usize = 100000000;
 impl Looker {
-    pub fn new<'a>(dict: &'a Dict) -> Self {
+    pub fn new(dict: &Dict) -> Self {
         let mut map: AHashMap<Vec<char>, Vec<CodePos>> = AHashMap::new();
         let mut code_trie = Trie::new();
         let mut code = "";

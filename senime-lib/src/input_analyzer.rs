@@ -362,8 +362,8 @@ impl InputAnalyzer {
     }
 
     /// 搜索候选。普通模式返回 CandidateView 切片（借用 arena），反查模式返回 owned 的 CandidateRich。
-    fn search_candidates<'a>(
-        &'a self,
+    fn search_candidates(
+        &self,
         codes: &[char],
         selection: &CodeSelection,
         no_cands: bool,
@@ -474,7 +474,7 @@ impl InputAnalyzer {
         let mut segments: Vec<(Vec<char>, Tag)> = vec![];
         let mut iter = input.iter().peekable();
         let mut unknown_chars = vec![];
-        while (&iter.peek()).is_some() {
+        while iter.peek().is_some() {
             let seg = if let Some(seg) = self.match_seg_escape(&mut iter) {
                 seg
             } else if let Some(seg) = self.match_seg_puncs(&mut iter) {
@@ -533,7 +533,7 @@ impl InputAnalyzer {
                 }
                 vec![]
             } else {
-                let cands = cands
+                cands
                     .iter()
                     .enumerate()
                     .map(|(i, pu)| CandidateRich {
@@ -544,8 +544,7 @@ impl InputAnalyzer {
                         order: i,
                         select_key: self.selection_keys.get(i).copied().unwrap_or('_'),
                     })
-                    .collect();
-                cands
+                    .collect()
             };
             Some((result.join(""), cands))
         })?
@@ -557,7 +556,7 @@ impl InputAnalyzer {
         {
             let mut result = vec![**first];
             chars.next();
-            while let Some(ch) = chars.next() {
+            for ch in chars.by_ref() {
                 result.push(*ch);
                 if *ch == pair[1] {
                     break;
@@ -603,7 +602,7 @@ impl InputAnalyzer {
                 .dicts
                 .iter()
                 .enumerate()
-                .find_map(|(i, d)| (d.0.trigger == first).then(|| (i, true)))
+                .find_map(|(i, d)| (d.0.trigger == first).then_some((i, true)))
                 .unwrap_or((0, false));
             let dict = &self.dicts[dict_idx].1;
             let mut codes = vec![];

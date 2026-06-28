@@ -354,7 +354,7 @@ impl Dict {
         }
     }
 
-    pub(crate) fn get_str<'a>(&'a self, range: (u32, u16)) -> &'a str {
+    pub(crate) fn get_str(&self, range: (u32, u16)) -> &str {
         self.arena.get(range.0, range.1)
     }
 }
