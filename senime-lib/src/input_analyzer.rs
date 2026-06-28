@@ -266,13 +266,20 @@ impl InputAnalyzer {
                     match self.search_candidates(&codes, &selection, !at_last) {
                         Some((cands, unique)) => {
                             reduce_space = !unique;
-                            segments.push((cands[0].text.to_string(), codes.clone(), tag));
+                            // 当前是最后一段时，若当前所查询的码表不是主码表，则在text前面加上`hint`
+                            if at_last && selection.dict_idx > 0 {
+                                let hint = self.dicts[selection.dict_idx].0.hint.clone();
+                                segments.push((hint + "|" + &cands[0].text, codes.clone(), tag));
+                                pending = true;
+                            } else {
+                                segments.push((cands[0].text.to_string(), codes.clone(), tag));
+                                if unique {
+                                    pending = false;
+                                }
+                            }
                             // candidates
                             if at_last && !unique {
                                 candidates = Some(cands);
-                            }
-                            if unique {
-                                pending = false;
                             }
                         }
                         None => {
@@ -854,7 +861,8 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
         let inputs = vec![
             ("aaaaaa aaaaa", vec!["啊", "啊", "", "啊", "啊"]),
             ("aaa8 ", vec!["啊", " "]),
-            ("a cI@abc", vec!["啊", "", "此啊", "啊波此"]),
+            ("a cI@abc", vec!["啊", "", "此啊", "反|啊波此"]),
+            ("a cI@abcaaa", vec!["啊", "", "此啊", "啊波此", "啊"]),
             ("@aaac@cP@@@", vec!["啊", "此", "此", "@", "@", "反"]),
             ("@aaax@xxx", vec!["啊", "x", "@", "xxx"]),
             ("@aaax@cc@", vec!["啊", "x", "此", "反"]),
