@@ -51,7 +51,7 @@ target_link_libraries(senime PRIVATE
     dl
     m)
 set_target_properties(senime PROPERTIES
-    PREFIX ""
+    PREFIX "lib"
     OUTPUT_NAME "senime")
 
 install(TARGETS senime DESTINATION "${FCITX_INSTALL_LIBDIR}/fcitx5")

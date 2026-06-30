@@ -159,7 +159,7 @@
                 mkdir -p $out/share/fcitx5/addon
                 mkdir -p $out/share/fcitx5/inputmethod
                 mkdir -p $out/share/icons/hicolor/scalable/apps
-                cp senime.so $out/lib/fcitx5/
+                cp libsenime.so $out/lib/fcitx5/
                 cp ${./senime-fcitx5/data/fcitx5/addon/senime.conf} $out/share/fcitx5/addon/senime.conf
                 cp ${./senime-fcitx5/data/fcitx5/inputmethod/senime.conf} $out/share/fcitx5/inputmethod/senime.conf
                 cp ${./senime-fcitx5/data/fcitx5/icon/fcitx-senime-cn.svg} $out/share/icons/hicolor/scalable/apps/fcitx-senime-cn.svg
