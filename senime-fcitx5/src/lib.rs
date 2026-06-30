@@ -113,10 +113,15 @@ impl SenimeCommand {
     fn with_candidates(cands: Vec<senime_lib::CandidateRich>) -> SenimeCommand {
         let data: Vec<SenimeCandidateData> = cands
             .into_iter()
-            .map(|c| SenimeCandidateData {
-                text: into_c_string(c.text),
-                code: into_c_string(c.code),
-                select_key: c.select_key as u32,
+            .map(|c| {
+                // 只展示用户尚未输入的编码部分
+                let origin: String = c.origin.iter().collect();
+                let remaining = c.code.strip_prefix(&origin).unwrap_or(&c.code);
+                SenimeCandidateData {
+                    text: into_c_string(c.text),
+                    code: into_c_string(remaining.to_owned()),
+                    select_key: c.select_key as u32,
+                }
             })
             .collect();
         // 使用 into_boxed_slice 确保 capacity == len，避免 Vec::from_raw_parts 的安全隐患
