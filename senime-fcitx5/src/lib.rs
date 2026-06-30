@@ -17,6 +17,37 @@ use std::{
 mod keysym;
 use keysym::*;
 
+// Android logcat support
+#[cfg(target_os = "android")]
+unsafe extern "C" {
+    fn __android_log_print(prio: i32, tag: *const c_char, fmt: *const c_char, ...) -> i32;
+}
+
+#[cfg(target_os = "android")]
+macro_rules! android_log {
+    ($prio:expr, $($arg:tt)*) => {{
+        let msg = std::ffi::CString::new(format!($($arg)*)).unwrap_or_default();
+        let tag = std::ffi::CString::new("senime").unwrap_or_default();
+        unsafe {
+            __android_log_print($prio, tag.as_ptr(), msg.as_ptr());
+        }
+    }};
+}
+
+#[cfg(target_os = "android")]
+macro_rules! log_warn {
+    ($($arg:tt)*) => { android_log!(5i32, $($arg)*) };  // ANDROID_LOG_WARN = 5
+}
+
+macro_rules! senime_warn {
+    ($($arg:tt)*) => {{
+        #[cfg(target_os = "android")]
+        { log_warn!($($arg)*); }
+        #[cfg(not(target_os = "android"))]
+        { eprintln!($($arg)*); }
+    }};
+}
+
 // Fcitx5 modifier masks (from KeyState enum)
 #[allow(unused)]
 const FCITX_MOD_SHIFT: u32 = 0x01;
@@ -491,17 +522,44 @@ fn into_c_string(value: String) -> *mut c_char {
 /// 查找默认码表路径: XDG_CONFIG_HOME/senime/config.toml
 fn get_default_table() -> Result<String, String> {
     use std::io::{Error, ErrorKind};
-    dirs::config_dir()
-        .map(|dir| dir.join("senime").join("config.toml"))
-        .filter(|path| path.is_file())
-        .map(|path| path.to_str().unwrap().to_owned())
-        .ok_or_else(|| {
-            Error::new(
-                ErrorKind::NotFound,
-                "未指定配置或码表路径，且无法找到默认配置文件路径",
-            )
-            .to_string()
-        })
+
+    #[cfg(target_os = "android")]
+    {
+        // On Android, search XDG_DATA_DIRS for fcitx5/data/senime/config.toml
+        // fcitx5-android sets XDG_DATA_DIRS to <dataDir>/usr/share
+        if let Ok(data_dirs) = std::env::var("XDG_DATA_DIRS") {
+            for dir in data_dirs.split(':') {
+                let path = std::path::PathBuf::from(dir)
+                    .join("fcitx5")
+                    .join("data")
+                    .join("senime")
+                    .join("config.toml");
+                if path.is_file() {
+                    return Ok(path.to_str().unwrap().to_owned());
+                }
+            }
+        }
+        Err(Error::new(
+            ErrorKind::NotFound,
+            "未找到默认配置文件: XDG_DATA_DIRS 中无 fcitx5/data/senime/config.toml",
+        )
+        .to_string())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        dirs::config_dir()
+            .map(|dir| dir.join("senime").join("config.toml"))
+            .filter(|path| path.is_file())
+            .map(|path| path.to_str().unwrap().to_owned())
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::NotFound,
+                    "未指定配置或码表路径，且无法找到默认配置文件路径",
+                )
+                .to_string()
+            })
+    }
 }
 
 /// Spawn a background file watcher that rebuilds the engine on changes.
@@ -538,7 +596,7 @@ fn spawn_watcher(
                     inner.swap(Arc::new(new_inner));
                 }
                 Err(e) => {
-                    eprintln!("[senime] hot-reload failed: {e}");
+                    senime_warn!("[senime] hot-reload failed: {e}");
                 }
             }
         }
@@ -593,7 +651,7 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
         // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
         let watcher = spawn_watcher(engine.clone(), watch_paths)
             .map_err(|e| {
-                eprintln!("[senime] file watcher init failed: {e}");
+                senime_warn!("[senime] file watcher init failed: {e}");
                 e
             })
             .ok();

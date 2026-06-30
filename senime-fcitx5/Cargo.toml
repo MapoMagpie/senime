@@ -6,7 +6,7 @@ authors.workspace = true
 
 [lib]
 name = "senime_fcitx5"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 senime-lib = { path = "../senime-lib" }
