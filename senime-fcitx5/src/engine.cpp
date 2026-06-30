@@ -8,6 +8,7 @@
 #include <fcitx/userinterface.h>
 #include <fcitx/userinterfacemanager.h>
 // #include <chrono>
+#include <functional>
 #include <memory>
 
 namespace fcitx {
@@ -21,8 +22,10 @@ std::string lastError() {
 
 class SenimeCandidateWord : public CandidateWord {
 public:
-    SenimeCandidateWord(std::string text, std::string code, std::string selectKey, InputContext *ic)
-        : CandidateWord(Text(text)), ic_(ic), text_(std::move(text)) {
+    SenimeCandidateWord(std::string text, std::string code, std::string selectKey, InputContext *ic,
+                        std::function<void()> resetCallback)
+        : CandidateWord(Text(text)), ic_(ic), text_(std::move(text)),
+          resetCallback_(std::move(resetCallback)) {
             if (!code.empty()) {
                 setComment(Text(std::move(code)));
             }
@@ -33,11 +36,15 @@ public:
 
     void select(InputContext *) const override {
         ic_->commitString(text_);
+        if (resetCallback_) {
+            resetCallback_();
+        }
     }
 
 private:
     InputContext *ic_;
     std::string text_;
+    std::function<void()> resetCallback_;
 };
 
 } // namespace
@@ -80,7 +87,7 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
     senime_key_event_result_free(result);
 }
 
-void SenimeState::reset() {
+void SenimeState::reset(bool reset_mode) {
     if (!state_) return;
 
     // 直接清空 inputContext 的预编辑和候选框
@@ -89,7 +96,11 @@ void SenimeState::reset() {
     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
 
     // 重置 Rust 侧状态
-    senime_state_reset(state_.get());
+    if (reset_mode) {
+        senime_state_reset(state_.get());
+    } else {
+        senime_state_reset_input(state_.get());
+    }
 }
 
 void SenimeState::reloadEngine() {
@@ -158,6 +169,8 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
                 engine_->instance()->globalConfig().defaultPageSize());
             candidates->setCursorPositionAfterPaging(
                 CursorPositionAfterPaging::ResetToFirst);
+            // 手动点击候选项后，重置输入状态但保留中英模式
+            auto resetCallback = [this]() { this->reset(false); };
             for (size_t j = 0; j < cmd.candidate_count; j++) {
                 const auto &cand = cmd.candidates[j];
                 candidates->append<SenimeCandidateWord>(
@@ -166,7 +179,7 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
                     cand.select_key
                         ? std::string(1, static_cast<char>(cand.select_key)) + ": "
                         : std::string(),
-                    ic);
+                    ic, resetCallback);
             }
             candidates->setGlobalCursorIndex(0);
             ic->inputPanel().setCandidateList(std::move(candidates));

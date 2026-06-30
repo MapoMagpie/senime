@@ -48,7 +48,7 @@ public:
     ~SenimeState();
 
     void processKeyEvent(KeyEvent &event);
-    void reset();
+    void reset(bool reset_mode = true);
     void deactivate();
     void reloadEngine();
     bool chineseMode() const;

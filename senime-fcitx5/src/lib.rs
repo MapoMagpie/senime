@@ -219,6 +219,12 @@ impl SenimeState {
         self.chinese_mode = self.config.default_chinese_mode;
     }
 
+    /// 重置输入缓冲，但保留中英模式标记。
+    /// 用于手动选择候选项后清空输入状态。
+    fn reset_input(&mut self) {
+        self.input.clear();
+    }
+
     /// Process a key event. Returns (accepted, commands).
     fn key_event(&mut self, key: &SenimeKeyEvent) -> (bool, Vec<SenimeCommand>) {
         let toggle_key = &self.config.toggle_key;
@@ -803,6 +809,20 @@ pub unsafe extern "C" fn senime_state_reset(state: *mut SenimeState) {
         return;
     }
     unsafe { (*state).reset() };
+}
+
+/// 重置输入缓冲，但保留中英模式标记。
+/// 用于手动选择候选项后清空输入状态。
+///
+/// # Safety
+///
+/// `state` 必须是由 `senime_state_new` 返回的有效指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn senime_state_reset_input(state: *mut SenimeState) {
+    if state.is_null() {
+        return;
+    }
+    unsafe { (*state).reset_input() };
 }
 
 // ── FFI: Key event processing ────────────────────────────────────────────

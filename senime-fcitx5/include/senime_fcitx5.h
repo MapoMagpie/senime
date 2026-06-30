@@ -67,6 +67,7 @@ void senime_engine_free(SenimeEngine *engine);
 SenimeState *senime_state_new(const SenimeEngine *engine);
 void senime_state_free(SenimeState *state);
 void senime_state_reset(SenimeState *state);
+void senime_state_reset_input(SenimeState *state);
 void senime_state_set_chinese_mode(SenimeState *state, bool chinese);
 bool senime_state_chinese_mode(const SenimeState *state);
 
