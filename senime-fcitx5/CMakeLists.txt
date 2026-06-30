@@ -8,6 +8,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Fcitx5Core REQUIRED)
 find_package(Fcitx5Config REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
+find_package(Gettext REQUIRED)
+
+add_definitions(-DFCITX_GETTEXT_DOMAIN=\"senime\")
+fcitx5_add_i18n_definition()
+add_subdirectory(po)
 
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
@@ -55,7 +60,12 @@ set_target_properties(senime PROPERTIES
     OUTPUT_NAME "senime")
 
 install(TARGETS senime DESTINATION "${FCITX_INSTALL_LIBDIR}/fcitx5")
-install(FILES data/fcitx5/addon/senime.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
-install(FILES data/fcitx5/inputmethod/senime.conf DESTINATION "${FCITX_INSTALL_PKGDATADIR}/inputmethod")
-install(FILES data/fcitx5/icon/fcitx-senime-cn.svg data/icon/fcitx-senime-en.svg
+fcitx5_translate_desktop_file(data/fcitx5/addon/senime.conf.in senime.conf)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/senime.conf"
+        DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon")
+fcitx5_translate_desktop_file(data/fcitx5/inputmethod/senime.conf.in senime-im.conf)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/senime-im.conf"
+        DESTINATION "${FCITX_INSTALL_PKGDATADIR}/inputmethod"
+        RENAME senime.conf)
+install(FILES data/fcitx5/icon/fcitx-senime-cn.svg data/fcitx5/icon/fcitx-senime-en.svg
         DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/scalable/apps")

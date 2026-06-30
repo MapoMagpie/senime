@@ -48,6 +48,7 @@ typedef struct SenimeConfig {
     uint32_t trigger_sym;      // 临时中文触发键 keysym (0 = 禁用)
     uint32_t trigger_states;   // 临时中文触发键修饰符
     const char *table_path;
+    bool default_chinese_mode; // 新建状态时默认使用中文模式
 } SenimeConfig ;
 
 typedef struct SenimeKeyEventResult {
@@ -66,6 +67,7 @@ void senime_engine_free(SenimeEngine *engine);
 SenimeState *senime_state_new(const SenimeEngine *engine);
 void senime_state_free(SenimeState *state);
 void senime_state_reset(SenimeState *state);
+void senime_state_set_chinese_mode(SenimeState *state, bool chinese);
 bool senime_state_chinese_mode(const SenimeState *state);
 
 // ── Key event processing ─────────────────────────────────────────────────

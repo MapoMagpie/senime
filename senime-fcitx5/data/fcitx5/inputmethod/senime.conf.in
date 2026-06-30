@@ -1,6 +1,5 @@
 [InputMethod]
 Name=Senime
-Name[zh_CN]=森输入法
 Icon=fcitx
 Label=森
 LangCode=zh

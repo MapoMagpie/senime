@@ -153,6 +153,7 @@ pub struct SenimeConfig {
     pub trigger_sym: u32,
     pub trigger_states: u32,
     pub table_path: *mut c_char,
+    pub default_chinese_mode: bool,
 }
 
 #[derive(Clone)]
@@ -160,6 +161,7 @@ struct SenimeResolvedConfig {
     toggle_key: SenimeKeyBinding,
     /// 当为 None 时，禁用临时中文模式
     trigger_char: Option<char>,
+    default_chinese_mode: bool,
 }
 
 impl Default for SenimeResolvedConfig {
@@ -167,6 +169,7 @@ impl Default for SenimeResolvedConfig {
         Self {
             toggle_key: SenimeKeyBinding::from((FCITX_KEY_Shift_L, FCITX_MOD_SHIFT)),
             trigger_char: None,
+            default_chinese_mode: false,
         }
     }
 }
@@ -176,6 +179,7 @@ impl From<&SenimeConfig> for SenimeResolvedConfig {
         Self {
             toggle_key: (value.toggle_sym, value.toggle_states).into(),
             trigger_char: keysym_to_char(value.trigger_sym),
+            default_chinese_mode: value.default_chinese_mode,
         }
     }
 }
@@ -199,10 +203,11 @@ pub struct SenimeState {
 
 impl SenimeState {
     fn new(engine: Arc<ArcSwap<InputAnalyzer>>, config: SenimeResolvedConfig) -> Self {
+        let chinese_mode = config.default_chinese_mode;
         Self {
             engine,
             input: String::new(),
-            chinese_mode: false,
+            chinese_mode,
             last_unrelease_key: 0,
             config,
         }
@@ -211,7 +216,7 @@ impl SenimeState {
     /// 重置状态：清空输入缓冲，重置中英模式标记。
     fn reset(&mut self) {
         self.input.clear();
-        self.chinese_mode = false;
+        self.chinese_mode = self.config.default_chinese_mode;
     }
 
     /// Process a key event. Returns (accepted, commands).
@@ -769,6 +774,22 @@ pub unsafe extern "C" fn senime_state_chinese_mode(state: *const SenimeState) ->
         return false;
     }
     unsafe { (*state).chinese_mode }
+}
+
+/// 设置中英文模式。
+///
+/// # Safety
+///
+/// `state` 必须是由 `senime_state_new` 返回的有效指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn senime_state_set_chinese_mode(
+    state: *mut SenimeState,
+    chinese: bool,
+) {
+    if state.is_null() {
+        return;
+    }
+    unsafe { (*state).chinese_mode = chinese };
 }
 
 /// 重置输入状态：清空输入缓冲并重置中英模式。

@@ -109,7 +109,6 @@
               nativeBuildInputs = [
                 rust
                 pkgs.cmake
-                pkgs.ninja
                 pkgs.pkg-config
                 pkgs.fcitx5
                 pkgs.kdePackages.extra-cmake-modules
@@ -137,33 +136,21 @@
                 mkdir -p build
                 cd build
                 cmake ../senime-fcitx5 \
-                  -DCMAKE_INSTALL_PREFIX=$out \
-                  -GNinja
+                  -DCMAKE_INSTALL_PREFIX=$out
 
                 runHook postConfigure
               '';
 
               buildPhase = ''
                 runHook preBuild
-                ninja
+                cmake --build .
                 runHook postBuild
               '';
 
               installPhase = ''
                 runHook preInstall
+                cmake --install .
                 runHook postInstall
-              '';
-
-              postInstall = ''
-                mkdir -p $out/lib/fcitx5
-                mkdir -p $out/share/fcitx5/addon
-                mkdir -p $out/share/fcitx5/inputmethod
-                mkdir -p $out/share/icons/hicolor/scalable/apps
-                cp libsenime.so $out/lib/fcitx5/
-                cp ${./senime-fcitx5/data/fcitx5/addon/senime.conf} $out/share/fcitx5/addon/senime.conf
-                cp ${./senime-fcitx5/data/fcitx5/inputmethod/senime.conf} $out/share/fcitx5/inputmethod/senime.conf
-                cp ${./senime-fcitx5/data/fcitx5/icon/fcitx-senime-cn.svg} $out/share/icons/hicolor/scalable/apps/fcitx-senime-cn.svg
-                cp ${./senime-fcitx5/data/fcitx5/icon/fcitx-senime-en.svg} $out/share/icons/hicolor/scalable/apps/fcitx-senime-en.svg
               '';
             };
         };

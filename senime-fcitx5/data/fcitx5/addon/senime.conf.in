@@ -1,8 +1,6 @@
 [Addon]
 Name=Senime
-Name[zh_CN]=森输入法
-Comment=Senime table input method
-Comment[zh_CN]=基于 senime-lib 的码表输入法
+Comment=Senime table input method engine
 Category=InputMethod
 Version=0.0.1
 Library=libsenime

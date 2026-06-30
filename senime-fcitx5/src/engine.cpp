@@ -6,6 +6,7 @@
 #include <fcitx/event.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/userinterface.h>
+#include <fcitx/userinterfacemanager.h>
 // #include <chrono>
 #include <memory>
 
@@ -120,6 +121,11 @@ bool SenimeState::chineseMode() const {
     return state_ ? senime_state_chinese_mode(state_.get()) : false;
 }
 
+void SenimeState::setChineseMode(bool chinese) {
+    if (!state_) return;
+    senime_state_set_chinese_mode(state_.get(), chinese);
+}
+
 void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic) {
     if (!result || !result->commands || result->command_count == 0) {
         return;
@@ -201,8 +207,50 @@ SenimeEngine::SenimeEngine(Instance *instance)
       factory_([this](InputContext &ic) { return new SenimeState(this, &ic); }) {
     reloadConfig();
     config_ = convertConfig(configDef_);
+    globalChineseMode_.store(config_.default_chinese_mode);
     reloadEngine();
     instance_->inputContextManager().registerProperty("senimeState", &factory_);
+
+    // 注册托盘菜单项
+    toggleChineseAction_.setShortText(
+        config_.default_chinese_mode ? _("Switch to English")
+                                    : _("Switch to Chinese"));
+    toggleChineseAction_.connect<SimpleAction::Activated>(
+        [this](InputContext *) {
+            bool newMode = !globalChineseMode_.load();
+            globalChineseMode_.store(newMode);
+            instance_->inputContextManager().foreach([this, newMode](InputContext *ic) {
+                state(ic)->setChineseMode(newMode);
+                return true;
+            });
+            toggleChineseAction_.setShortText(
+                newMode ? _("Switch to English") : _("Switch to Chinese"));
+            toggleChineseAction_.update(nullptr);
+        });
+    instance_->userInterfaceManager().registerAction(
+        "senime-toggle-chinese", &toggleChineseAction_);
+
+    reloadAction_.setShortText(_("Reload engine"));
+    reloadAction_.connect<SimpleAction::Activated>(
+        [this](InputContext *) {
+            reloadConfig();
+            config_ = convertConfig(configDef_);
+            reloadEngine();
+            instance_->inputContextManager().foreach([this](InputContext *ic) {
+                state(ic)->reloadEngine();
+                return true;
+            });
+            globalChineseMode_.store(config_.default_chinese_mode);
+            toggleChineseAction_.setShortText(
+                config_.default_chinese_mode ? _("Switch to English")
+                                            : _("Switch to Chinese"));
+            toggleChineseAction_.update(nullptr);
+        });
+    instance_->userInterfaceManager().registerAction(
+        "senime-reload", &reloadAction_);
+
+    senimeMenu_.addAction(&toggleChineseAction_);
+    senimeMenu_.addAction(&reloadAction_);
 }
 
 // # 单`Shift_L`在~/.config/fcitx5/conf/senime.conf中的情况
@@ -250,6 +298,7 @@ SenimeConfig SenimeEngine::convertConfig(const SenimeFcitxConfig &cfg) {
     extract(*cfg.toggleMode, kc.toggle_sym, kc.toggle_states);
     extract(*cfg.triggerTempChinese, kc.trigger_sym, kc.trigger_states);
     kc.table_path = cfg.tablePath->c_str();
+    kc.default_chinese_mode = *cfg.defaultChineseMode;
     return kc;
 }
 
@@ -261,9 +310,28 @@ void SenimeEngine::reloadEngine() {
     }
 }
 
+void SenimeEngine::activate(const InputMethodEntry &,
+                            InputContextEvent &event) {
+    refreshStatusArea(*event.inputContext());
+}
+
+void SenimeEngine::refreshStatusArea(InputContext &ic) {
+    auto &statusArea = ic.statusArea();
+    statusArea.clearGroup(StatusGroup::InputMethod);
+    statusArea.addAction(StatusGroup::InputMethod, &toggleChineseAction_);
+    statusArea.addAction(StatusGroup::InputMethod, &reloadAction_);
+}
+
 void SenimeEngine::keyEvent(const InputMethodEntry &, KeyEvent &event) {
-    auto *state = event.inputContext()->propertyFor(&factory_);
-    state->processKeyEvent(event);
+    auto *st = event.inputContext()->propertyFor(&factory_);
+    bool wasChinese = st->chineseMode();
+    st->processKeyEvent(event);
+    bool nowChinese = st->chineseMode();
+    if (wasChinese != nowChinese) {
+        globalChineseMode_.store(nowChinese);
+        toggleChineseAction_.setShortText(
+            nowChinese ? _("Switch to English") : _("Switch to Chinese"));
+    }
 }
 
 void SenimeEngine::reset(const InputMethodEntry &, InputContextEvent &event) {

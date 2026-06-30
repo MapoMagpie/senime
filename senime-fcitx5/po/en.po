@@ -1,0 +1,52 @@
+# English translation for senime-fcitx5
+# Copyright (C) 2026 THE senime-fcitx5 COPYRIGHT HOLDER
+# This file is distributed under the same license as the senime-fcitx5 package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: senime-fcitx5 0.0.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-06-30 00:00+0800\n"
+"PO-Revision-Date: 2026-06-30 00:00+0800\n"
+"Last-Translator: \n"
+"Language-Team: English\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: data/fcitx5/addon/senime.conf.in
+msgid "Senime"
+msgstr "Senime"
+
+#: data/fcitx5/addon/senime.conf.in
+msgid "Senime table input method engine"
+msgstr "Senime table input method engine"
+
+#: src/engine.h
+msgid "Table Path"
+msgstr "Table Path"
+
+#: src/engine.h
+msgid "Toggle Chinese/English"
+msgstr "Toggle Chinese/English"
+
+#: src/engine.h
+msgid "Trigger Temporary Chinese"
+msgstr "Trigger Temporary Chinese"
+
+#: src/engine.h
+msgid "Default Chinese Mode"
+msgstr "Default Chinese Mode"
+
+#: src/engine.cpp
+msgid "Switch to Chinese"
+msgstr "Switch to Chinese"
+
+#: src/engine.cpp
+msgid "Switch to English"
+msgstr "Switch to English"
+
+#: src/engine.cpp
+msgid "Reload engine"
+msgstr "Reload engine"

@@ -3,6 +3,7 @@
 
 #include "senime_fcitx5.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <fcitx-config/configuration.h>
@@ -17,6 +18,9 @@
 #include <fcitx/inputmethodengine.h>
 #include <fcitx/instance.h>
 #include <fcitx/addonmanager.h>
+#include <fcitx/action.h>
+#include <fcitx/menu.h>
+#include <fcitx/statusarea.h>
 #include <fcitx/text.h>
 #include <fcitx-utils/i18n.h>
 
@@ -32,7 +36,9 @@ FCITX_CONFIGURATION(
     Option<KeyList, ListConstrain<KeyConstrain>> triggerTempChinese{
         this, "TriggerTempChinese", _("Trigger Temporary Chinese"),
         KeyList{},
-        KeyListConstrain(KeyConstrainFlag::AllowModifierLess)};)
+        KeyListConstrain(KeyConstrainFlag::AllowModifierLess)};
+    Option<bool> defaultChineseMode{this, "DefaultChineseMode", _("Default Chinese Mode"),
+                                    false};)
 
 class SenimeEngine;
 
@@ -46,6 +52,7 @@ public:
     void deactivate();
     void reloadEngine();
     bool chineseMode() const;
+    void setChineseMode(bool chinese);
 
 private:
     using StatePtr = std::unique_ptr<::SenimeState, decltype(&senime_state_free)>;
@@ -61,9 +68,12 @@ class SenimeEngine : public InputMethodEngineV2 {
 public:
     explicit SenimeEngine(Instance *instance);
 
+    void activate(const InputMethodEntry &entry,
+                  InputContextEvent &event) override;
+    void deactivate(const InputMethodEntry &entry,
+                    InputContextEvent &event) override;
     void keyEvent(const InputMethodEntry &, KeyEvent &event) override;
     void reset(const InputMethodEntry &, InputContextEvent &event) override;
-    void deactivate(const InputMethodEntry &entry, InputContextEvent &event) override;
     void reloadConfig() override;
     const Configuration *getConfig() const override { return &configDef_; }
     void setConfig(const RawConfig &rawConfig) override;
@@ -79,16 +89,26 @@ public:
     const SenimeFcitxConfig &configDef() const { return configDef_; }
     const SenimeConfig &config() const { return config_; }
     void reloadEngine();
+
 private:
     using EnginePtr = std::unique_ptr<::SenimeEngine, decltype(&senime_engine_free)>;
 
     static SenimeConfig convertConfig(const SenimeFcitxConfig &cfg);
+    void refreshStatusArea(InputContext &ic);
 
     Instance *instance_;
     SenimeFcitxConfig configDef_;
     SenimeConfig config_{};
     FactoryFor<SenimeState> factory_;
     EnginePtr engine_{nullptr, senime_engine_free};
+
+    // 全局中英模式状态
+    std::atomic<bool> globalChineseMode_{false};
+
+    // 托盘菜单动作
+    Menu senimeMenu_;
+    SimpleAction toggleChineseAction_;
+    SimpleAction reloadAction_;
 };
 
 class SenimeEngineFactory : public AddonFactory {
