@@ -8,7 +8,7 @@ use std::{
     cell::RefCell,
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
-    path::Path,
+    path::{Path, PathBuf},
     ptr,
     sync::{Arc, mpsc},
     time::Duration,
@@ -541,13 +541,17 @@ fn get_default_table() -> Result<String, String> {
 
     #[cfg(target_os = "android")]
     {
-        // On Android, search XDG_DATA_DIRS for fcitx5/data/senime/config.toml
-        // fcitx5-android sets XDG_DATA_DIRS to <dataDir>/usr/share
-        if let Ok(data_dirs) = std::env::var("XDG_DATA_DIRS") {
-            for dir in data_dirs.split(':') {
-                let path = std::path::PathBuf::from(dir)
-                    .join("fcitx5")
-                    .join("data")
+        // fcitx5-android 设置的 XDG 环境变量:
+        //   XDG_DATA_HOME   = <externalFilesDir>/data   (外部存储用户数据)
+        //   XDG_CONFIG_HOME = <externalFilesDir>/config  (外部存储用户配置)
+        //   XDG_DATA_DIRS   = <internalDataDir>/usr/share (内部存储打包资源)
+        // 其中 externalFilesDir = /storage/emulated/0/Android/data/org.fcitx.fcitx5.android/files
+        // 因此 XDG_DATA_HOME 本身已包含 Android 包路径，无需再拼接。
+
+        // 1. 优先查找外部存储的用户配置 (config.toml)
+        for xdg_var in ["XDG_CONFIG_HOME", "XDG_DATA_HOME"] {
+            if let Ok(dir) = std::env::var(xdg_var) {
+                let path = PathBuf::from(&dir)
                     .join("senime")
                     .join("config.toml");
                 if path.is_file() {
@@ -555,9 +559,39 @@ fn get_default_table() -> Result<String, String> {
                 }
             }
         }
+
+        // 2. 查找外部存储的用户码表 (默认码表.txt)
+        for xdg_var in ["XDG_DATA_HOME", "XDG_CONFIG_HOME"] {
+            if let Ok(dir) = std::env::var(xdg_var) {
+                let path = PathBuf::from(&dir)
+                    .join("senime")
+                    .join("默认码表.txt");
+                if path.is_file() {
+                    return Ok(path.to_str().unwrap().to_owned());
+                }
+            }
+        }
+
+        // 3. 查找内部存储的打包资源 (由 fcitx5-android 从 plugin assets 同步)
+        if let Ok(data_dirs) = std::env::var("XDG_DATA_DIRS") {
+            for dir in data_dirs.split(':') {
+                if dir.is_empty() {
+                    continue;
+                }
+                let path = PathBuf::from(dir)
+                    .join("fcitx5")
+                    .join("data")
+                    .join("senime")
+                    .join("默认码表.txt");
+                if path.is_file() {
+                    return Ok(path.to_str().unwrap().to_owned());
+                }
+            }
+        }
+
         Err(Error::new(
             ErrorKind::NotFound,
-            "未找到默认配置文件: XDG_DATA_DIRS 中无 fcitx5/data/senime/config.toml",
+            "未找到默认配置或码表: 请在外部存储 data/senime/ 放置 config.toml 或 默认码表.txt",
         )
         .to_string())
     }
@@ -635,20 +669,18 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
         return ptr::null_mut();
     }
     let config = unsafe { &*config };
-    let Some(table_path) = cstr_to_str(config.table_path, "table_path") else {
-        return ptr::null_mut();
-    };
-    // 空字符串时尝试默认路径
-    let table_path = if table_path.is_empty() {
-        match get_default_table() {
-            Ok(p) => p,
-            Err(msg) => {
-                set_last_error(msg);
-                return ptr::null_mut();
+    let table_path = match cstr_to_str(config.table_path, "table_path") {
+        Some(table_path) if !table_path.is_empty() => table_path.to_owned(),
+        _ => {
+            // 空字符串时尝试默认路径
+            match get_default_table() {
+                Ok(p) => p,
+                Err(msg) => {
+                    set_last_error(msg);
+                    return ptr::null_mut();
+                }
             }
         }
-    } else {
-        table_path.to_string()
     };
     let config: SenimeResolvedConfig = config.into();
 
