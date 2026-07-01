@@ -94,7 +94,7 @@ private:
     using EnginePtr = std::unique_ptr<::SenimeEngine, decltype(&senime_engine_free)>;
 
     static SenimeConfig convertConfig(const SenimeFcitxConfig &cfg);
-    void refreshStatusArea(InputContext &ic);
+    void updateAction(InputContext *ic);
 
     Instance *instance_;
     SenimeFcitxConfig configDef_;
@@ -106,9 +106,7 @@ private:
     std::atomic<bool> globalChineseMode_{false};
 
     // 托盘菜单动作
-    Menu senimeMenu_;
     SimpleAction toggleChineseAction_;
-    SimpleAction reloadAction_;
 };
 
 class SenimeEngineFactory : public AddonFactory {

@@ -4,5 +4,5 @@ dist
 node_modules
 senime-fcitx5/build
 .cache
-.clangd
+compile_commands.json
 result

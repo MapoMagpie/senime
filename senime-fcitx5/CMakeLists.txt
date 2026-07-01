@@ -69,3 +69,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/senime-im.conf"
         RENAME senime.conf)
 install(FILES data/fcitx5/icon/fcitx-senime-cn.svg data/fcitx5/icon/fcitx-senime-en.svg
         DESTINATION "${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/scalable/apps")
+install(DIRECTORY data/16x16 data/22x22 data/24x24 data/48x48 data/64x64
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor"
+        PATTERN .* EXCLUDE
+        PATTERN *~ EXCLUDE)

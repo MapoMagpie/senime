@@ -248,17 +248,17 @@ impl SenimeState {
             let mut cmds = Vec::new();
             if self.chinese_mode {
                 cmds.push(SenimeCommand::with_commit_text(self.input.clone()));
-                cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
                 self.chinese_mode = false;
                 self.input.clear();
             } else {
-                cmds.push(SenimeCommand::with_preedit_text(":(中)".to_string()));
+                cmds.push(SenimeCommand::with_preedit_text(":中>".to_string()));
                 self.chinese_mode = true;
             }
-            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             cmds.push(SenimeCommand::with_type(
                 SenimeCommandType::UpdateStatusArea,
             ));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
             // !key.is_release防止下级应用接收到此key的按下事件，但释放事件却被fcitx5拦截，导致该key一直repeat。
             return (!key.is_release, cmds);
         }
@@ -793,10 +793,7 @@ pub unsafe extern "C" fn senime_state_chinese_mode(state: *const SenimeState) ->
 ///
 /// `state` 必须是由 `senime_state_new` 返回的有效指针。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn senime_state_set_chinese_mode(
-    state: *mut SenimeState,
-    chinese: bool,
-) {
+pub unsafe extern "C" fn senime_state_set_chinese_mode(state: *mut SenimeState, chinese: bool) {
     if state.is_null() {
         return;
     }

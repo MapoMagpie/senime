@@ -1,6 +1,6 @@
 [InputMethod]
 Name=Senime
-Icon=fcitx
+Icon=fcitx-senime
 Label=森
 LangCode=zh
 Addon=senime
