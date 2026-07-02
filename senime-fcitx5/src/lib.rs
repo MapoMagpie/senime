@@ -8,7 +8,7 @@ use std::{
     cell::RefCell,
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
-    path::{Path, PathBuf},
+    path::Path,
     ptr,
     sync::{Arc, mpsc},
     time::Duration,
@@ -551,9 +551,7 @@ fn get_default_table() -> Result<String, String> {
         // 1. 优先查找外部存储的用户配置 (config.toml)
         for xdg_var in ["XDG_CONFIG_HOME", "XDG_DATA_HOME"] {
             if let Ok(dir) = std::env::var(xdg_var) {
-                let path = PathBuf::from(&dir)
-                    .join("senime")
-                    .join("config.toml");
+                let path = PathBuf::from(&dir).join("senime").join("config.toml");
                 if path.is_file() {
                     return Ok(path.to_str().unwrap().to_owned());
                 }
@@ -563,9 +561,7 @@ fn get_default_table() -> Result<String, String> {
         // 2. 查找外部存储的用户码表 (默认码表.txt)
         for xdg_var in ["XDG_DATA_HOME", "XDG_CONFIG_HOME"] {
             if let Ok(dir) = std::env::var(xdg_var) {
-                let path = PathBuf::from(&dir)
-                    .join("senime")
-                    .join("默认码表.txt");
+                let path = PathBuf::from(&dir).join("senime").join("默认码表.txt");
                 if path.is_file() {
                     return Ok(path.to_str().unwrap().to_owned());
                 }
