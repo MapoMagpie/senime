@@ -252,19 +252,19 @@ impl InputAnalyzer {
         }
         let segments_raw = self.segments(input);
         let segment_len = segments_raw.len();
-        let mut reduce_space = false;
-        let mut segments: Vec<(String, Vec<char>, Tag)> = vec![];
+        // `(the text, origin chars, tag, is pending)`
+        // `the text` 根据原始输入从码表中查询的结果，或对应的标点符号，或原始的输入
+        // `is pending` 是否未决，将用于下一段`unknown`段(如果是)，判断是否要去除空格
+        //              在这些条件下会被设为 `true` 未决:
+        //              `punctuation has candidates (no selection_key) | escape unfinished | dict search none or not unique`
+        let mut segments: Vec<(String, Vec<char>, Tag, bool)> = vec![];
         let mut candidates: Option<Vec<CandidateRich>> = None;
-        // 是否未决，在这些条件下会被设为`false`，表示已决: `unknown | escape finished(完成的逃逸块) | dict search unique(码表的查询结果是唯一) | punctuation with selection(标点符号带候选选择)`
-        // 其他条件下会保持`true`:  `punctuation no selection | escape unfinished | dict search none or not unique`
-        let mut pending = true;
         for (i, (codes, tag)) in segments_raw.into_iter().enumerate() {
             let at_last = i == segment_len - 1;
             match tag {
                 Tag::Code(selection) => {
                     match self.search_candidates(&codes, &selection, !at_last) {
                         Some((cands, unique, rel_page_no)) => {
-                            reduce_space = !unique;
                             let mut codes = codes;
                             if selection.has_pagination {
                                 codes = codes
@@ -278,13 +278,9 @@ impl InputAnalyzer {
                             // 当前是最后一段时，若当前所查询的码表不是主码表，则在text前面加上`hint`
                             if at_last && selection.dict_idx > 0 {
                                 let hint = self.dicts[selection.dict_idx].0.hint.clone();
-                                segments.push((hint + "|" + &cands[0].text, codes, tag));
-                                pending = true;
+                                segments.push((hint + "|" + &cands[0].text, codes, tag, true));
                             } else {
-                                segments.push((cands[0].text.to_string(), codes, tag));
-                                if unique {
-                                    pending = false;
-                                }
+                                segments.push((cands[0].text.to_string(), codes, tag, !unique));
                             }
                             // candidates
                             if at_last && !unique {
@@ -292,68 +288,78 @@ impl InputAnalyzer {
                             }
                         }
                         None => {
-                            // 当前是最后一段时，`codes` 其实是反复触发符，则展示反查的 `hint`
-                            if at_last && selection.dict_idx > 0 && codes.len() == 1 {
-                                segments.push((
-                                    self.dicts[selection.dict_idx].0.hint.clone(),
-                                    codes,
-                                    tag,
-                                ));
+                            // codes 是个单独的反查触发符
+                            if selection.dict_idx > 0 && codes.len() == 1 {
+                                // 如果当前是最后一段，则展示反查hint
+                                let text = if at_last {
+                                    self.dicts[selection.dict_idx].0.hint.clone()
+                                } else {
+                                    // 如果非最后一段，则展示原本的
+                                    codes.iter().collect()
+                                };
+                                segments.push((text, codes, tag, true));
                             } else {
-                                segments.push((codes.iter().collect(), codes, tag));
+                                // 无查询结果，原样返回
+                                segments.push((codes.iter().collect(), codes, tag, false));
                             }
                         }
                     }
                 }
                 Tag::Punctuation((idx, has_selection)) => {
-                    match self.get_punctuation(&codes, idx, has_selection, !at_last) {
+                    match self.get_punctuation(&codes, idx, has_selection) {
                         Some((punc_text, cands)) => {
-                            segments.push((punc_text, codes, tag));
-                            if at_last && !cands.is_empty() {
+                            segments.push((punc_text, codes, tag, cands.len() > 1));
+                            if at_last && cands.len() > 1 {
                                 candidates = Some(cands);
-                            }
-                            if has_selection {
-                                pending = false;
-                            } else {
-                                reduce_space = true;
                             }
                         }
                         _ => {
-                            if at_last {
-                                pending = false;
-                            }
-                            segments.push((codes.iter().collect(), codes, tag));
+                            segments.push((codes.iter().collect(), codes, tag, false));
                         }
                     }
                 }
-                Tag::Escape((_, end)) => {
-                    let text =
-                        if self.trim_escape_pair && codes.len() > 2 && codes.last() == Some(&end) {
-                            // 当escape闭合时，移除两端的逃逸字符，
-                            // 如果escape_key前后相连(其中为空, last_i < 1)出现，保持其原样
-                            if at_last {
-                                pending = false;
-                            }
+                Tag::Escape((start, end)) => {
+                    if codes.len() > 1 && codes.last() == Some(&end) {
+                        // 闭合
+                        let text = if codes.len() == 2 {
+                            start.to_string()
+                        } else if self.trim_escape_pair {
                             codes[1..codes.len() - 1].iter().collect()
                         } else {
                             codes.iter().collect()
                         };
-                    segments.push((text, codes, tag));
+                        segments.push((text, codes, tag, false));
+                    } else {
+                        // 未闭合
+                        segments.push((codes.iter().collect(), codes, tag, true));
+                    }
                 }
                 _ => {
-                    // 如果unknow段
-                    let start = (reduce_space && codes[0] == ' ') as usize;
-                    if reduce_space {
-                        reduce_space = false;
+                    // 如果unknown段开头是一个空格，检查是否需要去掉这个空格。
+                    // 由于空格并非是选择首个候选的标识，它其实属于unknown。
+                    // 为了使空格达到选择首个候选的效果，需要检查上一段是否pending，如果上一段pending，则去除此空格。
+                    if codes[0] == ' ' {
+                        if let Some((_, _, _, pending)) = segments.last()
+                            && *pending
+                        {
+                            segments.push((codes[1..].iter().collect(), codes, tag, false));
+                        } else {
+                            segments.push((codes.iter().collect(), codes, tag, false));
+                        }
+                    } else {
+                        segments.push((codes.iter().collect(), codes, tag, false));
                     }
-                    if at_last {
-                        pending = false;
-                    }
-                    let text = &codes[start..];
-                    segments.push((text.iter().collect(), codes, tag));
                 }
             };
         }
+        let mut pending = false;
+        let segments = segments
+            .into_iter()
+            .map(|(text, origin, tag, is_pending)| {
+                pending = is_pending;
+                (text, origin, tag)
+            })
+            .collect();
         AnalysisResult {
             segments,
             pending,
@@ -405,6 +411,7 @@ impl InputAnalyzer {
         let slice = &slice[start..(start + self.page_count).min(slice.len())];
         // 是否唯一，如果实际的查询结果只有一个，或者直接存在selection_key
         // let unique = slice.len() <= 1 || selection.has_selection;
+        // FIXME: 不知道为什么，临时中文模式出现selection_key后，后面的输入不再触发cands候选框了
         let unique = selection.has_selection;
         let cands = if selection.sel_idx > 0 || no_cands {
             let index = if selection.sel_idx >= slice.len() {
@@ -503,7 +510,6 @@ impl InputAnalyzer {
         chars: &[char],
         sel_idx: usize,
         has_selection: bool,
-        no_cands: bool,
     ) -> Option<(String, Vec<CandidateRich>)> {
         self.punctuations.get(&chars[0]).map(|ps| {
             // 如果ps["a", "b", "c"]的长度为3，而chars.len()为7，最终result将变成cca
@@ -524,7 +530,7 @@ impl InputAnalyzer {
                 cands = &ps[i..];
                 c = c - ps.len().min(c);
             }
-            let cands: Vec<CandidateRich> = if has_selection || no_cands {
+            let cands: Vec<CandidateRich> = if has_selection {
                 // 将result最后一个元素修改为cands[i_cand]对应的内容
                 if let (Some(punc), Some(last)) =
                     (cands.get(sel_idx.min(cands.len() - 1)), result.last_mut())
@@ -845,6 +851,8 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
         let analyzer = InputAnalyzer::new(gen_test_config(), vec![(DictMeta::default(), dict)]);
         let inputs = vec![
             ("a cIzk", vec!["啊", "", "此啊", "zk"]),
+            ("a` ` ``cIzk", vec!["啊", " ", " ", "`", "此啊", "zk"]),
+            ("a, ", vec!["啊", "，", ""]),
             ("a cI@abc", vec!["啊", "", "此啊", "@", "啊波此"]),
             (
                 "a  cIzk,,,[]I]]",
@@ -894,6 +902,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
             ("@aaac@cP@@@", vec!["啊", "此", "此", "@", "@", "反"]),
             ("@aaax@xxx", vec!["啊", "x", "@", "xxx"]),
             ("@aaax@cc@", vec!["啊", "x", "此", "反"]),
+            ("@ ", vec!["@", ""]),
         ];
         for (i, (input, expect)) in inputs.into_iter().enumerate() {
             let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
@@ -1106,7 +1115,34 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
     fn test_analyze_pending() {
         let dict = Dict::from_str(&gen_entries()).unwrap();
         let analyzer = InputAnalyzer::new(gen_test_config(), vec![(DictMeta::default(), dict)]);
-        let samples = vec![("a", true), ("abcd", true), ("abI", false)];
+        let samples = vec![
+            ("a", true),
+            ("abcd", true),
+            ("abI", false),
+            ("abI,", true),
+            ("abI, ", false),
+        ];
+        for (i, (input, expected)) in samples.into_iter().enumerate() {
+            let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
+            assert_eq!(expected, result.pending, "> No.{} input: {}", i, input);
+        }
+        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict_sec = Dict::from_str(&gen_entries()).unwrap();
+        let analyzer = InputAnalyzer::new(
+            gen_test_config(),
+            vec![
+                (DictMeta::default(), dict),
+                (
+                    DictMeta {
+                        trigger: '@',
+                        hint: "反".to_string(),
+                        path: "".to_string(),
+                    },
+                    dict_sec,
+                ),
+            ],
+        );
+        let samples = vec![("@", true), ("@ ", false), ("@a", true), ("@x", false)];
         for (i, (input, expected)) in samples.into_iter().enumerate() {
             let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
             assert_eq!(expected, result.pending, "> No.{} input: {}", i, input);
@@ -1227,6 +1263,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
             ("xxx`aa`", "xxx`啊`", "xxx`啊`"),
             ("xxxEaa`", "xxxEaa`", "xxxEaa`"),
             ("xxxEaaD`", "xxxaa`", "xxxEaaD`"),
+            ("xxxEDa", "xxxE啊", "xxxE啊"),
         ];
         for (i, (input, expected_trim, expected_no_trim)) in samples.into_iter().enumerate() {
             let result = analyzer_trim.analyze(input.chars().collect::<Vec<_>>().as_slice());
