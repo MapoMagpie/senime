@@ -541,6 +541,7 @@ fn get_default_table() -> Result<String, String> {
 
     #[cfg(target_os = "android")]
     {
+        use std::path::PathBuf;
         // fcitx5-android 设置的 XDG 环境变量:
         //   XDG_DATA_HOME   = <externalFilesDir>/data   (外部存储用户数据)
         //   XDG_CONFIG_HOME = <externalFilesDir>/config  (外部存储用户配置)
