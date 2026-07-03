@@ -155,8 +155,8 @@ pub struct SenimeKeyEvent {
 pub struct SenimeConfig {
     pub toggle_sym: u32,
     pub toggle_states: u32,
-    pub trigger_sym: u32,
-    pub trigger_states: u32,
+    pub trigger_start_char: u32,
+    pub trigger_end_char: u32,
     pub table_path: *mut c_char,
     pub default_chinese_mode: bool,
 }
@@ -164,8 +164,8 @@ pub struct SenimeConfig {
 #[derive(Clone)]
 struct SenimeResolvedConfig {
     toggle_key: SenimeKeyBinding,
-    /// 当为 None 时，禁用临时中文模式
-    trigger_char: Option<char>,
+    /// 当为 None 时，禁用临时中文模式。`(start, end)` 中 `end` 可能与 `start` 相同。
+    trigger_chars: Option<(char, char)>,
     default_chinese_mode: bool,
 }
 
@@ -173,7 +173,7 @@ impl Default for SenimeResolvedConfig {
     fn default() -> Self {
         Self {
             toggle_key: SenimeKeyBinding::from((FCITX_KEY_Shift_L, FCITX_MOD_SHIFT)),
-            trigger_char: None,
+            trigger_chars: None,
             default_chinese_mode: false,
         }
     }
@@ -181,9 +181,14 @@ impl Default for SenimeResolvedConfig {
 
 impl From<&SenimeConfig> for SenimeResolvedConfig {
     fn from(value: &SenimeConfig) -> Self {
+        let trigger_chars = keysym_to_char(value.trigger_start_char)
+            .map(|start| {
+                let end = keysym_to_char(value.trigger_end_char).unwrap_or(start);
+                (start, end)
+            });
         Self {
             toggle_key: (value.toggle_sym, value.toggle_states).into(),
-            trigger_char: keysym_to_char(value.trigger_sym),
+            trigger_chars,
             default_chinese_mode: value.default_chinese_mode,
         }
     }
@@ -200,7 +205,7 @@ pub struct SenimeKeyEventResult {
 
 pub struct SenimeState {
     engine: Arc<ArcSwap<InputAnalyzer>>,
-    input: String,
+    input: Vec<char>,
     chinese_mode: bool,
     last_unrelease_key: u32,
     config: SenimeResolvedConfig,
@@ -211,7 +216,7 @@ impl SenimeState {
         let chinese_mode = config.default_chinese_mode;
         Self {
             engine,
-            input: String::new(),
+            input: Vec::new(),
             chinese_mode,
             last_unrelease_key: 0,
             config,
@@ -247,7 +252,7 @@ impl SenimeState {
         if toggle_chinese_mode {
             let mut cmds = Vec::new();
             if self.chinese_mode {
-                cmds.push(SenimeCommand::with_commit_text(self.input.clone()));
+                cmds.push(SenimeCommand::with_commit_text(self.input.iter().collect()));
                 self.chinese_mode = false;
                 self.input.clear();
             } else {
@@ -264,13 +269,13 @@ impl SenimeState {
         }
         // 英文模式处理
         if !self.chinese_mode {
-            if let Some(trigger_char) = self.config.trigger_char {
+            if let Some((start, _end)) = self.config.trigger_chars {
                 // 已进入临时中文模式（输入缓冲以触发字符开头）
-                if self.input.starts_with(trigger_char) {
+                if self.input.first() == Some(&start) {
                     return self.chinese_mode(key.sym, key.states, true);
                 // 按下触发键，进入临时中文模式
                 } else if let Some(ch) = keysym_to_char(key.sym)
-                    && ch == trigger_char
+                    && ch == start
                 {
                     self.input.push(ch);
                     let cmds = vec![
@@ -298,7 +303,7 @@ impl SenimeState {
         if non_shift_mods != 0 {
             let mut cmds = Vec::new();
             if !self.input.is_empty() {
-                cmds.push(SenimeCommand::with_commit_text(self.input.clone()));
+                cmds.push(SenimeCommand::with_commit_text(self.input.iter().collect()));
                 cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             }
             return (false, cmds);
@@ -307,7 +312,7 @@ impl SenimeState {
         // Escape
         if sym == FCITX_KEY_Escape {
             let cmds = vec![
-                SenimeCommand::with_commit_text(self.input.clone()),
+                SenimeCommand::with_commit_text(self.input.iter().collect()),
                 SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
                 SenimeCommand::with_type(SenimeCommandType::UpdateUI),
                 SenimeCommand::with_type(SenimeCommandType::UpdateStatusArea),
@@ -374,17 +379,21 @@ impl SenimeState {
         cmds: &mut Vec<SenimeCommand>,
     ) {
         let chars: Vec<char> = if temp_chinese_mode {
-            self.input
-                .chars()
-                .filter(|&c| self.config.trigger_char.is_none_or(|tc| c != tc))
-                .collect()
+            if let Some((start, end)) = self.config.trigger_chars {
+                let s = self.input.as_slice();
+                let s = s.strip_prefix(&[start]).unwrap_or(s);
+                let s = s.strip_suffix(&[end]).unwrap_or(s);
+                s.to_vec()
+            } else {
+                self.input.clone()
+            }
         } else {
-            self.input.chars().collect()
+            self.input.clone()
         };
         if chars.is_empty() {
             if self.input.len() == 2 {
                 cmds.push(SenimeCommand::with_commit_text(
-                    self.input.split_at(1).0.to_string(),
+                    self.input[0].to_string(),
                 ));
                 self.input.clear();
             } else {
@@ -436,7 +445,7 @@ impl SenimeState {
                 } else {
                     cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
                 }
-                self.input = last_input.clone();
+                self.input = last_input.chars().collect();
             } else {
                 cmds.push(SenimeCommand::with_commit_text(last_text));
                 cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
@@ -446,8 +455,8 @@ impl SenimeState {
             // 临时中文模式
             if self
                 .config
-                .trigger_char
-                .is_some_and(|tc| self.input.ends_with(tc))
+                .trigger_chars
+                .is_some_and(|(_start, end)| self.input.last() == Some(&end))
             {
                 // 临时中文模式结束
                 cmds.push(SenimeCommand::with_commit_text(

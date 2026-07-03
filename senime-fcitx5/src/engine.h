@@ -33,10 +33,10 @@ FCITX_CONFIGURATION(
         this, "ToggleMode", _("Toggle Chinese/English"),
         KeyList{Key("Shift+Shift_L")},
         KeyListConstrain(KeyConstrainFlag::AllowModifierOnly)};
-    Option<KeyList, ListConstrain<KeyConstrain>> triggerTempChinese{
-        this, "TriggerTempChinese", _("Trigger Temporary Chinese"),
-        KeyList{},
-        KeyListConstrain(KeyConstrainFlag::AllowModifierLess)};
+    Option<std::string> triggerTempChineseStart{this, "TriggerTempChineseStart",
+                                                _("Trigger Temporary Chinese Start"), ""};
+    Option<std::string> triggerTempChineseEnd{this, "TriggerTempChineseEnd",
+                                              _("Trigger Temporary Chinese End"), ""};
     Option<bool> defaultChineseMode{this, "DefaultChineseMode", _("Default Chinese Mode"),
                                     false};)
 

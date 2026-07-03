@@ -43,12 +43,12 @@ typedef struct SenimeKeyEvent {
 } SenimeKeyEvent;
 
 typedef struct SenimeConfig {
-    uint32_t toggle_sym;       // 中英切换键 keysym
-    uint32_t toggle_states;    // 中英切换键修饰符
-    uint32_t trigger_sym;      // 临时中文触发键 keysym (0 = 禁用)
-    uint32_t trigger_states;   // 临时中文触发键修饰符
+    uint32_t toggle_sym;             // 中英切换键 keysym
+    uint32_t toggle_states;          // 中英切换键修饰符
+    uint32_t trigger_start_char;     // 临时中文开始字符 keysym (0 = 禁用)
+    uint32_t trigger_end_char;       // 临时中文结束字符 keysym (0 = 使用start)
     const char *table_path;
-    bool default_chinese_mode; // 新建状态时默认使用中文模式
+    bool default_chinese_mode;       // 新建状态时默认使用中文模式
 } SenimeConfig ;
 
 typedef struct SenimeKeyEventResult {

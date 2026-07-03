@@ -282,8 +282,14 @@ SenimeConfig SenimeEngine::convertConfig(const SenimeFcitxConfig &cfg) {
             states = static_cast<uint32_t>(key.states());
         }
     };
+    auto extract_char = [](const std::string &s, uint32_t &sym) {
+        if (!s.empty()) {
+            sym = static_cast<uint32_t>(static_cast<unsigned char>(s[0]));
+        }
+    };
     extract(*cfg.toggleMode, kc.toggle_sym, kc.toggle_states);
-    extract(*cfg.triggerTempChinese, kc.trigger_sym, kc.trigger_states);
+    extract_char(*cfg.triggerTempChineseStart, kc.trigger_start_char);
+    extract_char(*cfg.triggerTempChineseEnd, kc.trigger_end_char);
     kc.table_path = cfg.tablePath->c_str();
     kc.default_chinese_mode = *cfg.defaultChineseMode;
     return kc;
