@@ -215,6 +215,9 @@ pub struct SenimeState {
     config: SenimeResolvedConfig,
     /// 语句流/临时中文模式下，保存最近一次分析的分段结果，用于按段回退。
     segments: Vec<(String, Vec<char>, Tag)>,
+    /// 预设模式：Alt+C 加载后，用户输入自动提交预设内容。
+    /// Vec 已反转，末尾元素为当前待输入项 (text, code_len)。
+    preset: Option<Vec<(String, usize)>>,
 }
 
 impl SenimeState {
@@ -227,6 +230,7 @@ impl SenimeState {
             last_unrelease_key: 0,
             config,
             segments: Vec::new(),
+            preset: None,
         }
     }
 
@@ -234,6 +238,7 @@ impl SenimeState {
     fn reset(&mut self) {
         self.input.clear();
         self.segments.clear();
+        self.preset.take();
         self.chinese_mode = self.config.default_chinese_mode;
     }
 
@@ -271,6 +276,7 @@ impl SenimeState {
                 self.chinese_mode = false;
                 self.input.clear();
                 self.segments.clear();
+                self.preset.take();
             } else {
                 cmds.push(SenimeCommand::with_preedit_text(":中>".to_string()));
                 self.chinese_mode = true;
@@ -314,6 +320,22 @@ impl SenimeState {
         states: u32,
         temp_chinese_mode: bool,
     ) -> (bool, Vec<SenimeCommand>) {
+        // Alt+C → 加载预设
+        if sym == FCITX_KEY_C && states == FCITX_MOD_ALT {
+            self.load_preset();
+            let hint = if self.preset.is_some() {
+                ":预设启用>".to_string()
+            } else {
+                "".to_string()
+            };
+            let cmds = vec![
+                SenimeCommand::with_preedit_text(hint),
+                SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
+                SenimeCommand::with_type(SenimeCommandType::UpdateUI),
+            ];
+            return (true, cmds);
+        }
+
         // Non-shift modifiers: commit pending, forward key
         let non_shift_mods = states & !(FCITX_MOD_SHIFT | FCITX_MOD_CAPSLOCK | FCITX_MOD_NUMLOCK);
         if non_shift_mods != 0 {
@@ -330,6 +352,7 @@ impl SenimeState {
             self.chinese_mode = false;
             self.input.clear();
             self.segments.clear();
+            self.preset.take();
             let cmds = vec![
                 SenimeCommand::with_commit_text(self.input.iter().collect()),
                 SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
@@ -416,6 +439,11 @@ impl SenimeState {
         just_commit: bool,
         cmds: &mut Vec<SenimeCommand>,
     ) {
+        // ── 预设模式：输入长度匹配时自动提交预设文本 ──────────────
+        if self.do_preset(cmds) {
+            return;
+        }
+
         let chars: Vec<char> = if temp_chinese_mode {
             if let Some((start, end)) = self.config.trigger_chars {
                 let s = self.input.as_slice();
@@ -576,6 +604,98 @@ impl SenimeState {
     }
 }
 
+impl SenimeState {
+    /// 预设模式：检查输入长度是否匹配当前预设项的编码长度。
+    /// 返回 true 表示已处理（调用方应直接 return）。
+    fn do_preset(&mut self, cmds: &mut Vec<SenimeCommand>) -> bool {
+        let Some(ref mut items) = self.preset else {
+            return false;
+        };
+        let Some((text, code_len)) = items.last() else {
+            self.preset = None;
+            return false;
+        };
+        // println!(
+        //     "do preset: input: [{}], text: [{}], code_len: [{}]",
+        //     self.input.iter().collect::<String>(),
+        //     text,
+        //     code_len
+        // );
+        if self.input.len() < *code_len + 1 {
+            let preedit: String = self.input.iter().collect();
+            cmds.push(SenimeCommand::with_preedit_text(preedit));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+            true
+        } else {
+            let commit_text = text.clone();
+            items.pop();
+            self.input.clear();
+            self.segments.clear();
+            if items.is_empty() {
+                self.preset.take();
+            }
+            cmds.push(SenimeCommand::with_commit_text(commit_text));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+            true
+        }
+    }
+
+    /// 从 ~/.cache/senime/preset.json 加载预设。
+    /// JSON 格式: { "codes": [{ "text": "...", "code": "..." }, ...] }
+    /// 加载后反转 Vec，便于 pop 取当前项。
+    fn load_preset(&mut self) {
+        let path = match dirs::cache_dir() {
+            Some(dir) => dir.join("senime").join("preset.json"),
+            None => {
+                senime_warn!("[senime] cannot determine cache directory");
+                return;
+            }
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                senime_warn!("[senime] failed to read {}: {}", path.display(), e);
+                return;
+            }
+        };
+        let json: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                senime_warn!("[senime] failed to parse preset JSON: {}", e);
+                return;
+            }
+        };
+        let codes = match json.get("codes").and_then(|v| v.as_array()) {
+            Some(arr) => arr,
+            None => {
+                senime_warn!("[senime] preset.json: missing or invalid 'codes' array");
+                return;
+            }
+        };
+        let mut items: Vec<(String, usize)> = Vec::with_capacity(codes.len());
+        for entry in codes {
+            let text = match entry.get("text").and_then(|v| v.as_str()) {
+                Some(t) => t.to_string(),
+                None => continue,
+            };
+            let code = match entry.get("code").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => continue,
+            };
+            items.push((text, code.chars().count()));
+        }
+        if items.is_empty() {
+            senime_warn!("[senime] preset.json: no valid entries found");
+            return;
+        }
+        items.reverse();
+        self.preset = Some(items);
+    }
+}
+
+// TODO: fcitx5是否有一种通知功能，可以更好地提示错误信息？
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
@@ -928,7 +1048,12 @@ pub unsafe extern "C" fn senime_state_set_chinese_mode(state: *mut SenimeState, 
     if state.is_null() {
         return;
     }
-    unsafe { (*state).chinese_mode = chinese };
+    unsafe {
+        (*state).input.clear();
+        (*state).segments.clear();
+        (*state).preset.take();
+        (*state).chinese_mode = chinese
+    };
 }
 
 /// 重置输入状态：清空输入缓冲并重置中英模式。
