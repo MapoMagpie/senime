@@ -38,7 +38,8 @@ FCITX_CONFIGURATION(
     Option<std::string> triggerTempChineseEnd{this, "TriggerTempChineseEnd",
                                               _("Trigger Temporary Chinese End"), ""};
     Option<bool> defaultChineseMode{this, "DefaultChineseMode", _("Default Chinese Mode"),
-                                    false};)
+                                    false};
+    Option<bool> sentenceFlow{this, "SentenceFlow", _("Sentence Flow"), false};)
 
 class SenimeEngine;
 

@@ -769,6 +769,7 @@ impl CandidateRich {
 /// `candidates` 仅对应最后一个分段
 /// `pending`    最后一段的结果是否未决，前端可根据此项判断时是否要清空`input`(前端维护的当前输入状态)
 ///              比如按下了反查键`@`但是后面没其他输入，此时无候选，但前端应保持`@`在`input`中
+#[derive(Debug)]
 pub struct AnalysisResult {
     pub segments: Vec<(String, Vec<char>, Tag)>,
     pub pending: bool,

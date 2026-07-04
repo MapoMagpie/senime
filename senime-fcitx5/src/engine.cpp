@@ -292,6 +292,7 @@ SenimeConfig SenimeEngine::convertConfig(const SenimeFcitxConfig &cfg) {
     extract_char(*cfg.triggerTempChineseEnd, kc.trigger_end_char);
     kc.table_path = cfg.tablePath->c_str();
     kc.default_chinese_mode = *cfg.defaultChineseMode;
+    kc.sentence_flow = *cfg.sentenceFlow;
     return kc;
 }
 

@@ -1,7 +1,8 @@
 use arc_swap::ArcSwap;
 use notify::{RecursiveMode, Watcher};
 use senime_lib::{
-    AnalysisResult, InputAnalyzer, PAGE_DOWN, PAGE_UP, input_analyzer::load_input_analyzer,
+    AnalysisResult, CandidateRich, InputAnalyzer, PAGE_DOWN, PAGE_UP,
+    input_analyzer::{Tag, load_input_analyzer},
     resolve_relative_path,
 };
 use std::{
@@ -110,7 +111,7 @@ impl SenimeCommand {
         }
     }
 
-    fn with_candidates(cands: Vec<senime_lib::CandidateRich>) -> SenimeCommand {
+    fn with_candidates(cands: Vec<CandidateRich>) -> SenimeCommand {
         let data: Vec<SenimeCandidateData> = cands
             .into_iter()
             .map(|c| {
@@ -159,6 +160,7 @@ pub struct SenimeConfig {
     pub trigger_end_char: u32,
     pub table_path: *mut c_char,
     pub default_chinese_mode: bool,
+    pub sentence_flow: bool,
 }
 
 #[derive(Clone)]
@@ -167,6 +169,7 @@ struct SenimeResolvedConfig {
     /// 当为 None 时，禁用临时中文模式。`(start, end)` 中 `end` 可能与 `start` 相同。
     trigger_chars: Option<(char, char)>,
     default_chinese_mode: bool,
+    sentence_flow: bool,
 }
 
 impl Default for SenimeResolvedConfig {
@@ -175,21 +178,22 @@ impl Default for SenimeResolvedConfig {
             toggle_key: SenimeKeyBinding::from((FCITX_KEY_Shift_L, FCITX_MOD_SHIFT)),
             trigger_chars: None,
             default_chinese_mode: false,
+            sentence_flow: false,
         }
     }
 }
 
 impl From<&SenimeConfig> for SenimeResolvedConfig {
     fn from(value: &SenimeConfig) -> Self {
-        let trigger_chars = keysym_to_char(value.trigger_start_char)
-            .map(|start| {
-                let end = keysym_to_char(value.trigger_end_char).unwrap_or(start);
-                (start, end)
-            });
+        let trigger_chars = keysym_to_char(value.trigger_start_char).map(|start| {
+            let end = keysym_to_char(value.trigger_end_char).unwrap_or(start);
+            (start, end)
+        });
         Self {
             toggle_key: (value.toggle_sym, value.toggle_states).into(),
             trigger_chars,
             default_chinese_mode: value.default_chinese_mode,
+            sentence_flow: value.sentence_flow,
         }
     }
 }
@@ -209,6 +213,8 @@ pub struct SenimeState {
     chinese_mode: bool,
     last_unrelease_key: u32,
     config: SenimeResolvedConfig,
+    /// 语句流/临时中文模式下，保存最近一次分析的分段结果，用于按段回退。
+    segments: Vec<(String, Vec<char>, Tag)>,
 }
 
 impl SenimeState {
@@ -220,12 +226,14 @@ impl SenimeState {
             chinese_mode,
             last_unrelease_key: 0,
             config,
+            segments: Vec::new(),
         }
     }
 
     /// 重置状态：清空输入缓冲，重置中英模式标记。
     fn reset(&mut self) {
         self.input.clear();
+        self.segments.clear();
         self.chinese_mode = self.config.default_chinese_mode;
     }
 
@@ -233,6 +241,7 @@ impl SenimeState {
     /// 用于手动选择候选项后清空输入状态。
     fn reset_input(&mut self) {
         self.input.clear();
+        self.segments.clear();
     }
 
     /// Process a key event. Returns (accepted, commands).
@@ -252,9 +261,16 @@ impl SenimeState {
         if toggle_chinese_mode {
             let mut cmds = Vec::new();
             if self.chinese_mode {
-                cmds.push(SenimeCommand::with_commit_text(self.input.iter().collect()));
+                // 语句流模式下，提交分析后的中文文本而非原始编码
+                if self.config.sentence_flow && !self.segments.is_empty() {
+                    let text: String = self.segments.iter().map(|(t, _, _)| t.as_str()).collect();
+                    cmds.push(SenimeCommand::with_commit_text(text));
+                } else {
+                    cmds.push(SenimeCommand::with_commit_text(self.input.iter().collect()));
+                }
                 self.chinese_mode = false;
                 self.input.clear();
+                self.segments.clear();
             } else {
                 cmds.push(SenimeCommand::with_preedit_text(":中>".to_string()));
                 self.chinese_mode = true;
@@ -311,15 +327,16 @@ impl SenimeState {
 
         // Escape
         if sym == FCITX_KEY_Escape {
+            self.chinese_mode = false;
+            self.input.clear();
+            self.segments.clear();
             let cmds = vec![
                 SenimeCommand::with_commit_text(self.input.iter().collect()),
                 SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
                 SenimeCommand::with_type(SenimeCommandType::UpdateUI),
                 SenimeCommand::with_type(SenimeCommandType::UpdateStatusArea),
             ];
-            self.chinese_mode = false;
-            self.input.clear();
-            return (true, cmds);
+            return (false, cmds);
         }
 
         // Return → 分析后直接提交中文
@@ -331,15 +348,36 @@ impl SenimeState {
 
         // Backspace
         if sym == FCITX_KEY_BackSpace {
-            let mut accept = false;
-            // remove ⇞ and ⇟ from self.input first
-            if !self.input.is_empty() {
+            let mut accept = true;
+            // 语句流/临时中文模式下，按段回退
+            if (temp_chinese_mode || self.config.sentence_flow)
+                && !self.input.is_empty()
+                && !self.segments.is_empty()
+            {
+                // 找到最后一个text非空的segment，回退到它之前（移除该segment及其后的空segment）
+                let trim_idx = self
+                    .segments
+                    .iter()
+                    .rposition(|(text, _, _)| !text.is_empty())
+                    .unwrap_or(0);
+                let prev_input: Vec<char> = self.segments[..trim_idx]
+                    .iter()
+                    .flat_map(|(_, origin, _)| origin.iter().copied())
+                    .collect();
+                self.input = prev_input;
+                // 临时中文模式需要重新包裹触发字符
+                if temp_chinese_mode && let Some((start, _)) = self.config.trigger_chars {
+                    self.input.insert(0, start);
+                }
+            } else if !self.input.is_empty() {
+                // 普通逐字符回退
                 while let Some(ch) = self.input.pop() {
                     if ch != PAGE_UP && ch != PAGE_DOWN {
                         break;
                     }
                 }
-                accept = true;
+            } else {
+                accept = false;
             }
             let mut cmds = Vec::new();
             self.do_update(temp_chinese_mode, false, &mut cmds);
@@ -391,11 +429,11 @@ impl SenimeState {
             self.input.clone()
         };
         if chars.is_empty() {
+            // 临时中文模式，但只有首尾两个触发符，直接提交首部的触发符
             if self.input.len() == 2 {
-                cmds.push(SenimeCommand::with_commit_text(
-                    self.input[0].to_string(),
-                ));
+                cmds.push(SenimeCommand::with_commit_text(self.input[0].to_string()));
                 self.input.clear();
+                self.segments.clear();
             } else {
                 cmds.push(SenimeCommand::with_preedit_text("".to_string()));
             }
@@ -404,82 +442,137 @@ impl SenimeState {
             return;
         }
         // 先 load() 获取 guard，分析后 drop guard，再调用 &self 方法
-        let (pre_text, last_text, last_input, candidates, pending) = {
-            let guard = self.engine.load();
-            let AnalysisResult {
-                mut segments,
-                pending,
-                candidates,
-            } = guard.analyze(&chars);
-            let (last_text, last_input) = segments
-                .pop()
-                .map_or(("".to_string(), "".to_string()), |(text, origin, _)| {
-                    (text, origin.into_iter().collect())
-                });
-            let pre_text: String = segments.into_iter().map(|seg| seg.0).collect();
-            (pre_text, last_text, last_input, candidates, pending)
-        };
-        // println!(
-        //     "pre_text: [{pre_text}] last_text: [{last_text}] last_input: [{last_input}] last_tag: [{last_tag:?}] candidates: {}",
-        //     candidates.as_ref().map_or(0, |cands| cands.len())
-        // );
-        if just_commit {
+        let result = { self.engine.load().analyze(&chars) };
+        if result.segments.is_empty() {
             self.input.clear();
-            cmds.push(SenimeCommand::with_commit_text(
-                pre_text + last_text.as_str(),
-            ));
+            self.segments.clear();
+            cmds.push(SenimeCommand::with_preedit_text("".to_string()));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
             return;
         }
-        if !temp_chinese_mode {
-            // 正常中文模式
-            // 如果senime输出了多segment，则将之前的segments的文本作为commit
-            if !pre_text.is_empty() {
-                cmds.push(SenimeCommand::with_commit_text(pre_text));
-            }
-            if pending {
-                cmds.push(SenimeCommand::with_preedit_text(last_text));
-                if let Some(cands) = candidates {
+        // 保存分段结果，用于语句流/临时中文模式下的按段回退
+        let mode_cmds = if just_commit {
+            self.update_mode_just_commit(result)
+        } else if temp_chinese_mode {
+            self.update_mode_temp_chinese(result)
+        } else if self.config.sentence_flow {
+            self.update_mode_sentence_flow(result)
+        } else {
+            self.update_mode_normal(result)
+        };
+        cmds.extend(mode_cmds);
+        cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+    }
+
+    /// 仅提交模式：所有文本立即提交
+    fn update_mode_just_commit(&mut self, result: AnalysisResult) -> Vec<SenimeCommand> {
+        self.input.clear();
+        self.segments.clear();
+        let text = result.segments.into_iter().map(|seg| seg.0).collect();
+        vec![
+            SenimeCommand::with_commit_text(text),
+            SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
+        ]
+    }
+
+    /// 临时中文模式：trigger char范围内，所有文本保持在preedit
+    fn update_mode_temp_chinese(&mut self, result: AnalysisResult) -> Vec<SenimeCommand> {
+        let mut cmds = Vec::new();
+        if self
+            .config
+            .trigger_chars
+            .is_some_and(|(_start, end)| self.input.last() == Some(&end))
+        {
+            // 临时中文模式结束
+            let text = result.segments.into_iter().map(|seg| seg.0).collect();
+            cmds.push(SenimeCommand::with_commit_text(text));
+            cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+            self.input.clear();
+            self.segments.clear();
+        } else {
+            // 临时中文模式未决
+            self.segments = result.segments.clone();
+            let text = result.segments.into_iter().map(|seg| seg.0).collect();
+            cmds.push(SenimeCommand::with_preedit_text(text));
+            if result.pending {
+                if let Some(cands) = result.candidates {
                     cmds.push(SenimeCommand::with_candidates(cands));
                 } else {
                     cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
                 }
-                self.input = last_input.chars().collect();
             } else {
-                cmds.push(SenimeCommand::with_commit_text(last_text));
                 cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
-                self.input.clear();
+            }
+        }
+        cmds
+    }
+
+    /// 语句流模式：文本保持在preedit，仅在标点或unknown(text非空)时提交
+    fn update_mode_sentence_flow(&mut self, result: AnalysisResult) -> Vec<SenimeCommand> {
+        let mut cmds = Vec::new();
+        let mut pre_segments = result.segments.clone();
+        let last_seg = pre_segments.pop().unwrap();
+        let is_code_tag = |seg: &(String, Vec<char>, Tag)| {
+            matches!(seg.2, Tag::Code(_)) || (matches!(seg.2, Tag::Unknown) && seg.0.is_empty())
+        };
+        // 当前段是code，如果上一段也是code或没有上一段，则继续语句流
+        if is_code_tag(&last_seg)
+            && (pre_segments.is_empty() || is_code_tag(pre_segments.last().unwrap()))
+        {
+            self.segments = result.segments.clone();
+            let text = result.segments.into_iter().map(|seg| seg.0).collect();
+            cmds.push(SenimeCommand::with_preedit_text(text));
+            if let Some(cands) = result.candidates {
+                cmds.push(SenimeCommand::with_candidates(cands));
+            } else {
+                cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             }
         } else {
-            // 临时中文模式
-            if self
-                .config
-                .trigger_chars
-                .is_some_and(|(_start, end)| self.input.last() == Some(&end))
-            {
-                // 临时中文模式结束
-                cmds.push(SenimeCommand::with_commit_text(
-                    pre_text + last_text.as_str(),
-                ));
-                cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
-                self.input.clear();
+            // 当前段不是code ，则先将之前的段上屏，再根据pending走正常的流程。
+            let pre_text = pre_segments.into_iter().map(|seg| seg.0).collect();
+            cmds.push(SenimeCommand::with_commit_text(pre_text));
+            self.segments.clear();
+            if result.pending {
+                self.input = last_seg.1;
+                cmds.push(SenimeCommand::with_preedit_text(last_seg.0));
             } else {
-                // 临时中文模式未决
-                let text = pre_text + last_text.as_str();
-                cmds.push(SenimeCommand::with_preedit_text(text));
-                if pending {
-                    if let Some(cands) = candidates {
-                        cmds.push(SenimeCommand::with_candidates(cands));
-                    } else {
-                        cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
-                    }
+                self.input.clear();
+                cmds.push(SenimeCommand::with_commit_text(last_seg.0));
+            }
+            if let Some(cands) = result.candidates {
+                cmds.push(SenimeCommand::with_candidates(cands));
+            } else {
+                cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+            }
+        }
+        cmds
+    }
+
+    /// 正常中文模式：中间段提交，最后一段preedit
+    fn update_mode_normal(&mut self, mut result: AnalysisResult) -> Vec<SenimeCommand> {
+        let mut cmds = Vec::new();
+        let last_seg = result.segments.pop();
+        let pre_text: String = result.segments.into_iter().map(|seg| seg.0).collect();
+        if !pre_text.is_empty() {
+            cmds.push(SenimeCommand::with_commit_text(pre_text));
+        }
+        if let Some(last) = last_seg {
+            if result.pending {
+                cmds.push(SenimeCommand::with_preedit_text(last.0));
+                if let Some(cands) = result.candidates {
+                    cmds.push(SenimeCommand::with_candidates(cands));
                 } else {
                     cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
                 }
+                self.input = last.1;
+            } else {
+                cmds.push(SenimeCommand::with_commit_text(last.0));
+                cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
+                self.input.clear();
             }
         }
-        cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
+        cmds
     }
 }
 

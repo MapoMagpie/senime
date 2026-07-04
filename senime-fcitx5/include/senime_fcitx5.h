@@ -49,6 +49,7 @@ typedef struct SenimeConfig {
     uint32_t trigger_end_char;       // 临时中文结束字符 keysym (0 = 使用start)
     const char *table_path;
     bool default_chinese_mode;       // 新建状态时默认使用中文模式
+    bool sentence_flow;              // 语句流模式：输入持续在preedit，遇标点或双空格才提交
 } SenimeConfig ;
 
 typedef struct SenimeKeyEventResult {
