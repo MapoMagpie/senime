@@ -1,6 +1,11 @@
 use clap::Parser;
-use senime_lib::{Dict, Looker};
-use std::{fs::File, io::Read, time::Instant};
+use senime_lib::{Dict, Looker, lookup_code::Segment};
+use serde::Serialize;
+use std::{
+    fs::File,
+    io::Read,
+    time::{Duration, Instant},
+};
 
 /// 通过码表对文章进行平均码长和编码计算，将输出到终端，若文本太长，请将输出重定向至文件中。
 #[derive(Parser, Debug)]
@@ -24,6 +29,71 @@ pub struct Args {
     /// 输出时包含字词，将与编码拼接在一起
     #[arg(short, long, verbatim_doc_comment)]
     pub with_text: bool,
+
+    /// 输出json格式
+    #[arg(long, verbatim_doc_comment)]
+    pub json: bool,
+}
+
+/// 分析结果中的一段
+#[derive(Serialize)]
+struct AnSegment {
+    text: String,
+    code: String,
+    pos: u16,
+}
+
+/// 分析结果统计
+#[derive(Serialize)]
+struct AnResult {
+    /// 计算耗时(毫秒)
+    elapsed_ms: u64,
+    /// 平均码长
+    mnpc: f32,
+    /// 空格顶码次数
+    use_space_times: u32,
+    /// 候选选择次数
+    use_candidate_times: u32,
+    /// 编码总长度
+    code_len: usize,
+    /// 文本总字数
+    text_len: usize,
+    /// 分词段列表
+    codes: Vec<AnSegment>,
+}
+
+fn build_result(segments: &[Segment], elapsed: Duration, text_len: usize) -> AnResult {
+    let mut use_space_times: u32 = 0;
+    let mut use_candidate_times: u32 = 0;
+    let mut code_len: usize = 0;
+    let codes = segments
+        .iter()
+        .map(|seg| {
+            code_len += seg.code.len();
+            if !seg.auto_select && seg.pos == 0 {
+                use_space_times += 1;
+            } else if seg.pos > 0 {
+                use_candidate_times += 1;
+            }
+            AnSegment {
+                text: seg.text.iter().collect(),
+                code: seg.code.iter().collect(),
+                pos: seg.pos,
+            }
+        })
+        .collect();
+    code_len += use_space_times as usize;
+    code_len += use_candidate_times as usize;
+    let mnpc = code_len as f32 / text_len as f32;
+    AnResult {
+        elapsed_ms: elapsed.as_millis() as u64,
+        mnpc,
+        use_space_times,
+        use_candidate_times,
+        code_len,
+        text_len,
+        codes,
+    }
 }
 
 fn main() {
@@ -51,58 +121,50 @@ fn main() {
     let start = Instant::now();
     let segments = looker.analyze(&article);
     let segments_time = start.elapsed();
-    // 使用空格上屏的次数
-    let mut use_space_times = 0;
-    // 选择候选的次数
-    let mut use_candidate_times = 0;
-    let mut code_len = 0;
-    // 黑色	30	40
-    // 红色	31	41
-    // 绿色	32	42
-    // 黄色	33	43
-    // 蓝色	34	44
-    // 洋红	35	45
-    // 青色	36	46
-    // 白色	37	47
-    let (colors, color_reset) = if args.color {
-        (
-            vec!["\x1b[30;47;1m", "\x1b[31;42;1m", "\x1b[37;40;1m"],
-            vec!["\x1b[0m".to_string()],
-        )
+    let result = build_result(&segments, segments_time, article.len());
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&result).unwrap());
     } else {
-        (vec![""], vec![])
-    };
-    let select_pos_map = vec!["¹", "²", "³", "⁴", "⁶", "⁶", "⁷", "⁸", "⁹", "^"];
-    let mut colors_id: usize = 0;
-    let codes = segments
-        .iter()
-        .map(|seg| {
-            // 检查是否可以顶字上屏，将当前段的code与下一段的code首个字符相连，在字典中查询是否存在
-            // 如果不存在表示可以顶字上屏，此方式无需检测下一段是否是标点符号
-            colors_id += 1;
-            code_len += seg.code.len();
-            let mut str = colors[colors_id % colors.len()].to_string();
-            if args.with_text {
-                str.extend(seg.text);
-            }
-            str.extend(seg.code);
-            // 需要空格
-            if !seg.auto_select && seg.pos == 0 {
-                use_space_times += 1;
-                str += "_";
-            } else if seg.pos > 0 {
-                use_candidate_times += 1;
-                str += select_pos_map[(seg.pos as usize).min(select_pos_map.len() - 1)];
-            }
-            str
-        })
-        .chain(color_reset)
-        .collect::<String>();
-    code_len += use_space_times;
-    code_len += use_candidate_times;
-    let mnpc: f32 = code_len as f32 / article.len() as f32;
-    println!(
-        "计算耗时: {:?}\n平均码长: {}\n空格顶码次数: {}\n进行候选次数: {}\n编码:\n{}\n",
-        segments_time, mnpc, use_space_times, use_candidate_times, codes
-    );
+        // 黑色	30	40
+        // 红色	31	41
+        // 绿色	32	42
+        // 黄色	33	43
+        // 蓝色	34	44
+        // 洋红	35	45
+        // 青色	36	46
+        // 白色	37	47
+        let (colors, color_reset) = if args.color {
+            (
+                vec!["\x1b[30;47;1m", "\x1b[31;42;1m", "\x1b[37;40;1m"],
+                vec!["\x1b[0m".to_string()],
+            )
+        } else {
+            (vec![""], vec![])
+        };
+        let select_pos_map = vec!["¹", "²", "³", "⁴", "⁶", "⁶", "⁷", "⁸", "⁹", "^"];
+        let mut colors_id: usize = 0;
+        let codes = segments
+            .iter()
+            .map(|seg| {
+                colors_id += 1;
+                let mut str = colors[colors_id % colors.len()].to_string();
+                if args.with_text {
+                    str.extend(seg.text);
+                }
+                str.extend(seg.code);
+                if !seg.auto_select && seg.pos == 0 {
+                    str += "_";
+                } else if seg.pos > 0 {
+                    str += select_pos_map[(seg.pos as usize).min(select_pos_map.len() - 1)];
+                }
+                str
+            })
+            .chain(color_reset)
+            .collect::<String>();
+        println!(
+            "计算耗时: {:?}\n平均码长: {}\n空格顶码次数: {}\n进行候选次数: {}\n编码:\n{}\n",
+            segments_time, result.mnpc, result.use_space_times, result.use_candidate_times, codes
+        );
+    }
 }

@@ -13,3 +13,5 @@ path = "src/main.rs"
 [dependencies]
 senime-lib = { path = "../senime-lib" }
 clap = { version = "4.5.35", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
