@@ -84,8 +84,16 @@ void senime_key_event_result_free(SenimeKeyEventResult *result);
 
 // ── Utilities ────────────────────────────────────────────────────────────
 
-const char *senime_last_error(void);
 void senime_string_free(char *value);
+
+// ── Logging ─────────────────────────────────
+
+/// 日志回调函数类型: (level, message)
+/// level: 0=INFO, 1=WARN, 2=ERROR
+typedef void (*SenimeLogCallback)(int level, const char *message);
+
+/// 设置日志回调，应在 senime_engine_new 之前调用
+void senime_set_log_callback(SenimeLogCallback callback);
 
 #ifdef __cplusplus
 }

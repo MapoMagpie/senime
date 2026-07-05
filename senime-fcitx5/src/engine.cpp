@@ -16,9 +16,14 @@ namespace fcitx {
 
 namespace {
 
-std::string lastError() {
-    const char *error = senime_last_error();
-    return error ? std::string(error) : std::string();
+// Fcitx5 日志桥接：Rust 层通过回调将日志转发到 fcitx5 日志系统
+void senimeFcitxLog(int level, const char *msg) {
+    switch (level) {
+    case 0: FCITX_INFO() << "[senime] " << msg; break;
+    case 1: FCITX_WARN() << "[senime] " << msg; break;
+    case 2: FCITX_ERROR() << "[senime] " << msg; break;
+    default: FCITX_INFO() << "[senime] " << msg; break;
+    }
 }
 
 class SenimeCandidateWord : public CandidateWord {
@@ -76,7 +81,6 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
     // FCITX_INFO() << "Senime process_key: " << us << "us";
 
     if (!result) {
-        // FCITX_WARN() << "Senime process_key failed: " << lastError();
         return;
     }
 
@@ -219,6 +223,12 @@ std::string SenimeEngine::subModeLabelImpl(const InputMethodEntry &,
 SenimeEngine::SenimeEngine(Instance *instance)
     : instance_(instance),
       factory_([this](InputContext &ic) { return new SenimeState(this, &ic); }) {
+    // 设置 Rust 层日志回调，将日志转发到 fcitx5 日志系统
+    static bool log_initialized = false;
+    if (!log_initialized) {
+        senime_set_log_callback(senimeFcitxLog);
+        log_initialized = true;
+    }
     reloadConfig();
     config_ = convertConfig(configDef_);
     globalChineseMode_.store(config_.default_chinese_mode);
@@ -299,9 +309,6 @@ SenimeConfig SenimeEngine::convertConfig(const SenimeFcitxConfig &cfg) {
 void SenimeEngine::reloadEngine() {
     engine_.reset();
     engine_.reset(senime_engine_new(&config_));
-    if (!engine_) {
-        FCITX_WARN() << "Failed to load Senime table: " << lastError();
-    }
 }
 
 void SenimeEngine::activate(const InputMethodEntry &,

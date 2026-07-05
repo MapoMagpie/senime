@@ -6,7 +6,6 @@ use senime_lib::{
     resolve_relative_path,
 };
 use std::{
-    cell::RefCell,
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
@@ -18,34 +17,46 @@ use std::{
 mod keysym;
 use keysym::*;
 
-// Android logcat support
-#[cfg(target_os = "android")]
-unsafe extern "C" {
-    fn __android_log_print(prio: i32, tag: *const c_char, fmt: *const c_char, ...) -> i32;
+// ── Fcitx5 日志桥接 ──────────────────────────────────────────────────────
+
+/// Fcitx5 日志回调函数类型: (level, message)
+/// level: 0=INFO, 1=WARN, 2=ERROR
+type FcitxLogFn = unsafe extern "C" fn(i32, *const c_char);
+
+/// 全局 Fcitx5 日志回调，由 C++ 端在初始化时设置
+static FCITX_LOG: std::sync::OnceLock<FcitxLogFn> = std::sync::OnceLock::new();
+
+/// C++ 调用此函数设置日志回调。
+///
+/// # Safety
+///
+/// `callback` 必须是一个有效的、在插件生命周期内始终可用的函数指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn senime_set_log_callback(callback: FcitxLogFn) {
+    let _ = FCITX_LOG.set(callback);
 }
 
-#[cfg(target_os = "android")]
-macro_rules! android_log {
-    ($prio:expr, $($arg:tt)*) => {{
-        let msg = std::ffi::CString::new(format!($($arg)*)).unwrap_or_default();
-        let tag = std::ffi::CString::new("senime").unwrap_or_default();
-        unsafe {
-            __android_log_print($prio, tag.as_ptr(), msg.as_ptr());
+/// 日志级别常量
+#[allow(unused)]
+const FCITX_LOG_INFO: i32 = 0;
+#[allow(unused)]
+const FCITX_LOG_WARN: i32 = 1;
+#[allow(unused)]
+const FCITX_LOG_ERROR: i32 = 2;
+
+/// 通过 fcitx5 日志系统输出日志。
+/// 用法: `fcitx_log!(FCITX_LOG_WARN, "message: {}", value);`
+macro_rules! fcitx_log {
+    ($level:expr, $($arg:tt)*) => {{
+        let msg = format!($($arg)*);
+        if let Some(log_fn) = FCITX_LOG.get() {
+            if let Ok(c_msg) = std::ffi::CString::new(msg) {
+                unsafe { log_fn($level, c_msg.as_ptr()); }
+            }
+        } else {
+            // 回调未设置时回退到 stderr
+            eprintln!($($arg)*);
         }
-    }};
-}
-
-#[cfg(target_os = "android")]
-macro_rules! log_warn {
-    ($($arg:tt)*) => { android_log!(5i32, $($arg)*) };  // ANDROID_LOG_WARN = 5
-}
-
-macro_rules! senime_warn {
-    ($($arg:tt)*) => {{
-        #[cfg(target_os = "android")]
-        { log_warn!($($arg)*); }
-        #[cfg(not(target_os = "android"))]
-        { eprintln!($($arg)*); }
     }};
 }
 
@@ -649,28 +660,31 @@ impl SenimeState {
         let path = match dirs::cache_dir() {
             Some(dir) => dir.join("senime").join("preset.json"),
             None => {
-                senime_warn!("[senime] cannot determine cache directory");
+                fcitx_log!(FCITX_LOG_WARN, "cannot determine cache directory");
                 return;
             }
         };
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
-                senime_warn!("[senime] failed to read {}: {}", path.display(), e);
+                fcitx_log!(FCITX_LOG_WARN, "failed to read {}: {}", path.display(), e);
                 return;
             }
         };
         let json: serde_json::Value = match serde_json::from_str(&content) {
             Ok(v) => v,
             Err(e) => {
-                senime_warn!("[senime] failed to parse preset JSON: {}", e);
+                fcitx_log!(FCITX_LOG_WARN, "failed to parse preset JSON: {}", e);
                 return;
             }
         };
         let codes = match json.get("codes").and_then(|v| v.as_array()) {
             Some(arr) => arr,
             None => {
-                senime_warn!("[senime] preset.json: missing or invalid 'codes' array");
+                fcitx_log!(
+                    FCITX_LOG_WARN,
+                    "preset.json: missing or invalid 'codes' array"
+                );
                 return;
             }
         };
@@ -687,7 +701,7 @@ impl SenimeState {
             items.push((text, code.chars().count()));
         }
         if items.is_empty() {
-            senime_warn!("[senime] preset.json: no valid entries found");
+            fcitx_log!(FCITX_LOG_WARN, "preset.json: no valid entries found");
             return;
         }
         items.reverse();
@@ -696,9 +710,6 @@ impl SenimeState {
 }
 
 // TODO: fcitx5是否有一种通知功能，可以更好地提示错误信息？
-thread_local! {
-    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
-}
 
 #[derive(Clone)]
 struct SenimeKeyBinding {
@@ -724,27 +735,14 @@ pub struct SenimeEngine {
     config: SenimeResolvedConfig,
 }
 
-fn set_last_error(err: impl ToString) {
-    let sanitized = err.to_string().replace('\0', " ");
-    LAST_ERROR.with(|last| {
-        *last.borrow_mut() = CString::new(sanitized).ok();
-    });
-}
-
-fn clear_last_error() {
-    LAST_ERROR.with(|last| {
-        *last.borrow_mut() = None;
-    });
-}
-
 fn cstr_to_str<'a>(value: *const c_char, name: &str) -> Option<&'a str> {
     if value.is_null() {
-        set_last_error(format!("{name} is null"));
+        fcitx_log!(FCITX_LOG_ERROR, "{name} is null");
         return None;
     }
     unsafe { CStr::from_ptr(value) }.to_str().map_or_else(
         |err| {
-            set_last_error(format!("{name} is not valid utf-8: {err}"));
+            fcitx_log!(FCITX_LOG_ERROR, "{name} is not valid utf-8: {err}");
             None
         },
         Some,
@@ -843,6 +841,7 @@ fn spawn_watcher(
     let main_path = paths[0].clone();
     for path in paths {
         watcher.watch(Path::new(&path), RecursiveMode::NonRecursive)?;
+        fcitx_log!(FCITX_LOG_INFO, "watching {path} for hot-reload");
     }
 
     // Debounce thread: drain events, wait, then rebuild.
@@ -862,10 +861,14 @@ fn spawn_watcher(
             // just rebuild unconditionally — it's fast enough.
             match load_input_analyzer(&main_path) {
                 Ok(new_inner) => {
+                    fcitx_log!(
+                        FCITX_LOG_INFO,
+                        "hot-reload succeeded: reloaded from {main_path}"
+                    );
                     inner.swap(Arc::new(new_inner));
                 }
                 Err(e) => {
-                    senime_warn!("[senime] hot-reload failed: {e}");
+                    fcitx_log!(FCITX_LOG_WARN, "hot-reload failed: {e}");
                 }
             }
         }
@@ -882,9 +885,8 @@ fn spawn_watcher(
 /// 如果 `table_path` 为空字符串，则尝试查找默认配置文件。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut SenimeEngine {
-    clear_last_error();
     if config.is_null() {
-        set_last_error("初始化引擎失败，传入的配置为空。");
+        fcitx_log!(FCITX_LOG_ERROR, "engine init failed: config is null");
         return ptr::null_mut();
     }
     let config = unsafe { &*config };
@@ -895,7 +897,7 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
             match get_default_table() {
                 Ok(p) => p,
                 Err(msg) => {
-                    set_last_error(msg);
+                    fcitx_log!(FCITX_LOG_ERROR, "failed to find table: {msg}");
                     return ptr::null_mut();
                 }
             }
@@ -918,7 +920,7 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
         // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
         let watcher = spawn_watcher(engine.clone(), watch_paths)
             .map_err(|e| {
-                senime_warn!("[senime] file watcher init failed: {e}");
+                fcitx_log!(FCITX_LOG_WARN, "file watcher init failed: {e}");
                 e
             })
             .ok();
@@ -932,7 +934,7 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
     match result {
         Ok(engine) => Box::into_raw(engine),
         Err(msg) => {
-            set_last_error(msg);
+            fcitx_log!(FCITX_LOG_ERROR, "engine creation failed: {msg}");
             ptr::null_mut()
         }
     }
@@ -948,21 +950,6 @@ pub unsafe extern "C" fn senime_engine_free(engine: *mut SenimeEngine) {
     if !engine.is_null() {
         unsafe { drop(Box::from_raw(engine)) };
     }
-}
-
-/// 获取最后一次操作的错误信息。
-///
-/// # Safety
-///
-/// 返回的指针在线程局部存储中有效，直到下一次调用 senime API。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn senime_last_error() -> *const c_char {
-    LAST_ERROR.with(|last| {
-        last.borrow()
-            .as_ref()
-            .map(|err| err.as_ptr())
-            .unwrap_or(ptr::null())
-    })
 }
 
 /// 释放由 senime API 返回的 C 字符串。
@@ -1001,9 +988,8 @@ fn keysym_to_char(sym: u32) -> Option<char> {
 /// `key_config` 可以为 null（使用默认值）。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn senime_state_new(engine: *const SenimeEngine) -> *mut SenimeState {
-    clear_last_error();
     if engine.is_null() {
-        set_last_error("engine is null");
+        fcitx_log!(FCITX_LOG_ERROR, "senime_state_new: engine is null");
         return ptr::null_mut();
     }
     let engine = unsafe { &*engine };
@@ -1098,17 +1084,16 @@ pub unsafe extern "C" fn senime_engine_key_event(
     state: *mut SenimeState,
     key: *const SenimeKeyEvent,
 ) -> *mut SenimeKeyEventResult {
-    clear_last_error();
     if engine.is_null() {
-        set_last_error("engine is null");
+        fcitx_log!(FCITX_LOG_ERROR, "senime_engine_key_event: engine is null");
         return ptr::null_mut();
     }
     if state.is_null() {
-        set_last_error("state is null");
+        fcitx_log!(FCITX_LOG_ERROR, "senime_engine_key_event: state is null");
         return ptr::null_mut();
     }
     if key.is_null() {
-        set_last_error("key is null");
+        fcitx_log!(FCITX_LOG_ERROR, "senime_engine_key_event: key is null");
         return ptr::null_mut();
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -1132,7 +1117,10 @@ pub unsafe extern "C" fn senime_engine_key_event(
     match result {
         Ok(result) => Box::into_raw(result),
         Err(_) => {
-            set_last_error("failed to process key");
+            fcitx_log!(
+                FCITX_LOG_ERROR,
+                "senime_engine_key_event: failed to process key"
+            );
             ptr::null_mut()
         }
     }
