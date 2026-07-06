@@ -4,6 +4,12 @@ version = "0.0.1"
 edition = "2024"
 include = ["src/**/*", "README.md"]
 
+[features]
+default = []
+# 启用文件变动监控与引擎热重载（senime-fcitx5、senime-lsp 使用）。
+# WASM、encode 等前端不需要，不启用以避免拉入 notify/arc-swap 依赖。
+watcher = ["dep:notify", "dep:arc-swap", "dep:log"]
+
 [dependencies]
 bincode = "2.0.1"
 serde = { version = "1.0.228", features = ["std", "derive"] }
@@ -11,3 +17,6 @@ toml = "0.9.10"
 ahash = "0.8.12"
 nucleo-matcher = "0.3.1"
 rayon = "1.11.0"
+notify = { version = "7", optional = true }
+arc-swap = { version = "1", optional = true }
+log = { version = "0.4.29", optional = true }

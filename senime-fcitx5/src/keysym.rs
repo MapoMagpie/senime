@@ -7529,4 +7529,3 @@ pub const FCITX_KEY_longminus: u32 = 0x100000f6;
 
 /// deprecated alias for hpblock
 pub const FCITX_KEY_block: u32 = 0x100000fc;
-

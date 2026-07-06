@@ -1,16 +1,13 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use clap::Parser;
 use dashmap::DashMap;
 use log::LevelFilter;
-use notify::{RecursiveMode, Watcher};
 use ropey::Rope;
 use senime_lib::input_analyzer::load_input_analyzer;
-use senime_lib::{AnalysisResult, InputAnalyzer, resolve_relative_path};
+use senime_lib::{AnalysisResult, InputAnalyzer, resolve_relative_path, spawn_watcher};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -443,49 +440,6 @@ pub struct Args {
     /// 如果未指定，则默认查找 $XDG_CONFIG_HOME/senime/config.toml。
     #[arg(short, long, verbatim_doc_comment)]
     pub table: Option<String>,
-}
-
-/// Spawn a background file watcher that rebuilds the engine on changes.
-fn spawn_watcher(
-    inner: Arc<ArcSwap<InputAnalyzer>>,
-    paths: Vec<String>,
-) -> notify::Result<notify::RecommendedWatcher> {
-    let (tx, rx) = mpsc::channel();
-
-    // Create the filesystem watcher — events go through the channel.
-    let mut watcher = notify::recommended_watcher(tx)?;
-    let main_path = paths[0].clone();
-    for path in paths {
-        watcher.watch(Path::new(&path), RecursiveMode::NonRecursive)?;
-    }
-
-    // Debounce thread: drain events, wait, then rebuild.
-    std::thread::spawn(move || {
-        while rx.recv().is_ok() {
-            // Drain any queued events (batch rapid-fire notifications).
-            while rx.try_recv().is_ok() {}
-
-            // Check if any event touches a file we care about.
-            // (We drain above without inspecting — just rebuild on any event
-            //  in the watched directories. The directories are chosen to be
-            //  the parent dirs of our target files, so this is precise enough.)
-            std::thread::sleep(Duration::from_millis(200));
-
-            // Re-read the filter: events may have been for unrelated files.
-            // Since we watch narrow directories (parents of our files),
-            // just rebuild unconditionally — it's fast enough.
-            match load_input_analyzer(&main_path) {
-                Ok(new_inner) => {
-                    inner.swap(Arc::new(new_inner));
-                }
-                Err(e) => {
-                    eprintln!("[senime] hot-reload failed: {e}");
-                }
-            }
-        }
-    });
-
-    Ok(watcher)
 }
 
 fn get_default_table() -> std::result::Result<String, std::io::Error> {

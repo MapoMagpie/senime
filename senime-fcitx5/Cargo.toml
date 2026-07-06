@@ -9,8 +9,8 @@ name = "senime_fcitx5"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-senime-lib = { path = "../senime-lib" }
+senime-lib = { path = "../senime-lib", features = ["watcher"] }
 arc-swap = "1"
 dirs = "6.0.0"
-notify = "7"
 serde_json = "1"
+log = "0.4.29"

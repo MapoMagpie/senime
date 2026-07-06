@@ -1,17 +1,15 @@
 use arc_swap::ArcSwap;
-use notify::{RecursiveMode, Watcher};
 use senime_lib::{
-    AnalysisResult, CandidateRich, InputAnalyzer, PAGE_DOWN, PAGE_UP,
+    AnalysisResult, CandidateRich, InputAnalyzer, PAGE_DOWN, PAGE_UP, SharedWatcher,
     input_analyzer::{Tag, load_input_analyzer},
-    resolve_relative_path,
+    resolve_relative_path, spawn_watcher,
 };
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     ptr,
-    sync::{Arc, mpsc},
-    time::Duration,
+    sync::Arc,
 };
 
 mod keysym;
@@ -26,22 +24,9 @@ type FcitxLogFn = unsafe extern "C" fn(i32, *const c_char);
 /// 全局 Fcitx5 日志回调，由 C++ 端在初始化时设置
 static FCITX_LOG: std::sync::OnceLock<FcitxLogFn> = std::sync::OnceLock::new();
 
-/// C++ 调用此函数设置日志回调。
-///
-/// # Safety
-///
-/// `callback` 必须是一个有效的、在插件生命周期内始终可用的函数指针。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn senime_set_log_callback(callback: FcitxLogFn) {
-    let _ = FCITX_LOG.set(callback);
-}
-
 /// 日志级别常量
-#[allow(unused)]
 const FCITX_LOG_INFO: i32 = 0;
-#[allow(unused)]
 const FCITX_LOG_WARN: i32 = 1;
-#[allow(unused)]
 const FCITX_LOG_ERROR: i32 = 2;
 
 /// 通过 fcitx5 日志系统输出日志。
@@ -58,6 +43,42 @@ macro_rules! fcitx_log {
             eprintln!($($arg)*);
         }
     }};
+}
+
+/// C++ 调用此函数设置日志回调。
+///
+/// 同时安装一个 `log::Log` 适配器，使 `senime_lib::watcher` 等使用 `log` facade
+/// 的代码也能通过 fcitx5 日志回调输出。
+///
+/// # Safety
+///
+/// `callback` 必须是一个有效的、在插件生命周期内始终可用的函数指针。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn senime_set_log_callback(callback: FcitxLogFn) {
+    let _ = FCITX_LOG.set(callback);
+    // 安装 log facade → fcitx 日志回调 的桥接，仅安装一次。
+    let _ = log::set_logger(&FcitxLogger);
+    log::set_max_level(log::LevelFilter::Info);
+}
+
+/// 将 `log` facade 调用桥接到 fcitx5 日志回调。
+struct FcitxLogger;
+
+impl log::Log for FcitxLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        let level = match record.level() {
+            log::Level::Error => FCITX_LOG_ERROR,
+            log::Level::Warn => FCITX_LOG_WARN,
+            _ => FCITX_LOG_INFO,
+        };
+        fcitx_log!(level, "{}", record.args());
+    }
+
+    fn flush(&self) {}
 }
 
 // Fcitx5 modifier masks (from KeyState enum)
@@ -731,7 +752,7 @@ impl From<(u32, u32)> for SenimeKeyBinding {
 
 pub struct SenimeEngine {
     inner: Arc<ArcSwap<InputAnalyzer>>,
-    _watcher: Option<notify::RecommendedWatcher>,
+    _watcher: Option<SharedWatcher>,
     config: SenimeResolvedConfig,
 }
 
@@ -827,54 +848,6 @@ fn get_default_table() -> Result<String, String> {
                 .to_string()
             })
     }
-}
-
-/// Spawn a background file watcher that rebuilds the engine on changes.
-fn spawn_watcher(
-    inner: Arc<ArcSwap<InputAnalyzer>>,
-    paths: Vec<String>,
-) -> notify::Result<notify::RecommendedWatcher> {
-    let (tx, rx) = mpsc::channel();
-
-    // Create the filesystem watcher — events go through the channel.
-    let mut watcher = notify::recommended_watcher(tx)?;
-    let main_path = paths[0].clone();
-    for path in paths {
-        watcher.watch(Path::new(&path), RecursiveMode::NonRecursive)?;
-        fcitx_log!(FCITX_LOG_INFO, "watching {path} for hot-reload");
-    }
-
-    // Debounce thread: drain events, wait, then rebuild.
-    std::thread::spawn(move || {
-        while rx.recv().is_ok() {
-            // Drain any queued events (batch rapid-fire notifications).
-            while rx.try_recv().is_ok() {}
-
-            // Check if any event touches a file we care about.
-            // (We drain above without inspecting — just rebuild on any event
-            //  in the watched directories. The directories are chosen to be
-            //  the parent dirs of our target files, so this is precise enough.)
-            std::thread::sleep(Duration::from_millis(200));
-
-            // Re-read the filter: events may have been for unrelated files.
-            // Since we watch narrow directories (parents of our files),
-            // just rebuild unconditionally — it's fast enough.
-            match load_input_analyzer(&main_path) {
-                Ok(new_inner) => {
-                    fcitx_log!(
-                        FCITX_LOG_INFO,
-                        "hot-reload succeeded: reloaded from {main_path}"
-                    );
-                    inner.swap(Arc::new(new_inner));
-                }
-                Err(e) => {
-                    fcitx_log!(FCITX_LOG_WARN, "hot-reload failed: {e}");
-                }
-            }
-        }
-    });
-
-    Ok(watcher)
 }
 
 /// 创建一个新的输入法引擎实例。

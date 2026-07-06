@@ -1798,6 +1798,8 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "senime-lib",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1806,8 +1808,9 @@ version = "0.0.1"
 dependencies = [
  "arc-swap",
  "dirs",
- "notify",
+ "log",
  "senime-lib",
+ "serde_json",
 ]
 
 [[package]]
@@ -1815,7 +1818,10 @@ name = "senime-lib"
 version = "0.0.1"
 dependencies = [
  "ahash",
+ "arc-swap",
  "bincode",
+ "log",
+ "notify",
  "nucleo-matcher",
  "rayon",
  "serde",
@@ -1831,7 +1837,6 @@ dependencies = [
  "dashmap 6.1.0",
  "dirs",
  "log",
- "notify",
  "ropey",
  "senime-lib",
  "serde",
