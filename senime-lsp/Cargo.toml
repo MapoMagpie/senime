@@ -3,11 +3,11 @@ name = "senime-lsp"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-default-run = "senilsp"
+default-run = "senils"
 include = ["src/**/*", "README.md"]
 
 [[bin]]
-name = "senilsp"
+name = "senils"
 path = "src/main.rs"
 
 [dependencies]

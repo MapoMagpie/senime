@@ -62,7 +62,7 @@
             doCheck = false;
           };
 
-          senilsp = pkgs.rustPlatform.buildRustPackage {
+          senils = pkgs.rustPlatform.buildRustPackage {
             pname = "senime";
             version = "0.0.1";
             src = ./.;
