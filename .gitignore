@@ -6,3 +6,6 @@ senime-fcitx5/build
 .cache
 compile_commands.json
 result
+.github
+fcitx5.sh
+CLAUDE.md
