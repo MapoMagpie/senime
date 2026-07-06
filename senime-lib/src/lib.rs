@@ -14,7 +14,7 @@ pub use util::resolve_relative_path;
 #[cfg(feature = "watcher")]
 pub mod watcher;
 #[cfg(feature = "watcher")]
-pub use watcher::{RecommendedWatcher, SharedWatcher, spawn_watcher};
+pub use watcher::{RecommendedWatcher, spawn_watcher};
 
 #[cfg(test)]
 pub mod test_utils;

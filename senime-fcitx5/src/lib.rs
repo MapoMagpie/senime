@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use senime_lib::{
-    AnalysisResult, CandidateRich, InputAnalyzer, PAGE_DOWN, PAGE_UP, SharedWatcher,
+    AnalysisResult, CandidateRich, InputAnalyzer, PAGE_DOWN, PAGE_UP, RecommendedWatcher,
     input_analyzer::{Tag, load_input_analyzer},
     resolve_relative_path, spawn_watcher,
 };
@@ -752,7 +752,7 @@ impl From<(u32, u32)> for SenimeKeyBinding {
 
 pub struct SenimeEngine {
     inner: Arc<ArcSwap<InputAnalyzer>>,
-    _watcher: Option<SharedWatcher>,
+    _watcher: Option<RecommendedWatcher>,
     config: SenimeResolvedConfig,
 }
 
