@@ -27,8 +27,11 @@ struct Config {
     trigger_characters: String,
     // 行首注释，如 [//, --, #]
     comment_prefixes: Vec<String>,
-    // 忽略INVOKED, CompletionTriggerKind::INVOKED 会在双引号""时触发，即使该行不是注释
-    ignore_invoked: bool,
+    // 编码模式：为 true 时仅在特定上下文（汉字后、特殊前缀后、注释行）触发补全；
+    // 为 false 时只要满足基础条件即触发补全。
+    coding_mode: bool,
+    // 特殊识别前缀，光标前出现该前缀 + ASCII 编码字符时触发补全。
+    special_prefix: String,
 }
 
 impl Default for Config {
@@ -37,7 +40,8 @@ impl Default for Config {
             trigger_characters: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,."
                 .to_string(),
             comment_prefixes: vec![],
-            ignore_invoked: false,
+            coding_mode: true,
+            special_prefix: "@@".to_string(),
         }
     }
 }
@@ -102,14 +106,18 @@ impl LanguageServer for Backend {
         });
     }
 
-    // 为了避免影响正常编码，需要让中文补全只在注释或字符串中生效
-    // 最好的办法是使用tree-sitter等语法解析器来判断光标位置的上下文，这能精确识别当前是在注释中还是在字符串中，不过暂时不采用
-    // 目前只简单的支持单行注释，当前行的前缀与config.comment_prefixes中的元素匹配的话，则在此行启用补全
-    // 如果config.comment_prefixes为空（即默认）则启用补全
+    // 补全触发条件（满足"基础条件"后，若 coding_mode 为 true 还需命中以下任一）:
+    //   1. 编码段前紧邻汉字或全角标点（非 ASCII 字符）→ 段从该字符之后开始
+    //   2. 编码段前紧邻特殊识别前缀（默认 "@@"）→ 分析从前缀之后开始，但 text_edit 覆盖前缀
+    //   3. 当前行是注释行（行首匹配 comment_prefixes 之一）→ 段从基础条件范围开始
+    // 若 coding_mode 为 false，则仅需满足"基础条件"即触发补全。
+    //
+    // 基础条件: 从光标向前回溯，收集连续的 ASCII 非控制字符作为编码段；
+    //           遇到连续两个空格或非 ASCII 字符即停止。
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         log::info!("completion start");
-        let st = self.state.read().await;
-        if !st.completion {
+        // 全局开关
+        if !self.state.read().await.completion {
             return Ok(None);
         }
         let uri = params.text_document_position.text_document.uri;
@@ -121,105 +129,64 @@ impl LanguageServer for Backend {
 
         let line_chars: Vec<char> = rope.line(position.line as usize).chars().collect();
         let config = self.config.read().await;
-        let is_invoked = if config.ignore_invoked {
-            false
-        } else {
-            params
-                .context
-                .as_ref()
-                .is_some_and(|ctx| ctx.trigger_kind == CompletionTriggerKind::INVOKED)
-        };
-        let mut start_at = 0;
-        // 如果触发类型是自动的（非手动），则继续判断行首是否有注释前缀
-        // log::info!("completion is invoked: {}", is_invoked,);
-        if !is_invoked && !config.comment_prefixes.is_empty() {
-            let prefix_start = line_chars
-                .iter()
-                .position(|c| !c.is_ascii_whitespace())
-                .unwrap_or(0);
-            let matched = config.comment_prefixes.iter().find_map(|prefix| {
-                prefix
-                    .chars()
-                    .zip(line_chars[prefix_start..].iter())
-                    .all(|(a, b)| a == *b)
-                    .then_some(prefix.chars().count())
-            });
-            match matched {
-                Some(len) => {
-                    start_at = prefix_start + len + 1;
-                }
-                None => {
-                    log::info!("comment prefix not matched, disable completion");
-                    return Ok(None);
-                }
-            }
-        }
         let end = position.character as usize;
-        let mut reduce_first_whitespace = false;
-        let mut start = end;
-        for i in (0..end).rev() {
-            let char = line_chars[i];
-            // log::info!("completion char {}", char);
-            if start >= start_at && char.is_ascii() && !char.is_control() {
-                // 连续空格
-                if i > 0 && char.is_ascii_whitespace() && line_chars[i - 1].is_ascii_whitespace() {
-                    break;
-                }
-                start = i;
-            } else {
-                // 检查当前`char`是否是`cjk`
-                reduce_first_whitespace = line_chars[start].is_whitespace()
-                    && !char.is_ascii_alphanumeric()
-                    && char.is_alphanumeric();
-                // log::info!(
-                //     "completion char, start: {}:{}, cjk_before_start: {}",
-                //     start,
-                //     char,
-                //     reduce_first_whitespace
-                // );
-                break;
-            }
-        }
+
+        // 注释行匹配：确定回溯下界 start_at（仅注释前缀之后的内容可参与编码段）
+        let comment_boundary = match_comment_prefix(&line_chars, &config.comment_prefixes);
+        let start_at = comment_boundary.unwrap_or(0);
+
+        // 基础条件: 回溯定位编码词边界
+        let Boundary {
+            start,
+            reduce_ws,
+            cjk_before,
+        } = locate_code_boundary(&line_chars, end, start_at);
         if start >= end {
             log::info!("completion empty");
             return Ok(None);
-            // } else {
-            //     log::info!("completion chars: {:?}", &line_chars[start..end]);
         }
-        let mut filter_text_start = start;
-        for i in (0..start).rev() {
-            let char = line_chars[i];
-            if char.is_alphabetic() {
-                filter_text_start = i;
-            } else {
-                break;
+
+        let mut edit_start = start;
+        let mut analysis_start = if reduce_ws { start + 1 } else { start };
+
+        // coding_mode 为 true 时，必须命中某一触发条件
+        if config.coding_mode {
+            let mut triggered = false;
+            // 条件2: 特殊识别前缀（覆盖 analysis 范围，text_edit 会连同前缀一起替换）
+            if let Some(idx) = find_special_prefix(&line_chars, end, &config.special_prefix) {
+                let plen = config.special_prefix.chars().count();
+                edit_start = idx;
+                analysis_start = idx + plen;
+                triggered = true;
+            } else if cjk_before {
+                // 条件1: 编码段前紧邻汉字/全角标点
+                triggered = true;
+            } else if comment_boundary.is_some() {
+                // 条件3: 注释行
+                triggered = true;
+            }
+            if !triggered {
+                log::info!("completion not triggered (coding_mode)");
+                return Ok(None);
             }
         }
-        let analysis_chars = if reduce_first_whitespace {
-            &line_chars[start + 1..end]
-        } else {
-            &line_chars[start..end]
-        };
+
+        let analysis_chars = &line_chars[analysis_start..end];
         let AnalysisResult {
             segments,
             pending: _,
             candidates,
         } = self.engine.load().analyze(analysis_chars);
         let sentence: String = segments.into_iter().map(|seg| seg.0).collect();
-        // 编辑器在收到补全后，全根据fiter_text进行过滤，比如helix会用[向前到后一个字..当前光标]这个范围的字符去搜索，如果搜索的分数太低就会丢弃
-        // 所谓的字，就是英文字母、汉字、等其他非标点符号的字
-        // 设置fiter_text最简单的方式是从当前行的首位开始也就是0，到当前光标的位置
-        // 不过如果一行太长的话，可能有性能问题，更好的方式是从start开始，再向前找到字的位置。
-        let filter_text: String = line_chars[filter_text_start..end].iter().collect();
-        // log::info!(
-        //     "completion word: [{}-{}], filter_text: {}",
-        //     start,
-        //     end,
-        //     filter_text
-        // );
+        // filter_text: 编辑器据此过滤补全项（如 helix 用光标前文本做模糊匹配评分）。
+        // 从 edit_start 向前收集连续字母字符，兼顾编辑器匹配与性能。
+        let filter_text: String = line_chars[locate_filter_start(&line_chars, edit_start)..end]
+            .iter()
+            .collect();
         if sentence.trim().is_empty() {
             return Ok(None);
         }
+
         let sentence_item = CompletionItem {
             label: sentence.clone(),
             preselect: Some(true),
@@ -227,26 +194,13 @@ impl LanguageServer for Backend {
             filter_text: Some(filter_text.clone()),
             sort_text: Some("0".to_string()),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                Range {
-                    start: Position {
-                        line: position.line,
-                        character: start as u32,
-                    },
-                    end: Position {
-                        line: position.line,
-                        character: end as u32,
-                    },
-                },
+                make_range(position.line, edit_start, end),
                 sentence.clone(),
             ))),
-            // command: todo!(),
-            // commit_characters: todo!(),
             ..Default::default()
         };
-        let cand_items: Vec<CompletionItem> = if let Some(cands) = candidates
-            && !cands.is_empty()
-        {
-            cands
+        let cand_items: Vec<CompletionItem> = match candidates {
+            Some(cands) if !cands.is_empty() => cands
                 .into_iter()
                 .enumerate()
                 .map(|(i, c)| CompletionItem {
@@ -256,30 +210,19 @@ impl LanguageServer for Backend {
                     filter_text: Some(filter_text.clone()),
                     sort_text: Some((i + 1).to_string()),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                        Range {
-                            start: Position {
-                                line: position.line,
-                                character: start as u32,
-                            },
-                            end: Position {
-                                line: position.line,
-                                character: end as u32,
-                            },
-                        },
+                        make_range(position.line, edit_start, end),
                         c.text,
                     ))),
                     ..Default::default()
                 })
-                .collect()
-        } else {
-            vec![]
+                .collect(),
+            _ => vec![],
         };
         log::info!(
-            "completion result: {}, candidates: {}, analyzer_chars: [{}], reduce first whitespace: {}",
+            "completion result: {}, candidates: {}, analyzer_chars: [{}]",
             sentence,
             cand_items.len(),
             analysis_chars.iter().collect::<String>(),
-            reduce_first_whitespace,
         );
         Ok(Some(CompletionResponse::List(CompletionList {
             is_incomplete: true,
@@ -382,6 +325,113 @@ pub fn char_index(rope: &Rope, pos: Position) -> Option<usize> {
     })
 }
 
+/// 回溯定位编码词边界的结果。
+struct Boundary {
+    start: usize,
+    /// 是否去掉 `start` 处的空格（编码段前为汉字且仅隔一个空格时）
+    reduce_ws: bool,
+    /// 编码段前是否紧邻非 ASCII 字符（汉字、全角标点等）
+    cjk_before: bool,
+}
+
+/// 基础条件：从 `end` 向前回溯，收集连续的 ASCII 非控制字符作为编码段。
+/// 遇到连续两个空格或非 ASCII 字符即停止。`start_at` 为回溯下界（注释前缀之后）。
+fn locate_code_boundary(line_chars: &[char], end: usize, start_at: usize) -> Boundary {
+    let mut start = end;
+    let mut reduce_ws = false;
+    let mut cjk_before = false;
+    for i in (0..end).rev() {
+        let c = line_chars[i];
+        if start >= start_at && c.is_ascii() && !c.is_control() {
+            // 连续两个空格作为分隔
+            if i > 0 && c.is_ascii_whitespace() && line_chars[i - 1].is_ascii_whitespace() {
+                break;
+            }
+            start = i;
+        } else {
+            // 非编码字符：判断其前是否为汉字/全角标点等（非 ASCII）
+            cjk_before = !c.is_ascii();
+            reduce_ws = line_chars[start].is_whitespace()
+                && !c.is_ascii_alphanumeric()
+                && c.is_alphanumeric();
+            break;
+        }
+    }
+    Boundary {
+        start,
+        reduce_ws,
+        cjk_before,
+    }
+}
+
+/// 匹配行首注释前缀，返回注释前缀之后的首个字符索引（回溯下界）。
+/// 未配置注释前缀或当前行不匹配时返回 `None`。
+fn match_comment_prefix(line_chars: &[char], comment_prefixes: &[String]) -> Option<usize> {
+    if comment_prefixes.is_empty() {
+        return None;
+    }
+    let prefix_start = line_chars
+        .iter()
+        .position(|c| !c.is_ascii_whitespace())
+        .unwrap_or(0);
+    comment_prefixes.iter().find_map(|prefix| {
+        let pre: Vec<char> = prefix.chars().collect();
+        line_chars[prefix_start..]
+            .starts_with(pre.as_slice())
+            .then_some(prefix_start + pre.len() + 1)
+    })
+}
+
+/// 在光标前的文本中查找特殊识别前缀（如 "@@"），要求前缀到光标之间为有效编码段
+/// （ASCII 非控制字符、非空、无连续两个空格）。返回最近一次前缀出现的起始索引。
+fn find_special_prefix(line_chars: &[char], end: usize, prefix: &str) -> Option<usize> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let pre: Vec<char> = prefix.chars().collect();
+    let plen = pre.len();
+    if end < plen {
+        return None;
+    }
+    (0..=end - plen).rev().find(|&idx| {
+        if line_chars[idx..idx + plen] != pre[..] {
+            return false;
+        }
+        let seg = &line_chars[idx + plen..end];
+        !seg.is_empty()
+            && seg.iter().all(|c| c.is_ascii() && !c.is_control())
+            && !seg
+                .windows(2)
+                .any(|w| w[0].is_ascii_whitespace() && w[1].is_ascii_whitespace())
+    })
+}
+
+/// 从 `start` 向前收集连续字母字符，作为 filter_text 的起点。
+fn locate_filter_start(line_chars: &[char], start: usize) -> usize {
+    let mut filter_text_start = start;
+    for i in (0..start).rev() {
+        if line_chars[i].is_alphabetic() {
+            filter_text_start = i;
+        } else {
+            break;
+        }
+    }
+    filter_text_start
+}
+
+fn make_range(line: u32, start: usize, end: usize) -> Range {
+    Range {
+        start: Position {
+            line,
+            character: start as u32,
+        },
+        end: Position {
+            line,
+            character: end as u32,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +477,82 @@ mod tests {
         let prefix = "..";
         let line: Vec<char> = "..asdald".chars().collect();
         assert!(prefix.chars().zip(line.iter()).all(|(a, b)| a == *b));
+    }
+
+    #[test]
+    fn test_locate_code_boundary_plain() {
+        // 编码段为 "abc"
+        let line: Vec<char> = "abc".chars().collect();
+        let b = locate_code_boundary(&line, 3, 0);
+        assert_eq!(b.start, 0);
+        assert!(!b.reduce_ws);
+        assert!(!b.cjk_before);
+    }
+
+    #[test]
+    fn test_locate_code_boundary_after_cjk() {
+        // "你好 abc" -> end=6, 编码段 " abc"，前面是汉字
+        let line: Vec<char> = "你好 abc".chars().collect();
+        let b = locate_code_boundary(&line, 6, 0);
+        assert_eq!(b.start, 2);
+        assert!(b.reduce_ws);
+        assert!(b.cjk_before);
+    }
+
+    #[test]
+    fn test_locate_code_boundary_double_space() {
+        // "a  bc" -> 连续两空格截断，编码段仅 "bc"
+        let line: Vec<char> = "a  bc".chars().collect();
+        let b = locate_code_boundary(&line, 5, 0);
+        assert_eq!(b.start, 3);
+    }
+
+    #[test]
+    fn test_match_comment_prefix_hit() {
+        let line: Vec<char> = "// hello".chars().collect();
+        assert_eq!(match_comment_prefix(&line, &["//".to_string()]), Some(3));
+    }
+
+    #[test]
+    fn test_match_comment_prefix_miss() {
+        let line: Vec<char> = "let x = 1;".chars().collect();
+        assert_eq!(
+            match_comment_prefix(&line, &["//".to_string(), "--".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn test_match_comment_prefix_empty_config() {
+        let line: Vec<char> = "anything".chars().collect();
+        assert_eq!(match_comment_prefix(&line, &[]), None);
+    }
+
+    #[test]
+    fn test_find_special_prefix_basic() {
+        // "@@abc" -> 找到 @@ 于 idx 0
+        let line: Vec<char> = "@@abc".chars().collect();
+        assert_eq!(find_special_prefix(&line, 5, "@@"), Some(0));
+    }
+
+    #[test]
+    fn test_find_special_prefix_none() {
+        let line: Vec<char> = "abc".chars().collect();
+        assert_eq!(find_special_prefix(&line, 3, "@@"), None);
+    }
+
+    #[test]
+    fn test_find_special_prefix_double_space_in_seg() {
+        // "@@a  b" -> 前缀之后有连续两空格，不合格
+        let line: Vec<char> = "@@a  b".chars().collect();
+        assert_eq!(find_special_prefix(&line, 6, "@@"), None);
+    }
+
+    #[test]
+    fn test_find_special_prefix_after_cjk() {
+        // "你@@abc" -> idx 1
+        let line: Vec<char> = "你@@abc".chars().collect();
+        assert_eq!(find_special_prefix(&line, 6, "@@"), Some(1));
     }
 }
 
