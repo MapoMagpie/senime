@@ -1,4 +1,3 @@
-use arc_swap::ArcSwap;
 use senime_lib::{
     AnalysisResult, CandidateRich, InputAnalyzer, PAGE_DOWN, PAGE_UP, RecommendedWatcher,
     input_analyzer::{Tag, load_input_analyzer},
@@ -9,7 +8,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     ptr,
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 mod keysym;
@@ -240,7 +239,7 @@ pub struct SenimeKeyEventResult {
 // ── Rust-side state ──────────────────────────────────────────────────────
 
 pub struct SenimeState {
-    engine: Arc<ArcSwap<InputAnalyzer>>,
+    engine: Arc<RwLock<InputAnalyzer>>,
     input: Vec<char>,
     chinese_mode: bool,
     last_unrelease_key: u32,
@@ -253,7 +252,7 @@ pub struct SenimeState {
 }
 
 impl SenimeState {
-    fn new(engine: Arc<ArcSwap<InputAnalyzer>>, config: SenimeResolvedConfig) -> Self {
+    fn new(engine: Arc<RwLock<InputAnalyzer>>, config: SenimeResolvedConfig) -> Self {
         let chinese_mode = config.default_chinese_mode;
         Self {
             engine,
@@ -501,8 +500,8 @@ impl SenimeState {
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
             return;
         }
-        // 先 load() 获取 guard，分析后 drop guard，再调用 &self 方法
-        let result = { self.engine.load().analyze(&chars) };
+        // 先 read() 获取引用，分析后 drop guard，再调用 &self 方法
+        let result = { self.engine.read().unwrap().analyze(&chars) };
         if result.segments.is_empty() {
             self.input.clear();
             self.segments.clear();
@@ -751,7 +750,7 @@ impl From<(u32, u32)> for SenimeKeyBinding {
 }
 
 pub struct SenimeEngine {
-    inner: Arc<ArcSwap<InputAnalyzer>>,
+    inner: Arc<RwLock<InputAnalyzer>>,
     _watcher: Option<RecommendedWatcher>,
     config: SenimeResolvedConfig,
 }
@@ -888,15 +887,21 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
             ));
         }
         watch_paths.dedup();
-        let engine = Arc::new(ArcSwap::from_pointee(engine));
+        let engine = Arc::new(RwLock::new(engine));
 
         // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
-        let watcher = spawn_watcher(engine.clone(), watch_paths)
-            .map_err(|e| {
-                fcitx_log!(FCITX_LOG_WARN, "file watcher init failed: {e}");
-                e
-            })
-            .ok();
+        let watcher_engine = engine.clone();
+        let watcher = spawn_watcher(
+            move |new_ia| {
+                *watcher_engine.write().unwrap() = new_ia;
+            },
+            watch_paths,
+        )
+        .map_err(|e| {
+            fcitx_log!(FCITX_LOG_WARN, "file watcher init failed: {e}");
+            e
+        })
+        .ok();
 
         Ok(Box::new(SenimeEngine {
             inner: engine,

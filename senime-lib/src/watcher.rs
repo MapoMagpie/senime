@@ -1,36 +1,40 @@
 //! 文件变动监控与引擎热重载。
 //!
-//! 监听码表/配置文件变动，防抖后重建 `InputAnalyzer` 并通过 `ArcSwap`
-//! 原子替换。仅响应被监听文件的实质性变更（创建/修改/删除），忽略
+//! 监听码表/配置文件变动，防抖后重建 `InputAnalyzer` 并通过回调通知前端。
+//! 仅响应被监听文件的实质性变更（创建/修改/删除），忽略
 //! `Access`（打开/关闭/读取）事件，避免重建时读取码表触发 `IN_OPEN` 形成无限循环。
 //!
 //! 监听方式为 watch 文件所在**父目录**而非文件本身：编辑器（如 helix、vim）
 //! 保存时常以"写入临时文件后 rename 覆盖原文件"的原子方式替换，这会使原文件
 //! inode 的 watch 失效；而目录 inode 不会被替换，watch 始终有效，新文件的
 //! `CREATE`/`MODIFY` 事件都会被目录 watch 捕获，再经路径过滤命中目标文件。
+//!
+//! 不使用 `ArcSwap`：其 hybrid debt 机制会在并发读取时通过引用计数保留旧值，
+//! 对于大码表（60MB+）会导致热重载后 RSS 翻倍。改用回调模式，由前端自行决定
+//! 同步策略（如 `RwLock`），旧值在替换时立即 drop。
 
 use crate::input_analyzer::load_input_analyzer;
 use crate::InputAnalyzer;
-use arc_swap::ArcSwap;
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::Duration;
 
 /// 重导出 `notify` 的推荐 watcher 类型，使前端无需直接依赖 `notify`。
 pub type RecommendedWatcher = notify::RecommendedWatcher;
 
-/// 创建一个后台文件监控器，在码表/配置文件变动时重建引擎并原子替换。
+/// 创建一个后台文件监控器，在码表/配置文件变动时重建引擎并通过回调通知。
 ///
 /// 返回的 `RecommendedWatcher` 必须由调用方持有以保持监控存活。
 ///
 /// # 参数
-/// - `inner`: 共享的 `ArcSwap<InputAnalyzer>`，变动后原子替换其中的引擎。
+/// - `on_reload`: 热重载回调，接收新构建的 `InputAnalyzer`。前端在此回调中替换
+///   旧引擎实例（例如 `*engine.write().unwrap() = new_ia`）。
 /// - `paths`: 被监听的文件路径列表（`paths[0]` 为重建时使用的主路径）。
 pub fn spawn_watcher(
-    inner: Arc<ArcSwap<InputAnalyzer>>,
+    on_reload: impl Fn(InputAnalyzer) + Send + 'static,
     paths: Vec<String>,
 ) -> notify::Result<RecommendedWatcher> {
     let (tx, rx) = mpsc::channel();
@@ -89,7 +93,7 @@ pub fn spawn_watcher(
             match load_input_analyzer(&main_path) {
                 Ok(new_inner) => {
                     info!("hot-reload succeeded: reloaded from {main_path}");
-                    inner.swap(Arc::new(new_inner));
+                    on_reload(new_inner);
                 }
                 Err(e) => {
                     warn!("hot-reload failed: {e}");

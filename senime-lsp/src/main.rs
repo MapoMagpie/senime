@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 use clap::Parser;
 use dashmap::DashMap;
 use log::LevelFilter;
@@ -49,7 +48,7 @@ impl Default for Config {
 #[derive(Debug)]
 struct Backend {
     // client: Client,
-    engine: Arc<ArcSwap<InputAnalyzer>>,
+    engine: Arc<RwLock<InputAnalyzer>>,
     doc_map: DashMap<String, Rope>,
     state: RwLock<State>,
     config: RwLock<Config>,
@@ -176,7 +175,7 @@ impl LanguageServer for Backend {
             segments,
             pending: _,
             candidates,
-        } = self.engine.load().analyze(analysis_chars);
+        } = self.engine.read().await.analyze(analysis_chars);
         let sentence: String = segments.into_iter().map(|seg| seg.0).collect();
         // filter_text: 编辑器据此过滤补全项（如 helix 用光标前文本做模糊匹配评分）。
         // 从 edit_start 向前收集连续字母字符，兼顾编辑器匹配与性能。
@@ -607,12 +606,18 @@ async fn main() {
         ));
     }
     watch_paths.dedup();
-    let engine = Arc::new(ArcSwap::from_pointee(engine));
+    let engine = Arc::new(RwLock::new(engine));
 
     // Spawn file watcher — failure is non-fatal.
-    let _watcher = spawn_watcher(engine.clone(), watch_paths)
-        .map_err(|e| log::warn!("[senime] file watcher init failed: {e}"))
-        .ok();
+    let watcher_engine = engine.clone();
+    let _watcher = spawn_watcher(
+        move |new_ia| {
+            *watcher_engine.blocking_write() = new_ia;
+        },
+        watch_paths,
+    )
+    .map_err(|e| log::warn!("[senime] file watcher init failed: {e}"))
+    .ok();
 
     let doc_map = DashMap::default();
     let state = RwLock::new(State { completion: true });
