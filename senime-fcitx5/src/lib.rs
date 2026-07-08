@@ -889,11 +889,24 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
         watch_paths.dedup();
         let engine = Arc::new(RwLock::new(engine));
 
-        // Spawn file watcher — failure is non-fatal (engine works without hot-reload).
         let watcher_engine = engine.clone();
+        let main_path = table_path.clone();
         let watcher = spawn_watcher(
-            move |new_ia| {
-                *watcher_engine.write().unwrap() = new_ia;
+            move || {
+                // 加载新引擎
+                match load_input_analyzer(&main_path) {
+                    Ok(new_ia) => {
+                        match watcher_engine.write() {
+                            Ok(mut guard) => {
+                                let old = std::mem::replace(&mut *guard, new_ia);
+                                drop(old);
+                                fcitx_log!(FCITX_LOG_INFO, "hot-reload succeeded")
+                            }
+                            Err(e) => fcitx_log!(FCITX_LOG_ERROR, "hot-reload lock poisoned: {e}"),
+                        };
+                    }
+                    Err(e) => fcitx_log!(FCITX_LOG_ERROR, "hot-reload failed: {e}"),
+                }
             },
             watch_paths,
         )

@@ -48,7 +48,7 @@ impl Default for Config {
 #[derive(Debug)]
 struct Backend {
     // client: Client,
-    engine: Arc<RwLock<InputAnalyzer>>,
+    engine: Arc<std::sync::RwLock<InputAnalyzer>>,
     doc_map: DashMap<String, Rope>,
     state: RwLock<State>,
     config: RwLock<Config>,
@@ -175,7 +175,7 @@ impl LanguageServer for Backend {
             segments,
             pending: _,
             candidates,
-        } = self.engine.read().await.analyze(analysis_chars);
+        } = { self.engine.read().unwrap().analyze(analysis_chars) };
         let sentence: String = segments.into_iter().map(|seg| seg.0).collect();
         // filter_text: 编辑器据此过滤补全项（如 helix 用光标前文本做模糊匹配评分）。
         // 从 edit_start 向前收集连续字母字符，兼顾编辑器匹配与性能。
@@ -606,13 +606,27 @@ async fn main() {
         ));
     }
     watch_paths.dedup();
-    let engine = Arc::new(RwLock::new(engine));
+    let engine = Arc::new(std::sync::RwLock::new(engine));
 
     // Spawn file watcher — failure is non-fatal.
     let watcher_engine = engine.clone();
+    let main_path = table_path.clone();
     let _watcher = spawn_watcher(
-        move |new_ia| {
-            *watcher_engine.blocking_write() = new_ia;
+        move || {
+            // 加载新引擎
+            match load_input_analyzer(&main_path) {
+                Ok(new_ia) => {
+                    match watcher_engine.write() {
+                        Ok(mut guard) => {
+                            let old = std::mem::replace(&mut *guard, new_ia);
+                            drop(old);
+                            log::info!("[senime] hot-reload succeeded")
+                        }
+                        Err(e) => log::info!("[senime] hot-reload lock poisoned: {e}"),
+                    };
+                }
+                Err(e) => log::warn!("[senime] hot-reload failed: {e}"),
+            }
         },
         watch_paths,
     )
