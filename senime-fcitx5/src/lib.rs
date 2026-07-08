@@ -893,13 +893,25 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
         let main_path = table_path.clone();
         let watcher = spawn_watcher(
             move || {
-                // 加载新引擎
+                // 1. 先从锁中取出旧引擎，用 Default 占位，释放内存
+                let old = {
+                    match watcher_engine.write() {
+                        Ok(mut guard) => {
+                            std::mem::take(&mut *guard)
+                        }
+                        Err(e) => {
+                            fcitx_log!(FCITX_LOG_ERROR, "hot-reload lock poisoned: {e}");
+                            return;
+                        }
+                    }
+                };
+                drop(old);
+                // 2. 加载新引擎（旧引擎已释放，内存峰值可控）
                 match load_input_analyzer(&main_path) {
                     Ok(new_ia) => {
                         match watcher_engine.write() {
                             Ok(mut guard) => {
-                                let old = std::mem::replace(&mut *guard, new_ia);
-                                drop(old);
+                                *guard = new_ia;
                                 fcitx_log!(FCITX_LOG_INFO, "hot-reload succeeded")
                             }
                             Err(e) => fcitx_log!(FCITX_LOG_ERROR, "hot-reload lock poisoned: {e}"),

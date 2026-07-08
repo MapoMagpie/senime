@@ -187,6 +187,20 @@ pub struct InputAnalyzer {
     page_count: usize,
 }
 
+impl Default for InputAnalyzer {
+    fn default() -> Self {
+        Self {
+            dicts: vec![(DictMeta::default(), Dict::default())],
+            main_dict_code_map: AHashMap::new(),
+            escape_pair: None,
+            trim_escape_pair: false,
+            selection_keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'],
+            punctuations: HashMap::new(),
+            page_count: 1,
+        }
+    }
+}
+
 impl InputAnalyzer {
     /// 创建 InputAnalyzer。
     ///

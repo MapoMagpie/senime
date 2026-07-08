@@ -339,6 +339,20 @@ impl FromStr for Dict {
     }
 }
 
+impl Default for Dict {
+    fn default() -> Self {
+        Self {
+            arena: StringArena::new(),
+            prism: Prism {
+                keys: vec![],
+                key_meta: vec![],
+                indices: vec![],
+            },
+            candidates: vec![],
+        }
+    }
+}
+
 impl Dict {
     /// 从文件路径加载纯码表（.txt 或 .bin），不处理 .toml 配置。
     /// 如需加载含配置的完整引擎，请使用 `InputAnalyzer::load_analyzer`。

@@ -613,16 +613,28 @@ async fn main() {
     let main_path = table_path.clone();
     let _watcher = spawn_watcher(
         move || {
-            // 加载新引擎
+            // 1. 先从锁中取出旧引擎，用 Default 占位，释放内存
+            let old = {
+                match watcher_engine.write() {
+                    Ok(mut guard) => {
+                        std::mem::take(&mut *guard)
+                    }
+                    Err(e) => {
+                        log::warn!("[senime] hot-reload lock poisoned: {e}");
+                        return;
+                    }
+                }
+            };
+            drop(old);
+            // 2. 加载新引擎（旧引擎已释放，内存峰值可控）
             match load_input_analyzer(&main_path) {
                 Ok(new_ia) => {
                     match watcher_engine.write() {
                         Ok(mut guard) => {
-                            let old = std::mem::replace(&mut *guard, new_ia);
-                            drop(old);
+                            *guard = new_ia;
                             log::info!("[senime] hot-reload succeeded")
                         }
-                        Err(e) => log::info!("[senime] hot-reload lock poisoned: {e}"),
+                        Err(e) => log::warn!("[senime] hot-reload lock poisoned: {e}"),
                     };
                 }
                 Err(e) => log::warn!("[senime] hot-reload failed: {e}"),
