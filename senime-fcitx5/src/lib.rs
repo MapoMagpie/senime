@@ -133,10 +133,27 @@ impl SenimeCommand {
             candidate_count: 0,
         }
     }
-    fn with_preedit_text(text: String) -> Self {
+    fn with_preedit_text(
+        text: String,
+        input: Option<Vec<char>>,
+        enable_text: bool,
+        enable_input: bool,
+    ) -> Self {
+        let preedit = match (enable_text, enable_input) {
+            (true, true) => {
+                if let Some(input) = input {
+                    format!("{text}{}", input.iter().collect::<String>())
+                } else {
+                    text
+                }
+            }
+            (true, false) => text,
+            (false, true) => input.unwrap_or(vec![]).iter().collect::<String>(),
+            (false, false) => String::new(),
+        };
         Self {
             type_: SenimeCommandType::SetPreedit,
-            text: into_c_string(text),
+            text: into_c_string(preedit),
             candidates: ptr::null_mut(),
             candidate_count: 0,
         }
@@ -192,6 +209,8 @@ pub struct SenimeConfig {
     pub table_path: *mut c_char,
     pub default_chinese_mode: bool,
     pub sentence_flow: bool,
+    pub enable_text_preedit: bool,
+    pub enable_input_preedit: bool,
 }
 
 #[derive(Clone)]
@@ -201,6 +220,8 @@ struct SenimeResolvedConfig {
     trigger_chars: Option<(char, char)>,
     default_chinese_mode: bool,
     sentence_flow: bool,
+    enable_text_preedit: bool,
+    enable_input_preedit: bool,
 }
 
 impl Default for SenimeResolvedConfig {
@@ -210,6 +231,8 @@ impl Default for SenimeResolvedConfig {
             trigger_chars: None,
             default_chinese_mode: false,
             sentence_flow: false,
+            enable_text_preedit: true,
+            enable_input_preedit: false,
         }
     }
 }
@@ -225,6 +248,8 @@ impl From<&SenimeConfig> for SenimeResolvedConfig {
             trigger_chars,
             default_chinese_mode: value.default_chinese_mode,
             sentence_flow: value.sentence_flow,
+            enable_text_preedit: value.enable_text_preedit,
+            enable_input_preedit: value.enable_input_preedit,
         }
     }
 }
@@ -307,7 +332,12 @@ impl SenimeState {
                 self.segments.clear();
                 self.preset = None;
             } else {
-                cmds.push(SenimeCommand::with_preedit_text(":中>".to_string()));
+                cmds.push(SenimeCommand::with_preedit_text(
+                    ":中>".to_string(),
+                    None,
+                    true,
+                    false,
+                ));
                 self.chinese_mode = true;
             }
             cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
@@ -330,7 +360,7 @@ impl SenimeState {
                 {
                     self.input.push(ch);
                     let cmds = vec![
-                        SenimeCommand::with_preedit_text(":(中)".to_string()),
+                        SenimeCommand::with_preedit_text(":(中)".to_string(), None, true, false),
                         SenimeCommand::with_type(SenimeCommandType::UpdateUI),
                     ];
                     return (true, cmds);
@@ -358,7 +388,7 @@ impl SenimeState {
                 "".to_string()
             };
             let cmds = vec![
-                SenimeCommand::with_preedit_text(hint),
+                SenimeCommand::with_preedit_text(hint, None, true, false),
                 SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
                 SenimeCommand::with_type(SenimeCommandType::UpdateUI),
             ];
@@ -492,7 +522,12 @@ impl SenimeState {
                 self.input.clear();
                 self.segments.clear();
             } else {
-                cmds.push(SenimeCommand::with_preedit_text("".to_string()));
+                cmds.push(SenimeCommand::with_preedit_text(
+                    String::new(),
+                    None,
+                    true,
+                    false,
+                ));
             }
             cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
@@ -503,7 +538,12 @@ impl SenimeState {
         if result.segments.is_empty() {
             self.input.clear();
             self.segments.clear();
-            cmds.push(SenimeCommand::with_preedit_text("".to_string()));
+            cmds.push(SenimeCommand::with_preedit_text(
+                String::new(),
+                None,
+                true,
+                false,
+            ));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
             return;
@@ -549,9 +589,15 @@ impl SenimeState {
             self.segments.clear();
         } else {
             // 临时中文模式未决
+            let input = result.segments.last().map(|(_, origin, _)| origin.to_vec());
             self.segments = result.segments.clone();
             let text = result.segments.into_iter().map(|seg| seg.0).collect();
-            cmds.push(SenimeCommand::with_preedit_text(text));
+            cmds.push(SenimeCommand::with_preedit_text(
+                text,
+                input,
+                self.config.enable_text_preedit,
+                self.config.enable_input_preedit,
+            ));
             if result.pending {
                 if let Some(cands) = result.candidates {
                     cmds.push(SenimeCommand::with_candidates(cands));
@@ -577,9 +623,15 @@ impl SenimeState {
         if is_code_tag(&last_seg)
             && (pre_segments.is_empty() || is_code_tag(pre_segments.last().unwrap()))
         {
+            let input = result.segments.last().map(|seg| seg.1.to_vec());
             self.segments = result.segments.clone();
             let text = result.segments.into_iter().map(|seg| seg.0).collect();
-            cmds.push(SenimeCommand::with_preedit_text(text));
+            cmds.push(SenimeCommand::with_preedit_text(
+                text,
+                input,
+                self.config.enable_text_preedit,
+                self.config.enable_input_preedit,
+            ));
             if let Some(cands) = result.candidates {
                 cmds.push(SenimeCommand::with_candidates(cands));
             } else {
@@ -592,7 +644,12 @@ impl SenimeState {
             self.segments.clear();
             if result.pending {
                 self.input = last_seg.1;
-                cmds.push(SenimeCommand::with_preedit_text(last_seg.0));
+                cmds.push(SenimeCommand::with_preedit_text(
+                    last_seg.0,
+                    Some(self.input.clone()),
+                    self.config.enable_text_preedit,
+                    self.config.enable_input_preedit,
+                ));
             } else {
                 self.input.clear();
                 cmds.push(SenimeCommand::with_commit_text(last_seg.0));
@@ -616,13 +673,18 @@ impl SenimeState {
         }
         if let Some(last) = last_seg {
             if result.pending {
-                cmds.push(SenimeCommand::with_preedit_text(last.0));
+                self.input = last.1;
+                cmds.push(SenimeCommand::with_preedit_text(
+                    last.0,
+                    Some(self.input.clone()),
+                    self.config.enable_text_preedit,
+                    self.config.enable_input_preedit,
+                ));
                 if let Some(cands) = result.candidates {
                     cmds.push(SenimeCommand::with_candidates(cands));
                 } else {
                     cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
                 }
-                self.input = last.1;
             } else {
                 cmds.push(SenimeCommand::with_commit_text(last.0));
                 cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
@@ -652,7 +714,7 @@ impl SenimeState {
         // );
         if self.input.len() < *code_len + 1 {
             let preedit: String = self.input.iter().collect();
-            cmds.push(SenimeCommand::with_preedit_text(preedit));
+            cmds.push(SenimeCommand::with_preedit_text(preedit, None, true, false));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::UpdateUI));
             true

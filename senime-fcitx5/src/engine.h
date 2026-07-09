@@ -41,7 +41,11 @@ FCITX_CONFIGURATION(
                                     false};
     Option<bool> sentenceFlow{this, "SentenceFlow", _("Sentence Flow"), false};
     Option<bool> resetStateOnFocusIn{this, "ResetStateOnFocusIn",
-                                     _("Reset State on Focus In"), false};)
+                                     _("Reset State on Focus In"), false};
+    Option<bool> enableTextPreedit{this, "EnableTextPreedit",
+                                   _("Enable Text Preedit"), true};
+    Option<bool> enableInputPreedit{this, "EnableInputPreedit",
+                                    _("Enable Input Preedit"), false};)
 
 class SenimeEngine;
 

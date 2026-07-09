@@ -50,6 +50,8 @@ typedef struct SenimeConfig {
     const char *table_path;
     bool default_chinese_mode;       // 新建状态时默认使用中文模式
     bool sentence_flow;              // 语句流模式：输入持续在preedit，遇标点或双空格才提交
+    bool enable_text_preedit;        // 在预编辑中显示码表查询出的汉字
+    bool enable_input_preedit;       // 在预编辑中显示用户原始输入编码
 } SenimeConfig ;
 
 typedef struct SenimeKeyEventResult {

@@ -283,6 +283,8 @@ SenimeConfig SenimeEngine::convertConfig(const SenimeFcitxConfig &cfg) {
     kc.table_path = cfg.tablePath->c_str();
     kc.default_chinese_mode = *cfg.defaultChineseMode;
     kc.sentence_flow = *cfg.sentenceFlow;
+    kc.enable_text_preedit = *cfg.enableTextPreedit;
+    kc.enable_input_preedit = *cfg.enableInputPreedit;
     return kc;
 }
 
