@@ -39,7 +39,9 @@ FCITX_CONFIGURATION(
                                               _("Trigger Temporary Chinese End"), ""};
     Option<bool> defaultChineseMode{this, "DefaultChineseMode", _("Default Chinese Mode"),
                                     false};
-    Option<bool> sentenceFlow{this, "SentenceFlow", _("Sentence Flow"), false};)
+    Option<bool> sentenceFlow{this, "SentenceFlow", _("Sentence Flow"), false};
+    Option<bool> resetStateOnFocusIn{this, "ResetStateOnFocusIn",
+                                     _("Reset State on Focus In"), false};)
 
 class SenimeEngine;
 
@@ -49,7 +51,8 @@ public:
     ~SenimeState();
 
     void processKeyEvent(KeyEvent &event);
-    void reset(bool reset_mode = true);
+    void reset_input();
+    void reset_chinese_mode();
     void reloadEngine();
     bool chineseMode() const;
     void setChineseMode(bool chinese);

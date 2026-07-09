@@ -92,7 +92,7 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
     senime_key_event_result_free(result);
 }
 
-void SenimeState::reset(bool reset_mode) {
+void SenimeState::reset_input() {
     if (!state_) return;
 
     // 直接清空 inputContext 的预编辑和候选框
@@ -100,12 +100,12 @@ void SenimeState::reset(bool reset_mode) {
     ic_->updatePreedit();
     ic_->updateUserInterface(UserInterfaceComponent::InputPanel);
 
-    // 重置 Rust 侧状态
-    if (reset_mode) {
-        senime_state_reset(state_.get());
-    } else {
-        senime_state_reset_input(state_.get());
-    }
+    // 重置 Rust 侧输入状态，保留中英模式
+    senime_state_reset_input(state_.get());
+}
+
+void SenimeState::reset_chinese_mode() {
+    setChineseMode(*engine_->configDef().defaultChineseMode);
 }
 
 void SenimeState::reloadEngine() {
@@ -155,7 +155,7 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
             candidates->setCursorPositionAfterPaging(
                 CursorPositionAfterPaging::ResetToFirst);
             // 手动点击候选项后，重置输入状态但保留中英模式
-            auto resetCallback = [this]() { this->reset(false); };
+            auto resetCallback = [this]() { this->reset_input(); };
             for (size_t j = 0; j < cmd.candidate_count; j++) {
                 const auto &cand = cmd.candidates[j];
                 candidates->append<SenimeCandidateWord>(
@@ -293,8 +293,14 @@ void SenimeEngine::reloadEngine() {
 
 void SenimeEngine::activate(const InputMethodEntry &,
                             InputContextEvent &event) {
-    event.inputContext()->statusArea().addAction(StatusGroup::InputMethod, &toggleChineseAction_);
-    updateAction(event.inputContext());
+    auto *ic = event.inputContext();
+    ic->statusArea().addAction(StatusGroup::InputMethod, &toggleChineseAction_);
+    // 根据配置决定聚焦时是否重置中文模式
+    if (*configDef_.resetStateOnFocusIn) {
+        auto *st = ic->propertyFor(&factory_);
+        st->reset_chinese_mode();
+    }
+    updateAction(ic);
 }
 
 void SenimeEngine::updateAction(InputContext *ic) {
@@ -311,12 +317,15 @@ void SenimeEngine::keyEvent(const InputMethodEntry &, KeyEvent &event) {
 }
 
 void SenimeEngine::reset(const InputMethodEntry &, InputContextEvent &event) {
-    auto *state = event.inputContext()->propertyFor(&factory_);
-    state->reset();
+    auto *st = event.inputContext()->propertyFor(&factory_);
+    st->reset_input();
+    st->reset_chinese_mode();
 }
 
-void SenimeEngine::deactivate(const InputMethodEntry &entry, InputContextEvent &event) {
-    reset(entry, event);
+void SenimeEngine::deactivate(const InputMethodEntry &, InputContextEvent &event) {
+    auto *st = event.inputContext()->propertyFor(&factory_);
+    // 仅重置输入状态，保留中英模式（切换回此窗口时由 activate 根据配置决定是否重置）
+    st->reset_input();
 }
 
 void SenimeEngine::reloadConfig() { readAsIni(configDef_, "conf/senime.conf"); }
