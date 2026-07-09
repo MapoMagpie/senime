@@ -113,26 +113,6 @@ void SenimeState::reloadEngine() {
     state_.reset(senime_state_new(engine_->engine()));
 }
 
-void SenimeState::deactivate() {
-    if (!state_) return;
-
-    // Send Escape key to commit pending input, then Escape to reset
-    SenimeKeyEvent retKey;
-    retKey.sym = FcitxKey_Escape;
-    retKey.states = 0;
-    retKey.is_release = false;
-
-    SenimeKeyEventResult *result = senime_engine_key_event(
-        engine_->engine(), state_.get(), &retKey);
-
-    if (result) {
-        executeCommands(result, ic_);
-        senime_key_event_result_free(result);
-    }
-
-    reset();
-}
-
 bool SenimeState::chineseMode() const {
     return state_ ? senime_state_chinese_mode(state_.get()) : false;
 }
@@ -335,10 +315,7 @@ void SenimeEngine::reset(const InputMethodEntry &, InputContextEvent &event) {
     state->reset();
 }
 
-void SenimeEngine::deactivate(const InputMethodEntry &entry,
-                              InputContextEvent &event) {
-    auto *state = event.inputContext()->propertyFor(&factory_);
-    state->deactivate();
+void SenimeEngine::deactivate(const InputMethodEntry &entry, InputContextEvent &event) {
     reset(entry, event);
 }
 

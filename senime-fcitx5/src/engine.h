@@ -50,7 +50,6 @@ public:
 
     void processKeyEvent(KeyEvent &event);
     void reset(bool reset_mode = true);
-    void deactivate();
     void reloadEngine();
     bool chineseMode() const;
     void setChineseMode(bool chinese);

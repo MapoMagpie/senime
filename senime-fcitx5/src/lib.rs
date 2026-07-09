@@ -267,17 +267,15 @@ impl SenimeState {
 
     /// 重置状态：清空输入缓冲，重置中英模式标记。
     fn reset(&mut self) {
-        self.input.clear();
-        self.segments.clear();
-        self.preset.take();
+        self.reset_input();
         self.chinese_mode = self.config.default_chinese_mode;
     }
 
-    /// 重置输入缓冲，但保留中英模式标记。
-    /// 用于手动选择候选项后清空输入状态。
+    /// 重置状态：清空输入缓冲，但不重置中英文模式。
     fn reset_input(&mut self) {
         self.input.clear();
         self.segments.clear();
+        self.preset = None;
     }
 
     /// Process a key event. Returns (accepted, commands).
@@ -307,7 +305,7 @@ impl SenimeState {
                 self.chinese_mode = false;
                 self.input.clear();
                 self.segments.clear();
-                self.preset.take();
+                self.preset = None;
             } else {
                 cmds.push(SenimeCommand::with_preedit_text(":中>".to_string()));
                 self.chinese_mode = true;
@@ -383,7 +381,7 @@ impl SenimeState {
             self.chinese_mode = false;
             self.input.clear();
             self.segments.clear();
-            self.preset.take();
+            self.preset = None;
             let cmds = vec![
                 SenimeCommand::with_commit_text(self.input.iter().collect()),
                 SenimeCommand::with_type(SenimeCommandType::ResetInputPanel),
@@ -664,7 +662,7 @@ impl SenimeState {
             self.input.clear();
             self.segments.clear();
             if items.is_empty() {
-                self.preset.take();
+                self.preset = None;
             }
             cmds.push(SenimeCommand::with_commit_text(commit_text));
             cmds.push(SenimeCommand::with_type(SenimeCommandType::ResetInputPanel));
@@ -896,9 +894,7 @@ pub unsafe extern "C" fn senime_engine_new(config: *const SenimeConfig) -> *mut 
                 // 1. 先从锁中取出旧引擎，用 Default 占位，释放内存
                 let old = {
                     match watcher_engine.write() {
-                        Ok(mut guard) => {
-                            std::mem::take(&mut *guard)
-                        }
+                        Ok(mut guard) => std::mem::take(&mut *guard),
                         Err(e) => {
                             fcitx_log!(FCITX_LOG_ERROR, "hot-reload lock poisoned: {e}");
                             return;
@@ -1040,12 +1036,12 @@ pub unsafe extern "C" fn senime_state_set_chinese_mode(state: *mut SenimeState, 
     unsafe {
         (*state).input.clear();
         (*state).segments.clear();
-        (*state).preset.take();
+        (*state).preset = None;
         (*state).chinese_mode = chinese
     };
 }
 
-/// 重置输入状态：清空输入缓冲并重置中英模式。
+/// 重置状态：清空输入缓冲，重置中英模式标记。
 ///
 /// # Safety
 ///
@@ -1058,8 +1054,7 @@ pub unsafe extern "C" fn senime_state_reset(state: *mut SenimeState) {
     unsafe { (*state).reset() };
 }
 
-/// 重置输入缓冲，但保留中英模式标记。
-/// 用于手动选择候选项后清空输入状态。
+/// 重置状态：清空输入缓冲，但不重置中英文模式。
 ///
 /// # Safety
 ///
