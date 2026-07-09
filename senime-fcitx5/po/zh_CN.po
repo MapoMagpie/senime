@@ -28,16 +28,88 @@ msgid "Table Path"
 msgstr "码表路径"
 
 #: src/engine.h
+msgid ""
+"Path to the dictionary or config file. When empty, defaults to "
+"XDG_DATA_CONFIG/senime/config.toml. The directory must be writable for "
+"binary cache generation."
+msgstr ""
+"码表或配置文件地址。为空时，将默认加载 XDG_DATA_CONFIG/senime/config.toml。"
+"需要保证码表文件所在目录有写入权限，以方便生成二进制缓存。"
+
+#: src/engine.h
 msgid "Toggle Chinese/English"
 msgstr "切换中英文"
 
 #: src/engine.h
-msgid "Trigger Temporary Chinese"
-msgstr "触发临时中文"
+msgid "Key combination to toggle between Chinese and English mode."
+msgstr "用于切换中英文模式的按键组合。"
+
+#: src/engine.h
+msgid "Trigger Temporary Chinese Start"
+msgstr "触发临时中文开始"
+
+#: src/engine.h
+msgid ""
+"In English mode, typing this character temporarily enables Chinese mode. "
+"Leave empty to disable."
+msgstr "在英文模式下，输入此字符后可临时启用中文模式。为空表示不启用。"
+
+#: src/engine.h
+msgid "Trigger Temporary Chinese End"
+msgstr "触发临时中文结束"
+
+#: src/engine.h
+msgid ""
+"Typing this character ends temporary Chinese mode and commits text. Leave "
+"empty to use the same character as Start."
+msgstr "输入此字符可结束临时中文模式并上屏。为空时使用与触发临时中文开始相同的字符。"
 
 #: src/engine.h
 msgid "Default Chinese Mode"
 msgstr "默认中文模式"
+
+#: src/engine.h
+msgid "Whether to enable Chinese mode by default."
+msgstr "是否默认启用中文模式。"
+
+#: src/engine.h
+msgid "Sentence Flow"
+msgstr "整句模式"
+
+#: src/engine.h
+msgid ""
+"In continuous typing, text is not committed until punctuation. This is an "
+"experimental feature."
+msgstr "连续输入时不会上屏，直到输入标点符号才上屏。此为实验性特性。"
+
+#: src/engine.h
+msgid "Reset State on Focus In"
+msgstr "聚焦时重置状态"
+
+#: src/engine.h
+msgid ""
+"When switching input fields, reset Chinese/English state according to "
+"Default Chinese Mode."
+msgstr "切换输入框时，根据默认中文模式重置中英文状态。"
+
+#: src/engine.h
+msgid "Enable Text Preedit"
+msgstr "启用文本预编辑"
+
+#: src/engine.h
+msgid "Show the Chinese character (IME result) in the preedit area."
+msgstr "在预编辑区显示汉字（输入法结果）。"
+
+#: src/engine.h
+msgid "Enable Input Preedit"
+msgstr "启用编码预编辑"
+
+#: src/engine.h
+msgid ""
+"Show the actual typing codes in the preedit area. If both preedit options "
+"are enabled, the result and codes are concatenated."
+msgstr ""
+"在预编辑区显示实际输入的编码。若同时启用文本预编辑，则结果与编码拼接显示。"
 
 #: src/engine.cpp
 msgid "Switch to Chinese"
@@ -46,7 +118,3 @@ msgstr "切换到中文"
 #: src/engine.cpp
 msgid "Switch to English"
 msgstr "切换到英文"
-
-#: src/engine.cpp
-msgid "Reload engine"
-msgstr "重启核心"

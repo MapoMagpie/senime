@@ -29,15 +29,84 @@ msgid "Table Path"
 msgstr ""
 
 #: src/engine.h
+msgid ""
+"Path to the dictionary or config file. When empty, defaults to "
+"XDG_DATA_CONFIG/senime/config.toml. The directory must be writable for "
+"binary cache generation."
+msgstr ""
+
+#: src/engine.h
 msgid "Toggle Chinese/English"
 msgstr ""
 
 #: src/engine.h
-msgid "Trigger Temporary Chinese"
+msgid "Key combination to toggle between Chinese and English mode."
+msgstr ""
+
+#: src/engine.h
+msgid "Trigger Temporary Chinese Start"
+msgstr ""
+
+#: src/engine.h
+msgid ""
+"In English mode, typing this character temporarily enables Chinese mode. "
+"Leave empty to disable."
+msgstr ""
+
+#: src/engine.h
+msgid "Trigger Temporary Chinese End"
+msgstr ""
+
+#: src/engine.h
+msgid ""
+"Typing this character ends temporary Chinese mode and commits text. Leave "
+"empty to use the same character as Start."
 msgstr ""
 
 #: src/engine.h
 msgid "Default Chinese Mode"
+msgstr ""
+
+#: src/engine.h
+msgid "Whether to enable Chinese mode by default."
+msgstr ""
+
+#: src/engine.h
+msgid "Sentence Flow"
+msgstr ""
+
+#: src/engine.h
+msgid ""
+"In continuous typing, text is not committed until punctuation. This is an "
+"experimental feature."
+msgstr ""
+
+#: src/engine.h
+msgid "Reset State on Focus In"
+msgstr ""
+
+#: src/engine.h
+msgid ""
+"When switching input fields, reset Chinese/English state according to "
+"Default Chinese Mode."
+msgstr ""
+
+#: src/engine.h
+msgid "Enable Text Preedit"
+msgstr ""
+
+#: src/engine.h
+msgid "Show the Chinese character (IME result) in the preedit area."
+msgstr ""
+
+#: src/engine.h
+msgid "Enable Input Preedit"
+msgstr ""
+
+#: src/engine.h
+msgid ""
+"Show the actual typing codes in the preedit area. If both preedit options "
+"are enabled, the result and codes are concatenated."
 msgstr ""
 
 #: src/engine.cpp
@@ -46,8 +115,4 @@ msgstr ""
 
 #: src/engine.cpp
 msgid "Switch to English"
-msgstr ""
-
-#: src/engine.cpp
-msgid "Reload engine"
 msgstr ""

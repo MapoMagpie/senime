@@ -28,16 +28,98 @@ msgid "Table Path"
 msgstr "Table Path"
 
 #: src/engine.h
+msgid ""
+"Path to the dictionary or config file. When empty, defaults to "
+"XDG_DATA_CONFIG/senime/config.toml. The directory must be writable for "
+"binary cache generation."
+msgstr ""
+"Path to the dictionary or config file. When empty, defaults to "
+"XDG_DATA_CONFIG/senime/config.toml. The directory must be writable for "
+"binary cache generation."
+
+#: src/engine.h
 msgid "Toggle Chinese/English"
 msgstr "Toggle Chinese/English"
 
 #: src/engine.h
-msgid "Trigger Temporary Chinese"
-msgstr "Trigger Temporary Chinese"
+msgid "Key combination to toggle between Chinese and English mode."
+msgstr "Key combination to toggle between Chinese and English mode."
+
+#: src/engine.h
+msgid "Trigger Temporary Chinese Start"
+msgstr "Trigger Temporary Chinese Start"
+
+#: src/engine.h
+msgid ""
+"In English mode, typing this character temporarily enables Chinese mode. "
+"Leave empty to disable."
+msgstr ""
+"In English mode, typing this character temporarily enables Chinese mode. "
+"Leave empty to disable."
+
+#: src/engine.h
+msgid "Trigger Temporary Chinese End"
+msgstr "Trigger Temporary Chinese End"
+
+#: src/engine.h
+msgid ""
+"Typing this character ends temporary Chinese mode and commits text. Leave "
+"empty to use the same character as Start."
+msgstr ""
+"Typing this character ends temporary Chinese mode and commits text. Leave "
+"empty to use the same character as Start."
 
 #: src/engine.h
 msgid "Default Chinese Mode"
 msgstr "Default Chinese Mode"
+
+#: src/engine.h
+msgid "Whether to enable Chinese mode by default."
+msgstr "Whether to enable Chinese mode by default."
+
+#: src/engine.h
+msgid "Sentence Flow"
+msgstr "Sentence Flow"
+
+#: src/engine.h
+msgid ""
+"In continuous typing, text is not committed until punctuation. This is an "
+"experimental feature."
+msgstr ""
+"In continuous typing, text is not committed until punctuation. This is an "
+"experimental feature."
+
+#: src/engine.h
+msgid "Reset State on Focus In"
+msgstr "Reset State on Focus In"
+
+#: src/engine.h
+msgid ""
+"When switching input fields, reset Chinese/English state according to "
+"Default Chinese Mode."
+msgstr ""
+"When switching input fields, reset Chinese/English state according to "
+"Default Chinese Mode."
+
+#: src/engine.h
+msgid "Enable Text Preedit"
+msgstr "Enable Text Preedit"
+
+#: src/engine.h
+msgid "Show the Chinese character (IME result) in the preedit area."
+msgstr "Show the Chinese character (IME result) in the preedit area."
+
+#: src/engine.h
+msgid "Enable Input Preedit"
+msgstr "Enable Input Preedit"
+
+#: src/engine.h
+msgid ""
+"Show the actual typing codes in the preedit area. If both preedit options "
+"are enabled, the result and codes are concatenated."
+msgstr ""
+"Show the actual typing codes in the preedit area. If both preedit options "
+"are enabled, the result and codes are concatenated."
 
 #: src/engine.cpp
 msgid "Switch to Chinese"
@@ -46,7 +128,3 @@ msgstr "Switch to Chinese"
 #: src/engine.cpp
 msgid "Switch to English"
 msgstr "Switch to English"
-
-#: src/engine.cpp
-msgid "Reload engine"
-msgstr "Reload engine"
