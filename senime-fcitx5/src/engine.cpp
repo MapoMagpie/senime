@@ -1,5 +1,4 @@
 #include "engine.h"
-#include "fcitx-utils/keysym.h"
 #include <fcitx-utils/key.h>
 
 #include <fcitx-utils/log.h>
@@ -147,6 +146,15 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
             ic->updatePreedit();
             break;
         }
+
+        case SENIME_CMD_SET_AUX_UP:
+            ic->inputPanel().setAuxUp(Text(cmd.text ? cmd.text : ""));
+            ic->inputPanel().setAuxDown(Text(cmd.text ? cmd.text : ""));
+            break;
+
+        case SENIME_CMD_SET_AUX_DOWN:
+            ic->inputPanel().setAuxDown(Text(cmd.text ? cmd.text : ""));
+            break;
 
         case SENIME_CMD_SET_CANDIDATES: {
             auto candidates = std::make_unique<CommonCandidateList>();

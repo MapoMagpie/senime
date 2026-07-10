@@ -106,6 +106,8 @@ pub enum SenimeCommandType {
     /// 更新`UI InputPanel`
     UpdateUI,
     UpdateStatusArea,
+    SetAuxUp,
+    SetAuxDown,
 }
 
 #[repr(C)]
@@ -157,6 +159,15 @@ impl CommandBuilder {
         self.cmds.push(SenimeCommand {
             type_: SenimeCommandType::SetPreedit,
             text: into_c_string(preedit),
+            candidates: ptr::null_mut(),
+            candidate_count: 0,
+        });
+    }
+
+    fn aux_up_text(&mut self, text: String) {
+        self.cmds.push(SenimeCommand {
+            type_: SenimeCommandType::SetAuxUp,
+            text: into_c_string(text),
             candidates: ptr::null_mut(),
             candidate_count: 0,
         });
@@ -366,7 +377,7 @@ impl SenimeState {
                 self.segments.clear();
                 self.preset = None;
             } else {
-                cmds.preedit_text(":中>".to_string(), None);
+                cmds.aux_up_text(":中>".to_string());
                 self.chinese_mode = true;
             }
             cmds.reset_input_panel();
@@ -387,7 +398,7 @@ impl SenimeState {
                 {
                     self.input.push(ch);
                     let mut cmds = CommandBuilder::new(&self.config);
-                    cmds.preedit_text(":(中)".to_string(), None);
+                    cmds.aux_up_text(":(中)".to_string());
                     cmds.update_ui();
                     return (true, cmds.into_vec());
                 };
@@ -414,7 +425,7 @@ impl SenimeState {
                 "".to_string()
             };
             let mut cmds = CommandBuilder::new(&self.config);
-            cmds.preedit_text(hint, None);
+            cmds.aux_up_text(hint);
             cmds.reset_input_panel();
             cmds.update_ui();
             return (true, cmds.into_vec());

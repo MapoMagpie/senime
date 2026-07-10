@@ -21,6 +21,8 @@ typedef enum SenimeCommandType {
     SENIME_CMD_RESET_INPUT_PANEL = 3,
     SENIME_CMD_UPDATE_UI = 4,
     SENIME_CMD_UPDATE_STATUS_AREA = 5,
+    SENIME_CMD_SET_AUX_UP = 6,
+    SENIME_CMD_SET_AUX_DOWN = 7,
 } SenimeCommandType;
 
 typedef struct SenimeCandidateData {
