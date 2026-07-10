@@ -377,10 +377,12 @@ impl SenimeState {
                 self.segments.clear();
                 self.preset = None;
             } else {
-                cmds.aux_up_text(":中>".to_string());
                 self.chinese_mode = true;
             }
             cmds.reset_input_panel();
+            if self.chinese_mode {
+                cmds.aux_up_text(":中>".to_string());
+            }
             cmds.update_status_area();
             cmds.update_ui();
             // !key.is_release防止下级应用接收到此key的按下事件，但释放事件却被fcitx5拦截，导致该key一直repeat。
@@ -425,8 +427,8 @@ impl SenimeState {
                 "".to_string()
             };
             let mut cmds = CommandBuilder::new(&self.config);
-            cmds.aux_up_text(hint);
             cmds.reset_input_panel();
+            cmds.aux_up_text(hint);
             cmds.update_ui();
             return (true, cmds.into_vec());
         }

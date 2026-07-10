@@ -149,7 +149,6 @@ void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic
 
         case SENIME_CMD_SET_AUX_UP:
             ic->inputPanel().setAuxUp(Text(cmd.text ? cmd.text : ""));
-            ic->inputPanel().setAuxDown(Text(cmd.text ? cmd.text : ""));
             break;
 
         case SENIME_CMD_SET_AUX_DOWN:
