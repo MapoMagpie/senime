@@ -516,12 +516,7 @@ impl SenimeState {
     }
 
     /// Core update: analyze input and produce commands.
-    fn do_update(
-        &mut self,
-        temp_chinese_mode: bool,
-        just_commit: bool,
-        cmds: &mut CommandBuilder,
-    ) {
+    fn do_update(&mut self, temp_chinese_mode: bool, just_commit: bool, cmds: &mut CommandBuilder) {
         // ── 预设模式：输入长度匹配时自动提交预设文本 ──────────────
         if self.do_preset(cmds) {
             return;
@@ -599,7 +594,11 @@ impl SenimeState {
             self.segments.clear();
         } else {
             // 临时中文模式未决
-            let input = result.segments.last().map(|(_, origin, _)| origin.to_vec());
+            let input = result
+                .segments
+                .last()
+                .map(|(_, origin, tag)| matches!(tag, Tag::Code(_)).then_some(origin.to_vec()))
+                .flatten();
             self.segments = result.segments.clone();
             let text = result.segments.into_iter().map(|seg| seg.0).collect();
             cmds.preedit_text(text, input);
@@ -626,7 +625,11 @@ impl SenimeState {
         if is_code_tag(&last_seg)
             && (pre_segments.is_empty() || is_code_tag(pre_segments.last().unwrap()))
         {
-            let input = result.segments.last().map(|seg| seg.1.to_vec());
+            let input = result
+                .segments
+                .last()
+                .map(|(_, origin, tag)| matches!(tag, Tag::Code(_)).then_some(origin.to_vec()))
+                .flatten();
             self.segments = result.segments.clone();
             let text = result.segments.into_iter().map(|seg| seg.0).collect();
             cmds.preedit_text(text, input);
@@ -641,8 +644,11 @@ impl SenimeState {
             cmds.commit_text(pre_text);
             self.segments.clear();
             if result.pending {
+                cmds.preedit_text(
+                    last_seg.0,
+                    matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1.to_vec()),
+                );
                 self.input = last_seg.1;
-                cmds.preedit_text(last_seg.0, Some(self.input.clone()));
             } else {
                 self.input.clear();
                 cmds.commit_text(last_seg.0);
@@ -664,8 +670,11 @@ impl SenimeState {
         }
         if let Some(last) = last_seg {
             if result.pending {
+                cmds.preedit_text(
+                    last.0,
+                    matches!(last.2, Tag::Code(_)).then_some(last.1.to_vec()),
+                );
                 self.input = last.1;
-                cmds.preedit_text(last.0, Some(self.input.clone()));
                 if let Some(cands) = result.candidates {
                     cmds.candidates(cands);
                 } else {
