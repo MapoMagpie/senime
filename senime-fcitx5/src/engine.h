@@ -118,7 +118,7 @@ public:
 private:
     using StatePtr = std::unique_ptr<::SenimeState, decltype(&senime_state_free)>;
 
-    void executeCommands(SenimeKeyEventResult *result, InputContext *ic);
+    void applyInnerState(const SenimeInnerState *inner_state, InputContext *ic);
 
     SenimeEngine *engine_;
     InputContext *ic_;

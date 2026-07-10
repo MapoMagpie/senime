@@ -64,6 +64,7 @@ SenimeState::~SenimeState() = default;
 
 void SenimeState::processKeyEvent(KeyEvent &event) {
     const auto &key = event.key();
+    if (event.isRelease()) return;
 
     // Convert Fcitx5 key event to flat C struct
     SenimeKeyEvent rustKey;
@@ -87,7 +88,7 @@ void SenimeState::processKeyEvent(KeyEvent &event) {
         event.filterAndAccept();
     }
 
-    executeCommands(result, ic_);
+    applyInnerState(result->inner_state, ic_);
     senime_key_event_result_free(result);
 }
 
@@ -121,75 +122,65 @@ void SenimeState::setChineseMode(bool chinese) {
     senime_state_set_chinese_mode(state_.get(), chinese);
 }
 
-void SenimeState::executeCommands(SenimeKeyEventResult *result, InputContext *ic) {
-    if (!result || !result->commands || result->command_count == 0) {
-        return;
+void SenimeState::applyInnerState(const SenimeInnerState *s, InputContext *ic) {
+    if (!s) return;
+
+    // 1. 提交文本
+    if (s->commit_str && s->commit_str[0] != '\0') {
+        ic->commitString(s->commit_str);
     }
 
-    for (size_t i = 0; i < result->command_count; i++) {
-        const SenimeCommand &cmd = result->commands[i];
-        switch (cmd.type) {
-        case SENIME_CMD_COMMIT_TEXT:
-            if (cmd.text) {
-                ic->commitString(cmd.text);
-            }
-            break;
+    // 2. 重置面板（清除上一轮状态）
+    ic->inputPanel().reset();
 
-        case SENIME_CMD_SET_PREEDIT: {
-            Text preedit(cmd.text ? cmd.text : "");
-            preedit.setCursor(preedit.toString().size());
-            if (ic->capabilityFlags().test(CapabilityFlag::Preedit)) {
-                ic->inputPanel().setClientPreedit(preedit);
-            } else {
-                ic->inputPanel().setPreedit(preedit);
-            }
-            ic->updatePreedit();
-            break;
+    // 3. 设置 preedit（空字符串 = 清除）
+    {
+        const char *str = s->preedit_str ? s->preedit_str : "";
+        Text preedit(str);
+        preedit.setCursor(preedit.toString().size());
+        if (ic->capabilityFlags().test(CapabilityFlag::Preedit)) {
+            ic->inputPanel().setClientPreedit(preedit);
+        } else {
+            ic->inputPanel().setPreedit(preedit);
         }
+        ic->updatePreedit();
+    }
 
-        case SENIME_CMD_SET_AUX_UP:
-            ic->inputPanel().setAuxUp(Text(cmd.text ? cmd.text : ""));
-            break;
-
-        case SENIME_CMD_SET_AUX_DOWN:
-            ic->inputPanel().setAuxDown(Text(cmd.text ? cmd.text : ""));
-            break;
-
-        case SENIME_CMD_SET_CANDIDATES: {
-            auto candidates = std::make_unique<CommonCandidateList>();
-            candidates->setPageSize(
-                engine_->instance()->globalConfig().defaultPageSize());
-            candidates->setCursorPositionAfterPaging(
-                CursorPositionAfterPaging::ResetToFirst);
-            // 手动点击候选项后，重置输入状态但保留中英模式
-            auto resetCallback = [this]() { this->reset_input(); };
-            for (size_t j = 0; j < cmd.candidate_count; j++) {
-                const auto &cand = cmd.candidates[j];
-                candidates->append<SenimeCandidateWord>(
-                    std::string(cand.text ? cand.text : ""),
-                    cand.code ? cand.code : "",
-                    cand.select_key
-                        ? std::string(1, static_cast<char>(cand.select_key)) + ": "
-                        : std::string(),
-                    ic, resetCallback);
-            }
-            candidates->setGlobalCursorIndex(0);
-            ic->inputPanel().setCandidateList(std::move(candidates));
-            break;
+    // 4. 设置候选列表
+    if (s->candidates && s->candidate_count > 0) {
+        auto candidates = std::make_unique<CommonCandidateList>();
+        candidates->setPageSize(
+            engine_->instance()->globalConfig().defaultPageSize());
+        candidates->setCursorPositionAfterPaging(
+            CursorPositionAfterPaging::ResetToFirst);
+        // 手动点击候选项后，重置输入状态但保留中英模式
+        auto resetCallback = [this]() { this->reset_input(); };
+        for (size_t j = 0; j < s->candidate_count; j++) {
+            const auto &cand = s->candidates[j];
+            candidates->append<SenimeCandidateWord>(
+                std::string(cand.text ? cand.text : ""),
+                cand.code ? cand.code : "",
+                cand.select_key
+                    ? std::string(1, static_cast<char>(cand.select_key)) + ": "
+                    : std::string(),
+                ic, resetCallback);
         }
+        candidates->setGlobalCursorIndex(0);
+        ic->inputPanel().setCandidateList(std::move(candidates));
+    }
 
-        case SENIME_CMD_RESET_INPUT_PANEL:
-            ic->inputPanel().reset();
-            break;
+    // 5. 设置 Aux 面板
+    if (s->aux_up_str && s->aux_up_str[0] != '\0') {
+        ic->inputPanel().setAuxUp(Text(s->aux_up_str));
+    }
+    if (s->aux_down_str && s->aux_down_str[0] != '\0') {
+        ic->inputPanel().setAuxDown(Text(s->aux_down_str));
+    }
 
-        case SENIME_CMD_UPDATE_UI:
-            ic->updateUserInterface(UserInterfaceComponent::InputPanel);
-            break;
-
-        case SENIME_CMD_UPDATE_STATUS_AREA:
-            ic->updateUserInterface(UserInterfaceComponent::StatusArea);
-            break;
-        }
+    // 6. 更新 UI
+    ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+    if (s->update_status_area) {
+        ic->updateUserInterface(UserInterfaceComponent::StatusArea);
     }
 }
 

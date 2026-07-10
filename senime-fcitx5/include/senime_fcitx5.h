@@ -12,18 +12,20 @@ extern "C" {
 typedef struct SenimeEngine SenimeEngine;
 typedef struct SenimeState SenimeState;
 
-// ── Command types for key event processing ───────────────────────────────
-
-typedef enum SenimeCommandType {
-    SENIME_CMD_COMMIT_TEXT = 0,
-    SENIME_CMD_SET_PREEDIT = 1,
-    SENIME_CMD_SET_CANDIDATES = 2,
-    SENIME_CMD_RESET_INPUT_PANEL = 3,
-    SENIME_CMD_UPDATE_UI = 4,
-    SENIME_CMD_UPDATE_STATUS_AREA = 5,
-    SENIME_CMD_SET_AUX_UP = 6,
-    SENIME_CMD_SET_AUX_DOWN = 7,
-} SenimeCommandType;
+// ── Display state for key event processing ───────────────────────────────
+//
+// 每轮 key_event 后，Rust 侧填充此结构体，描述输入面板的期望状态。
+// C++ 侧按固定顺序 apply：
+//   1. commit_str 非空 → commitString
+//   2. 重置 InputPanel
+//   3. preedit_str 非空 → setPreedit
+//   4. candidates 非空 → setCandidateList
+//   5. aux_up_str / aux_down_str 非空 → setAuxUp / setAuxDown
+//   6. updatePreedit + updateUserInterface
+//   7. update_status_area 为真 → updateUserInterface(StatusArea)
+//
+// 所有字符串指针指向 SenimeState 内部内存，有效期至下一次 key_event。
+// C++ 侧只读，不需要释放。
 
 typedef struct SenimeCandidateData {
     char *text;
@@ -31,12 +33,15 @@ typedef struct SenimeCandidateData {
     uint32_t select_key;
 } SenimeCandidateData;
 
-typedef struct SenimeCommand {
-    SenimeCommandType type;
-    char *text;
+typedef struct SenimeInnerState {
+    char *commit_str;
+    char *preedit_str;
+    char *aux_up_str;
+    char *aux_down_str;
     SenimeCandidateData *candidates;
     size_t candidate_count;
-} SenimeCommand;
+    bool update_status_area;
+} SenimeInnerState;
 
 typedef struct SenimeKeyEvent {
     uint32_t sym;
@@ -58,8 +63,7 @@ typedef struct SenimeConfig {
 
 typedef struct SenimeKeyEventResult {
     bool accepted;
-    SenimeCommand *commands;
-    size_t command_count;
+    const SenimeInnerState *inner_state;
 } SenimeKeyEventResult;
 
 // ── Engine lifecycle ─────────────────────────────────────────────────────
@@ -78,13 +82,19 @@ bool senime_state_chinese_mode(const SenimeState *state);
 
 // ── Key event processing ─────────────────────────────────────────────────
 
+/// 处理键盘事件，返回结果结构（含 InnerState 指针，指向 state 内部内存）。
 SenimeKeyEventResult *senime_engine_key_event(const SenimeEngine *engine,
                                                 SenimeState *state,
                                                 const SenimeKeyEvent *key);
 
 // ── Result cleanup ───────────────────────────────────────────────────────
 
+/// 释放 senime_engine_key_event 返回的结果结构体。
+/// 注意：InnerState 及其字符串归 SenimeState 所有，不在此释放。
 void senime_key_event_result_free(SenimeKeyEventResult *result);
+
+/// 手动清空 InnerState（通常在 reset 时调用）。
+void senime_inner_state_clear(SenimeState *state);
 
 // ── Utilities ────────────────────────────────────────────────────────────
 
