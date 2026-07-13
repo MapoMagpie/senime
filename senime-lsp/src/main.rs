@@ -616,9 +616,7 @@ async fn main() {
             // 1. 先从锁中取出旧引擎，用 Default 占位，释放内存
             let old = {
                 match watcher_engine.write() {
-                    Ok(mut guard) => {
-                        std::mem::take(&mut *guard)
-                    }
+                    Ok(mut guard) => std::mem::take(&mut *guard),
                     Err(e) => {
                         log::warn!("[senime] hot-reload lock poisoned: {e}");
                         return;
