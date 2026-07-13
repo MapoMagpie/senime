@@ -202,7 +202,6 @@ pub struct SenimeKeyEventResult {
 // ── Rust-side state ──────────────────────────────────────────────────────
 
 pub struct SenimeState {
-    engine: Arc<RwLock<InputAnalyzer>>,
     input: Vec<char>,
     chinese_mode: bool,
     config: SenimeResolvedConfig,
@@ -216,13 +215,10 @@ pub struct SenimeState {
 }
 
 impl SenimeState {
-    fn new(engine: Arc<RwLock<InputAnalyzer>>, config: SenimeResolvedConfig) -> Self {
-        let chinese_mode = config.default_chinese_mode;
+    fn new(config: SenimeResolvedConfig) -> Self {
         Self {
-            engine,
             input: Vec::new(),
-            chinese_mode,
-            // last_unrelease_key: 0,
+            chinese_mode: config.default_chinese_mode,
             config,
             segments: Vec::new(),
             preset: None,
@@ -366,7 +362,7 @@ impl SenimeState {
     }
 
     /// Process a key event. Returns acceptance flag; display state is in self.inner_state.
-    fn key_event(&mut self, key: &SenimeKeyEvent) -> bool {
+    fn key_event(&mut self, engine: &Arc<RwLock<InputAnalyzer>>, key: &SenimeKeyEvent) -> bool {
         let toggle_key = &self.config.toggle_key;
         // 是否切换中文模式
         if key.sym == toggle_key.sym && key.states == toggle_key.modifier {
@@ -398,7 +394,7 @@ impl SenimeState {
             if let Some((start, _)) = self.config.trigger_chars {
                 // 已进入临时中文模式（输入缓冲以触发字符开头）
                 if self.input.first() == Some(&start) {
-                    return self.chinese_mode(key.sym, key.states, true);
+                    return self.chinese_mode(engine, key.sym, key.states, true);
                 // 按下触发键，进入临时中文模式
                 } else if let Some(ch) = keysym_to_char(key.sym)
                     && ch == start
@@ -414,10 +410,16 @@ impl SenimeState {
         }
 
         // Chinese mode handling
-        self.chinese_mode(key.sym, key.states, false)
+        self.chinese_mode(engine, key.sym, key.states, false)
     }
 
-    fn chinese_mode(&mut self, sym: u32, states: u32, temp_chinese_mode: bool) -> bool {
+    fn chinese_mode(
+        &mut self,
+        engine: &Arc<RwLock<InputAnalyzer>>,
+        sym: u32,
+        states: u32,
+        temp_chinese_mode: bool,
+    ) -> bool {
         // Alt+C → 加载预设
         if sym == FCITX_KEY_C && states == FCITX_MOD_ALT {
             self.clear_inner_state();
@@ -450,7 +452,7 @@ impl SenimeState {
         // Return → 分析后直接提交中文
         if sym == FCITX_KEY_Return {
             self.clear_inner_state();
-            self.do_update(temp_chinese_mode, true);
+            self.do_update(engine, temp_chinese_mode, true);
             return false;
         }
 
@@ -488,7 +490,7 @@ impl SenimeState {
             } else {
                 accept = false;
             }
-            self.do_update(temp_chinese_mode, false);
+            self.do_update(engine, temp_chinese_mode, false);
             return accept;
         }
 
@@ -496,13 +498,13 @@ impl SenimeState {
         if (sym == FCITX_KEY_Page_Up || sym == FCITX_KEY_KP_Page_Up) && !self.input.is_empty() {
             self.clear_inner_state();
             self.input.push(PAGE_UP); // ⇞
-            self.do_update(temp_chinese_mode, false);
+            self.do_update(engine, temp_chinese_mode, false);
             return true;
         }
         if (sym == FCITX_KEY_Page_Down || sym == FCITX_KEY_KP_Page_Down) && !self.input.is_empty() {
             self.clear_inner_state();
             self.input.push(PAGE_DOWN); // ⇟
-            self.do_update(temp_chinese_mode, false);
+            self.do_update(engine, temp_chinese_mode, false);
             return true;
         }
 
@@ -510,7 +512,7 @@ impl SenimeState {
         if let Some(ch) = keysym_to_char(sym) {
             self.clear_inner_state();
             self.input.push(ch);
-            self.do_update(temp_chinese_mode, false);
+            self.do_update(engine, temp_chinese_mode, false);
             return true;
         } else {
             self.clear_commit();
@@ -520,7 +522,12 @@ impl SenimeState {
     }
 
     /// Core update: analyze input and fill inner_state.
-    fn do_update(&mut self, temp_chinese_mode: bool, just_commit: bool) {
+    fn do_update(
+        &mut self,
+        engine: &Arc<RwLock<InputAnalyzer>>,
+        temp_chinese_mode: bool,
+        just_commit: bool,
+    ) {
         // ── 预设模式：输入长度匹配时自动提交预设文本 ──────────────
         if self.do_preset() {
             return;
@@ -550,7 +557,7 @@ impl SenimeState {
             return;
         }
         // 先 read() 获取引用，分析后 drop guard，再调用 &self 方法
-        let result = { self.engine.read().unwrap().analyze(&chars) };
+        let result = { engine.read().unwrap().analyze(&chars) };
         if result.segments.is_empty() {
             self.input.clear();
             self.segments.clear();
@@ -1024,10 +1031,7 @@ pub unsafe extern "C" fn senime_state_new(engine: *const SenimeEngine) -> *mut S
         return ptr::null_mut();
     }
     let engine = unsafe { &*engine };
-    Box::into_raw(Box::new(SenimeState::new(
-        engine.inner.clone(),
-        engine.config.clone(),
-    )))
+    Box::into_raw(Box::new(SenimeState::new(engine.config.clone())))
 }
 
 /// 释放输入状态实例。
@@ -1130,9 +1134,10 @@ pub unsafe extern "C" fn senime_engine_key_event(
         return ptr::null_mut();
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
+        let engine_ref = unsafe { &*engine };
         let state = unsafe { &mut *state };
         let key = unsafe { &*key };
-        let accepted = state.key_event(key);
+        let accepted = state.key_event(&engine_ref.inner, key);
         let inner_state = state.inner_state_ptr();
         Box::new(SenimeKeyEventResult {
             accepted,
