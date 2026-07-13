@@ -1,5 +1,5 @@
 use clap::Parser;
-use senime_lib::{Dict, Looker, lookup_code::Segment};
+use senime_lib::{Looker, PAGE_DOWN, input_analyzer::load_input_analyzer, lookup_code::Segment};
 use serde::Serialize;
 use std::{
     fs::File,
@@ -27,12 +27,23 @@ pub struct Args {
     pub color: bool,
 
     /// 输出时包含字词，将与编码拼接在一起
-    #[arg(short, long, verbatim_doc_comment)]
+    #[arg(long, verbatim_doc_comment)]
     pub with_text: bool,
+
+    /// 输出时将参与选词的空格修改为其他字符
+    /// 参与选词的空格是指一个编码需要空格上屏时，会在编码后追加一个空格字符
+    /// 但在输出时不直观，你可以通过此选项将空格修改为其他字符，如 "_"
+    /// 不影响输入文本里原本的空格
+    #[arg(long, verbatim_doc_comment)]
+    pub alt_space: Option<String>,
 
     /// 输出json格式
     #[arg(long, verbatim_doc_comment)]
     pub json: bool,
+
+    /// 不输出编码，也就是说，只输出性能指标
+    #[arg(long, verbatim_doc_comment)]
+    pub nocode: bool,
 }
 
 /// 分析结果中的一段
@@ -41,6 +52,43 @@ struct AnSegment {
     text: String,
     code: String,
     pos: u16,
+    auto_select: bool,
+    page_num: usize,
+    select_key: char,
+}
+
+impl AnSegment {
+    fn write(
+        &self,
+        writer: &mut impl std::fmt::Write,
+        with_text: bool,
+        alt_space: Option<&String>,
+        colors: Option<&Vec<&str>>,
+        i: usize,
+    ) -> std::fmt::Result {
+        if let Some(colors) = colors {
+            writer.write_str(colors[i % colors.len()])?;
+        }
+        if with_text {
+            writer.write_str(&self.text)?;
+        }
+        writer.write_str(&self.code)?;
+        if self.page_num > 0 {
+            for _ in 0..self.page_num {
+                writer.write_char(PAGE_DOWN)?;
+            }
+        }
+        if !self.auto_select && self.pos == 0 {
+            if let Some(alt) = alt_space {
+                writer.write_str(alt)?;
+            } else {
+                writer.write_str(" ")?;
+            }
+        } else if self.pos > 0 {
+            writer.write_char(self.select_key)?;
+        }
+        Ok(())
+    }
 }
 
 /// 分析结果统计
@@ -62,12 +110,18 @@ struct AnResult {
     codes: Vec<AnSegment>,
 }
 
-fn build_result(segments: &[Segment], elapsed: Duration, text_len: usize) -> AnResult {
+fn build_result(
+    segments: Vec<Segment<'_>>,
+    selection_keys: &[char; 9],
+    page_count: usize,
+    elapsed: Duration,
+    text_len: usize,
+) -> AnResult {
     let mut use_space_times: u32 = 0;
     let mut use_candidate_times: u32 = 0;
     let mut code_len: usize = 0;
     let codes = segments
-        .iter()
+        .into_iter()
         .map(|seg| {
             code_len += seg.code.len();
             if !seg.auto_select && seg.pos == 0 {
@@ -75,11 +129,7 @@ fn build_result(segments: &[Segment], elapsed: Duration, text_len: usize) -> AnR
             } else if seg.pos > 0 {
                 use_candidate_times += 1;
             }
-            AnSegment {
-                text: seg.text.iter().collect(),
-                code: seg.code.iter().collect(),
-                pos: seg.pos,
-            }
+            map_an_segment(selection_keys, page_count, seg)
         })
         .collect();
     code_len += use_space_times as usize;
@@ -96,32 +146,44 @@ fn build_result(segments: &[Segment], elapsed: Duration, text_len: usize) -> AnR
     }
 }
 
+fn map_an_segment(selection_keys: &[char; 9], page_count: usize, seg: Segment<'_>) -> AnSegment {
+    let page_num = seg.pos as usize / page_count;
+    AnSegment {
+        text: seg.text.iter().collect(),
+        code: seg.code.iter().collect(),
+        auto_select: seg.auto_select,
+        pos: seg.pos,
+        page_num,
+        select_key: selection_keys[seg.pos as usize % page_count],
+    }
+}
+
 fn main() {
     let args = Args::parse();
-    let start = Instant::now();
-    let dict = Dict::try_load(&args.table).expect("读取码表失败");
-    // let looker_new = Instant::now();
-    let looker = Looker::new(&dict);
-    // println!("初始化looker耗时: {:?}", looker_new.elapsed());
-    let load_table_time = Instant::now().duration_since(start);
-    println!(
-        "读取码表成功，加载[{}]个条目, 耗时[{:?}]",
-        dict.count(),
-        load_table_time
-    );
+
+    let ia = load_input_analyzer(&args.table).expect("读取码表或配置失败");
+    let dict = ia.main_dict();
+    let looker = Looker::new(dict);
+    let selection_keys = ia.get_selection_keys();
+    let page_count = ia.get_page_count();
+
     let article = {
         let mut article = String::new();
-        // .expect("无法从文本文件中读取内容，请确保该文件的编码格式为UTF-8");
         let mut file = File::open(args.input).expect("无法读取文本文件");
         file.read_to_string(&mut article).unwrap();
         article.chars().collect::<Vec<_>>()
     };
-    println!("读取文本成功");
 
     let start = Instant::now();
     let segments = looker.analyze(&article);
     let segments_time = start.elapsed();
-    let result = build_result(&segments, segments_time, article.len());
+    let result = build_result(
+        segments,
+        selection_keys,
+        page_count,
+        segments_time,
+        article.len(),
+    );
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
@@ -134,37 +196,95 @@ fn main() {
         // 洋红	35	45
         // 青色	36	46
         // 白色	37	47
-        let (colors, color_reset) = if args.color {
-            (
-                vec!["\x1b[30;47;1m", "\x1b[31;42;1m", "\x1b[37;40;1m"],
-                vec!["\x1b[0m".to_string()],
-            )
-        } else {
-            (vec![""], vec![])
-        };
-        let select_pos_map = vec!["¹", "²", "³", "⁴", "⁶", "⁶", "⁷", "⁸", "⁹", "^"];
-        let mut colors_id: usize = 0;
-        let codes = segments
-            .iter()
-            .map(|seg| {
-                colors_id += 1;
-                let mut str = colors[colors_id % colors.len()].to_string();
-                if args.with_text {
-                    str.extend(seg.text);
-                }
-                str.extend(seg.code);
-                if !seg.auto_select && seg.pos == 0 {
-                    str += "_";
-                } else if seg.pos > 0 {
-                    str += select_pos_map[(seg.pos as usize).min(select_pos_map.len() - 1)];
-                }
-                str
-            })
-            .chain(color_reset)
-            .collect::<String>();
+        let color = args
+            .color
+            .then_some(vec!["\x1b[30;47;1m", "\x1b[34;42;1m", "\x1b[37;45;1m"]);
+        let mut codes = String::new();
+        if !args.nocode {
+            codes.push_str("\n编码:\n");
+            result.codes.into_iter().enumerate().for_each(|(i, seg)| {
+                let _ = seg.write(
+                    &mut codes,
+                    args.with_text,
+                    args.alt_space.as_ref(),
+                    color.as_ref(),
+                    i,
+                );
+            });
+            if args.color {
+                codes.push_str("\x1b[0m");
+            }
+        }
         println!(
-            "计算耗时: {:?}\n平均码长: {}\n空格顶码次数: {}\n进行候选次数: {}\n编码:\n{}\n",
-            segments_time, result.mnpc, result.use_space_times, result.use_candidate_times, codes
+            "计算耗时: {}ms\n总字符数: {}\n总编码数: {}\n平均码长: {}\n空格顶码次数: {}\n进行候选次数: {}{}",
+            result.elapsed_ms,
+            result.text_len,
+            result.code_len,
+            result.mnpc,
+            result.use_space_times,
+            result.use_candidate_times,
+            codes
         );
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use senime_lib::lookup_code::Segment;
+
+    use crate::{AnSegment, map_an_segment};
+    impl AnSegment {
+        fn new(
+            text: &str,
+            code: &str,
+            pos: u16,
+            auto_select: bool,
+            page_num: usize,
+            select_key: char,
+        ) -> Self {
+            AnSegment {
+                text: text.to_string(),
+                code: code.to_string(),
+                pos,
+                auto_select,
+                page_num,
+                select_key,
+            }
+        }
+    }
+
+    #[test]
+    fn test_map_an_segment() {
+        let selection_keys = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+        let page_count = 4;
+        let text: Vec<char> = "abc".chars().collect();
+        let code: Vec<char> = "xy".chars().collect();
+        let seg = Segment {
+            text: &text,
+            code: &code,
+            pos: 9,
+            auto_select: false,
+            range: (0..0),
+            cost: 0,
+        };
+        let an_seg = map_an_segment(&selection_keys, page_count, seg);
+        assert_eq!(an_seg.page_num, 2);
+        assert_eq!(an_seg.select_key, 'B');
+    }
+
+    #[test]
+    fn test_an_segment_write() {
+        let segments = vec![
+            (AnSegment::new("abc", "abc", 0, true, 0, 'U'), "abc"),
+            (AnSegment::new("abc", "abc", 2, false, 0, 'O'), "abcO"),
+            (AnSegment::new("abc", "abc", 0, true, 3, 'U'), "abc⇟⇟⇟"),
+            (AnSegment::new("abc", "abc", 1, false, 3, 'I'), "abc⇟⇟⇟I"),
+        ];
+
+        segments.into_iter().for_each(|(seg, expected)| {
+            let mut str = String::new();
+            let _ = seg.write(&mut str, false, None, None, 0);
+            assert_eq!(expected, str);
+        });
     }
 }

@@ -249,9 +249,20 @@ impl InputAnalyzer {
         &self.dicts[0].1
     }
 
-    /// 获取码表元信息列表
+    pub fn get_dicts(&self) -> &Vec<(DictMeta, Dict)> {
+        &self.dicts
+    }
+
     pub fn dict_metas(&self) -> Vec<&DictMeta> {
         self.dicts.iter().map(|(m, _)| m).collect()
+    }
+
+    pub fn get_selection_keys(&self) -> &[char; 9] {
+        &self.selection_keys
+    }
+
+    pub fn get_page_count(&self) -> usize {
+        self.page_count
     }
 }
 
