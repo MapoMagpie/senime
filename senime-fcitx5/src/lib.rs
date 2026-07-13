@@ -620,7 +620,15 @@ impl SenimeState {
                 .into_iter()
                 .map(|(text, _, _)| text)
                 .collect();
-            let input = matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1);
+            let input = match &last_seg.2 {
+                Tag::Code(selection) => {
+                    if selection.dict_idx > 0 {
+                        self.set_aux_up("查".to_string());
+                    }
+                    Some(last_seg.1.to_vec())
+                }
+                _ => None,
+            };
             let text = self.make_preedit(last_seg.0, input);
             self.set_preedit(pre_text + &text);
             if result.pending {
@@ -643,7 +651,15 @@ impl SenimeState {
             .iter()
             .map(|(text, _, _)| text.as_str())
             .collect::<String>();
-        let last_input = matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1.to_vec());
+        let last_input = match &last_seg.2 {
+            Tag::Code(selection) => {
+                if selection.dict_idx > 0 {
+                    self.set_aux_up("查".to_string());
+                }
+                Some(last_seg.1.to_vec())
+            }
+            _ => None,
+        };
         // 当前段是code，如果上一段也是code或没有上一段，则继续语句流
         if is_code_tag(&last_seg)
             && (pre_segments.is_empty() || is_code_tag(pre_segments.last().unwrap()))
@@ -679,10 +695,18 @@ impl SenimeState {
             self.set_commit(pre_text);
         }
         if result.pending {
-            let input = matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1.to_vec());
+            let input = match &last_seg.2 {
+                Tag::Code(selection) => {
+                    if selection.dict_idx > 0 {
+                        self.set_aux_up("查".to_string());
+                    }
+                    Some(last_seg.1.to_vec())
+                }
+                _ => None,
+            };
+            self.input = last_seg.1;
             let preedit = self.make_preedit(last_seg.0, input);
             self.set_preedit(preedit);
-            self.input = last_seg.1;
             if let Some(cands) = result.candidates {
                 self.set_candidates(cands);
             }
