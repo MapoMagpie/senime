@@ -52,7 +52,7 @@ FCITX_CONFIGURATION(
                             "and commits text. Leave empty to use the same "
                             "character as Start."))};
     OptionWithAnnotation<bool, ToolTipAnnotation> defaultChineseMode{
-        this, "DefaultChineseMode", _("Default Chinese Mode"), false,
+        this, "DefaultChineseMode", _("Default Chinese Mode"), true,
         NoConstrain<bool>{}, DefaultMarshaller<bool>{},
         ToolTipAnnotation(_("Whether to enable Chinese mode by default."))};
     OptionWithAnnotation<bool, ToolTipAnnotation> sentenceFlow{
