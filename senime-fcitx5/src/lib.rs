@@ -308,25 +308,40 @@ impl SenimeState {
         }
     }
 
-    /// 设置 preedit，根据 config 组合文本和输入编码。
-    fn set_preedit(&mut self, text: String, input: Option<Vec<char>>) {
-        let preedit = match (
+    fn make_preedit(&mut self, text: String, input: Option<Vec<char>>) -> String {
+        match (
             self.config.enable_text_preedit,
             self.config.enable_input_preedit,
         ) {
-            (true, true) => {
-                if let Some(input) = input {
-                    format!("{text}{}", input.iter().collect::<String>())
-                } else {
-                    text
-                }
-            }
-            (true, false) => text,
-            (false, true) => input.unwrap_or(vec![]).iter().collect::<String>(),
+            (true, true) => format!(
+                "{}{}",
+                text,
+                input.unwrap_or(vec![]).iter().collect::<String>()
+            ),
+            (false, true) if let Some(input) = input => input.iter().collect(),
             (false, false) => String::new(),
-        };
-        if !preedit.is_empty() {
-            self.inner_state.preedit_str = into_c_string(preedit);
+            _ => text,
+        }
+    }
+    /// 设置 preedit，根据 config 组合文本和输入编码。
+    fn set_preedit(&mut self, text: String) {
+        // let preedit = match (
+        //     self.config.enable_text_preedit,
+        //     self.config.enable_input_preedit,
+        // ) {
+        //     (true, true) => {
+        //         if let Some(input) = input {
+        //             format!("{text}{}", input.iter().collect::<String>())
+        //         } else {
+        //             text
+        //         }
+        //     }
+        //     (true, false) => text,
+        //     (false, true) => input.unwrap_or(vec![]).iter().collect::<String>(),
+        //     (false, false) => String::new(),
+        // };
+        if !text.is_empty() {
+            self.inner_state.preedit_str = into_c_string(text);
         }
     }
 
@@ -552,7 +567,7 @@ impl SenimeState {
                 self.input.clear();
                 self.segments.clear();
             } else {
-                self.set_preedit(String::new(), None);
+                self.set_preedit(self.input.iter().collect());
             }
             return;
         }
@@ -561,7 +576,7 @@ impl SenimeState {
         if result.segments.is_empty() {
             self.input.clear();
             self.segments.clear();
-            self.set_preedit(String::new(), None);
+            self.set_preedit(String::new());
             return;
         }
         // 保存分段结果，用于语句流/临时中文模式下的按段回退
@@ -585,7 +600,7 @@ impl SenimeState {
     }
 
     /// 临时中文模式：trigger char范围内，所有文本保持在preedit
-    fn update_mode_temp_chinese(&mut self, result: AnalysisResult) {
+    fn update_mode_temp_chinese(&mut self, mut result: AnalysisResult) {
         if self
             .config
             .trigger_chars
@@ -598,14 +613,16 @@ impl SenimeState {
             self.segments.clear();
         } else {
             // 临时中文模式未决
-            let input = result
-                .segments
-                .last()
-                .map(|(_, origin, tag)| matches!(tag, Tag::Code(_)).then_some(origin.to_vec()))
-                .flatten();
             self.segments = result.segments.clone();
-            let text = result.segments.into_iter().map(|seg| seg.0).collect();
-            self.set_preedit(text, input);
+            let last_seg = result.segments.pop().unwrap();
+            let pre_text: String = result
+                .segments
+                .into_iter()
+                .map(|(text, _, _)| text)
+                .collect();
+            let input = matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1);
+            let text = self.make_preedit(last_seg.0, input);
+            self.set_preedit(pre_text + &text);
             if result.pending {
                 if let Some(cands) = result.candidates {
                     self.set_candidates(cands);
@@ -616,37 +633,34 @@ impl SenimeState {
 
     /// 语句流模式：文本保持在preedit，仅在标点或unknown(text非空)时提交
     fn update_mode_sentence_flow(&mut self, result: AnalysisResult) {
-        let mut pre_segments = result.segments.clone();
+        self.segments = result.segments.clone();
+        let mut pre_segments = result.segments;
         let last_seg = pre_segments.pop().unwrap();
         let is_code_tag = |seg: &(String, Vec<char>, Tag)| {
             matches!(seg.2, Tag::Code(_)) || (matches!(seg.2, Tag::Unknown) && seg.0.is_empty())
         };
+        let pre_text = pre_segments
+            .iter()
+            .map(|(text, _, _)| text.as_str())
+            .collect::<String>();
+        let last_input = matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1.to_vec());
         // 当前段是code，如果上一段也是code或没有上一段，则继续语句流
         if is_code_tag(&last_seg)
             && (pre_segments.is_empty() || is_code_tag(pre_segments.last().unwrap()))
         {
-            let input = result
-                .segments
-                .last()
-                .map(|(_, origin, tag)| matches!(tag, Tag::Code(_)).then_some(origin.to_vec()))
-                .flatten();
-            self.segments = result.segments.clone();
-            let text = result.segments.into_iter().map(|seg| seg.0).collect();
-            self.set_preedit(text, input);
+            let text = self.make_preedit(last_seg.0, last_input);
+            self.set_preedit(pre_text + &text);
             if let Some(cands) = result.candidates {
                 self.set_candidates(cands);
             }
         } else {
-            // 当前段不是code ，则先将之前的段上屏，再根据pending走正常的流程。
-            let pre_text = pre_segments.into_iter().map(|seg| seg.0).collect();
-            self.set_commit(pre_text);
             self.segments.clear();
+            // 当前段不是code ，则先将之前的段上屏，再根据pending走正常的流程。
+            self.set_commit(pre_text);
             if result.pending {
-                self.set_preedit(
-                    last_seg.0,
-                    matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1.to_vec()),
-                );
                 self.input = last_seg.1;
+                let preedit = self.make_preedit(last_seg.0, last_input);
+                self.set_preedit(preedit);
             } else {
                 self.input.clear();
                 self.set_commit(last_seg.0);
@@ -659,25 +673,22 @@ impl SenimeState {
 
     /// 正常中文模式：中间段提交，最后一段preedit
     fn update_mode_normal(&mut self, mut result: AnalysisResult) {
-        let last_seg = result.segments.pop();
+        let last_seg = result.segments.pop().unwrap();
         let pre_text: String = result.segments.into_iter().map(|seg| seg.0).collect();
         if !pre_text.is_empty() {
             self.set_commit(pre_text);
         }
-        if let Some(last) = last_seg {
-            if result.pending {
-                self.set_preedit(
-                    last.0,
-                    matches!(last.2, Tag::Code(_)).then_some(last.1.to_vec()),
-                );
-                self.input = last.1;
-                if let Some(cands) = result.candidates {
-                    self.set_candidates(cands);
-                }
-            } else {
-                self.set_commit(last.0);
-                self.input.clear();
+        if result.pending {
+            let input = matches!(last_seg.2, Tag::Code(_)).then_some(last_seg.1.to_vec());
+            let preedit = self.make_preedit(last_seg.0, input);
+            self.set_preedit(preedit);
+            self.input = last_seg.1;
+            if let Some(cands) = result.candidates {
+                self.set_candidates(cands);
             }
+        } else {
+            self.set_commit(last_seg.0);
+            self.input.clear();
         }
     }
 }
@@ -695,7 +706,7 @@ impl SenimeState {
         };
         if self.input.len() < *code_len + 1 {
             let preedit: String = self.input.iter().collect();
-            self.set_preedit(preedit, None);
+            self.set_preedit(preedit);
             true
         } else {
             let commit_text = text.clone();
