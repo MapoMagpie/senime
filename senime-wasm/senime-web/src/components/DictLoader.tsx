@@ -1,7 +1,7 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import type { DictStatus } from "../hooks/useDictLoader";
 
-const PRESETS: { label: string; keys: string[] }[] = [
+const KEY_PRESETS: { label: string; keys: string[] }[] = [
   { label: "1-9", keys: ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
   { label: ";'+数字", keys: [";", "'", "3", "4", "5", "6", "7", "8", "9"] },
   { label: "UIOP+数字", keys: ["U", "I", "O", "P", "5", "6", "7", "8", "9"] },
@@ -11,34 +11,113 @@ interface Props {
   status: DictStatus;
   imeReady: boolean;
   selectionKeys: string[];
+  pageCount: number;
   onSelectionKeysChange: (keys: string[]) => void;
-  onUpload: (file: File, keys: string[]) => void;
+  onPageCountChange: (count: number) => void;
+  onUpload: (text: string, keys: string[], count: number) => void;
 }
 
-export function DictLoader({ status, imeReady, selectionKeys, onSelectionKeysChange, onUpload }: Props) {
+/** 解析 index.txt 的一行，格式：名称|地址。
+ *  地址不含 http → 拼接本地路径；含 http → 直接用作远程 URL。 */
+function parsePresetLine(line: string): { label: string; url: string } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const idx = trimmed.indexOf("|");
+  if (idx === -1) return null;
+  const label = trimmed.slice(0, idx).trim();
+  const addr = trimmed.slice(idx + 1).trim();
+  if (!label || !addr) return null;
+  const url = /^https?:\/\//.test(addr) ? addr : `/assets/tables/${addr}`;
+  return { label, url };
+}
+
+export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelectionKeysChange, onPageCountChange, onUpload }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [presets, setPresets] = useState<{ label: string; url: string }[] | null>(null);
+  const [tableUrl, setTableUrl] = useState<string | null>(null);
+  const [tableLabel, setTableLabel] = useState<string | null>(null);
 
   const collapsed = imeReady && !expanded;
 
-  const handleConfirm = () => {
+  // 点击外部关闭悬浮菜单
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [menuOpen]);
+
+  const handleConfirm = async () => {
     setLocalError(null);
     const files = fileRef.current?.files;
-    if (!files || files.length === 0) {
-      setLocalError("请先选择码表文件");
+    if (files && files.length > 0 && files[0].size > 0) {
+      // 用户手动上传了文件
+      try {
+        onUpload(await files[0].text(), selectionKeys, pageCount);
+      } catch (e) {
+        setLocalError(`读取文件失败: ${e}`);
+      }
+    } else if (tableUrl) {
+      // 用户选择了预设码表
+      try {
+        const resp = await fetch(tableUrl);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+        onUpload(await resp.text(), selectionKeys, pageCount);
+      } catch (e) {
+        setLocalError(`加载预设码表失败: ${e}`);
+      }
+    } else {
+      setLocalError("请先选择码表文件或预设码表");
+    }
+  };
+
+  const handlePresetBtn = useCallback(async () => {
+    setLocalError(null);
+    // 已缓存则直接切换菜单，否则请求 index.txt
+    if (presets !== null) {
+      setMenuOpen((v) => !v);
       return;
     }
-    const file = files[0];
-    if (file.size === 0) {
-      setLocalError("码表文件为空");
-      return;
+    setMenuOpen(true);
+    try {
+      const resp = await fetch("/assets/tables/index.txt");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const text = await resp.text();
+      const list = text
+        .split("\n")
+        .map(parsePresetLine)
+        .filter((p): p is { label: string; url: string } => p !== null);
+      setPresets(list);
+    } catch {
+      setPresets([]);
+      setMenuOpen(false);
     }
-    onUpload(file, selectionKeys);
+  }, [presets]);
+
+  const handlePresetSelect = (url: string, label: string) => {
+    setMenuOpen(false);
+    setTableUrl(url);
+    setTableLabel(label);
+    // 选择了预设则清除文件选择
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const handleFileChange = () => {
+    // 用户选择了文件则清除预设选择
+    setTableUrl(null);
+    setTableLabel(null);
   };
 
   const handleSlotChange = (index: number, value: string) => {
-    const ch = value.slice(-1); // 只取最后一个字符
+    const ch = value.slice(-1);
     const next = [...selectionKeys];
     next[index] = ch;
     onSelectionKeysChange(next);
@@ -60,14 +139,45 @@ export function DictLoader({ status, imeReady, selectionKeys, onSelectionKeysCha
       <div className="selection-keys-section">
         <h2>码表加载</h2>
         <div className="dict-controls">
-          <input ref={fileRef} type="file" accept=".txt" />
+          <input ref={fileRef} type="file" accept=".txt" onChange={handleFileChange} />
+          <div className="preset-dropdown" ref={menuRef}>
+            <button
+              className="preset-toggle-btn"
+              disabled={status.state === "loading"}
+              onClick={handlePresetBtn}
+            >
+              预设码表 ▾
+            </button>
+            {tableLabel && (
+              <span className="preset-selected">已选择: {tableLabel}</span>
+            )}
+            {menuOpen && (
+              <div className="preset-menu">
+                {presets === null ? (
+                  <span className="preset-menu-loading">加载中...</span>
+                ) : presets.length === 0 ? (
+                  <span className="preset-menu-empty">暂无预设</span>
+                ) : (
+                  presets.map((p) => (
+                    <button
+                      key={p.url}
+                      className="preset-menu-item"
+                      onClick={() => handlePresetSelect(p.url, p.label)}
+                    >
+                      {p.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="selection-keys-section">
         <h2>候选键配置</h2>
         <div className="presets">
-          {PRESETS.map((p) => (
+          {KEY_PRESETS.map((p) => (
             <button
               key={p.label}
               className="preset-btn"
@@ -88,6 +198,21 @@ export function DictLoader({ status, imeReady, selectionKeys, onSelectionKeysCha
               onChange={(e) => handleSlotChange(i, e.target.value)}
             />
           ))}
+        </div>
+      </div>
+
+      <div className="selection-keys-section">
+        <h2>候选数量</h2>
+        <div className="page-count-row">
+          <input
+            type="range"
+            className="page-count-slider"
+            min={1}
+            max={9}
+            value={pageCount}
+            onChange={(e) => onPageCountChange(Number(e.target.value))}
+          />
+          <span className="page-count-value">{pageCount}</span>
         </div>
       </div>
 

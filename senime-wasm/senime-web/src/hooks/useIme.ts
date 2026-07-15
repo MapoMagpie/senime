@@ -5,6 +5,10 @@ export interface CandidateItem {
   text: string;
   order: number;
   selectKey: string;
+  /** 该候选项对应的完整编码 */
+  code: string;
+  /** 用户当前已输入的原始编码 */
+  origin: string;
 }
 
 export interface ImeState {
@@ -13,12 +17,15 @@ export interface ImeState {
   /** 最后一段的查询结果文本（高亮显示） */
   preeditText: string;
   candidates: CandidateItem[];
+  /** 最后一段的标签名 */
+  lastTag: string;
 }
 
 const EMPTY_STATE: ImeState = {
   preedit: "",
   preeditText: "",
   candidates: [],
+  lastTag: "",
 };
 
 /** execCommand 回退，用于 navigator.clipboard 不可用时（如 HTTP 环境） */
@@ -45,7 +52,7 @@ function runCompletion(
 ) {
   if (!preedit) {
     setState((s) => {
-      if (s.candidates.length > 0) return { preedit: "", preeditText: "", candidates: [] };
+      if (s.candidates.length > 0) return { preedit: "", preeditText: "", candidates: [], lastTag: "" };
       return s;
     });
     return;
@@ -55,10 +62,10 @@ function runCompletion(
   const segCount = result.segment_count;
 
   let pending = result.pending;
-  const segments: { text: string; origin: string }[] = [];
+  const segments: { text: string; origin: string; tagName: string }[] = [];
   for (let i = 0; i < segCount; i++) {
     const seg = result.segment(i);
-    segments.push({ text: seg.text, origin: seg.origin });
+    segments.push({ text: seg.text, origin: seg.origin, tagName: seg.tag_name });
     seg.free();
   }
 
@@ -66,7 +73,7 @@ function runCompletion(
   if (result.has_candidates) {
     for (let i = 0; i < result.candidate_count; i++) {
       const c = result.candidate(i);
-      cands.push({ text: c.text, order: c.order, selectKey: c.select_key });
+      cands.push({ text: c.text, order: c.order, selectKey: c.select_key, code: c.code, origin: c.origin });
       c.free();
     }
   }
@@ -89,7 +96,7 @@ function runCompletion(
       const pos = ta.selectionStart;
       ta.setRangeText(preedit, pos, pos, "end");
     }
-    setState({ preedit: "", preeditText: "", candidates: [] });
+    setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
     recalc();
     return;
   }
@@ -97,14 +104,14 @@ function runCompletion(
   // 未决中
   if (pending) {
     // 有候选：中间段提交到 textarea，最后一段作为 preedit
-    setState({ preedit: lastSeg.origin, preeditText: lastSeg.text, candidates: cands });
+    setState({ preedit: lastSeg.origin, preeditText: lastSeg.text, candidates: cands, lastTag: lastSeg.tagName });
     recalc();
   } else {
     if (ta) {
       const pos = ta.selectionStart;
       ta.setRangeText(lastSeg.text, pos, pos, "end");
     }
-    setState({ preedit: "", preeditText: "", candidates: [] });
+    setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
     recalc();
 
   }
@@ -189,7 +196,7 @@ export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextA
             const pos = ta.selectionStart;
             ta.setRangeText(s.preedit, pos, pos, "end");
           }
-          setState({ preedit: "", preeditText: "", candidates: [] });
+          setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
           recalc();
           return;
         }
@@ -205,7 +212,15 @@ export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextA
         // Escape: 清空 preedit
         if (e.key === "Escape") {
           e.preventDefault();
-          setState({ preedit: "", preeditText: "", candidates: [] });
+          setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
+          return;
+        }
+
+        // PageUp / PageDown: 翻页（追加翻页字符到 preedit）
+        if (e.key === "PageUp" || e.key === "PageDown") {
+          e.preventDefault();
+          const ch = e.key === "PageUp" ? "\u21DE" : "\u21DF"; // ⇞ / ⇟
+          runCompletion(s.preedit + ch, textareaRef, setState, recalc);
           return;
         }
 

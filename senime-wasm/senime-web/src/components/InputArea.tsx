@@ -68,7 +68,7 @@ export function InputArea({ state, imeReady, textareaRef, onKeyDown, cursorPos }
                 {state.preeditText && (
                   <span className="preedit-text">{state.preeditText}</span>
                 )}
-                {state.preedit && (
+                {state.preedit && state.lastTag === "Code" && (
                   <span className="preedit-code">{state.preedit}</span>
                 )}
               </>
@@ -93,6 +93,11 @@ export function InputArea({ state, imeReady, textareaRef, onKeyDown, cursorPos }
               >
                 <span className="candidate-key">{c.selectKey}</span>
                 <span className="candidate-text">{c.text}</span>
+                {c.code.startsWith(c.origin) && c.code.length > c.origin.length && (
+                  <span className="candidate-hint">
+                    {c.code.slice(c.origin.length)}
+                  </span>
+                )}
               </span>
             ))}
           </div>

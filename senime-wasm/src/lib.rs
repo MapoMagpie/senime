@@ -64,7 +64,7 @@ impl JsSegment {
     pub fn origin(&self) -> String {
         self.origin.clone()
     }
-    /// 标签名: "Normal" | "Selection" | "Punctuation" | "SelectionForPunc" | "Escape" | "Secondary" | "SelectionForSecondary" | "Unknown"
+    /// 标签名: "Code" | "Punctuation" | "Escape" | "Unknown"
     #[wasm_bindgen(getter)]
     pub fn tag_name(&self) -> String {
         self.tag_name.clone()

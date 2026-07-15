@@ -9,7 +9,7 @@ import { ActionBar } from "./components/ActionBar";
 export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { pos, recalc } = useCursorPos(textareaRef);
-  const { status, imeReady, selectionKeys, setSelectionKeys, uploadDict } = useDictLoader();
+  const { status, imeReady, selectionKeys, setSelectionKeys, pageCount, setPageCount, uploadDict } = useDictLoader();
   const {
     state, handleKeyDown, clear, copyText, copyAndClear,
   } = useIme(imeReady, textareaRef, recalc);
@@ -39,7 +39,9 @@ export default function App() {
         status={status}
         imeReady={imeReady}
         selectionKeys={selectionKeys}
+        pageCount={pageCount}
         onSelectionKeysChange={setSelectionKeys}
+        onPageCountChange={setPageCount}
         onUpload={uploadDict}
       />
       <InputArea
@@ -55,9 +57,6 @@ export default function App() {
         onCopy={copyText}
         onCopyAndClear={copyAndClear}
       />
-      <div className="help-text">
-        <p>输入编码自动上屏 · <kbd>1</kbd>-<kbd>9</kbd> 选重 · <kbd>Enter</kbd> 提交原始编码 · <kbd>Ctrl+C</kbd> 复制 · <kbd>Ctrl+X</kbd> 清空 · <kbd>Ctrl+Shift+X</kbd> 复制并清空</p>
-      </div>
     </div>
   );
 }

@@ -39,9 +39,12 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 100%;
-  max-width: 38em;
+  width: clamp(38em, 100%, 38em);
   padding: 2rem 1rem;
+}
+
+.app {
+  width: 100%;
 }
 
 .app-header {
@@ -127,9 +130,65 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .dict-controls input[type="file"] {
+  font-size: 0.85rem;
+  color: var(--fg-dim);
+}
+
+/* --- 预设码表下拉菜单 --- */
+.preset-dropdown {
+  position: relative;
+}
+
+.preset-toggle-btn {
+  font-size: 0.85rem;
+  padding: 0.35em 0.75em;
+}
+
+.preset-selected {
+  font-size: 0.8rem;
+  color: var(--green);
+}
+
+.preset-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.25rem;
+  min-width: 14em;
+  max-height: 18em;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem 0;
+}
+
+.preset-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  padding: 0.4em 0.75em;
+  font-size: 0.85rem;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.preset-menu-item:hover {
+  background: var(--bg-highlight);
+}
+
+.preset-menu-loading,
+.preset-menu-empty {
+  padding: 0.4em 0.75em;
   font-size: 0.85rem;
   color: var(--fg-dim);
 }
@@ -204,6 +263,27 @@ body {
   border-color: var(--accent);
 }
 
+/* --- 候选数量 --- */
+.page-count-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.page-count-slider {
+  flex: 1;
+  max-width: 12em;
+  accent-color: var(--accent);
+}
+
+.page-count-value {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--fg);
+  min-width: 1.5em;
+  text-align: center;
+}
+
 /* --- 按钮 --- */
 button {
   border: 1px solid var(--border);
@@ -253,10 +333,6 @@ button:disabled {
   overflow: hidden;
   box-shadow: var(--shadow-lg);
   transition: border-color 0.15s;
-}
-
-.ime-textarea:focus {
-  border-color: var(--accent);
 }
 
 /* --- overlay 显示层 --- */
@@ -335,8 +411,6 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
-  overflow-y: auto;
-  max-height: 10rem;
   pointer-events: auto;
 }
 
@@ -369,27 +443,20 @@ button:disabled {
   font-family: var(--font-mono);
 }
 
+.candidate-hint {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--fg-dim);
+  margin-left: 0.15em;
+}
+
 /* --- 操作栏 --- */
 .action-bar {
   width: 100%;
   display: flex;
   gap: 0.5rem;
   margin-top: 1.5rem;
-  margin-bottom: 1rem;
+  margin-bottom: 2.5rem;
 }
 
-/* --- 帮助文本 --- */
-.help-text {
-  font-size: 0.8rem;
-  color: var(--fg-dim);
-}
 
-.help-text kbd {
-  display: inline-block;
-  padding: 0.1em 0.4em;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  font-family: var(--font-mono);
-  font-size: 0.8em;
-  background: var(--bg-highlight);
-}

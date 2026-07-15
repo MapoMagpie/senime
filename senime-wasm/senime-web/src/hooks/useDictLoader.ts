@@ -6,6 +6,7 @@ const DICT_KEY = "dict_bin";
 const CONFIG_KEY = "dict_config";
 
 const DEFAULT_SELECTION_KEYS: string[] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+const DEFAULT_PAGE_COUNT = 5;
 
 export type DictStatus =
   | { state: "loading" }
@@ -19,7 +20,7 @@ export function useDictLoader() {
   const [status, setStatus] = useState<DictStatus>({ state: "wasm_init" });
   const [imeReady, setImeReady] = useState(false);
   const [selectionKeys, setSelectionKeys] = useState<string[]>(DEFAULT_SELECTION_KEYS);
-
+  const [pageCount, setPageCount] = useState(DEFAULT_PAGE_COUNT);
   // 初始化 WASM 并尝试从缓存加载
   useEffect(() => {
     (async () => {
@@ -31,6 +32,9 @@ export function useDictLoader() {
           const cfg = JSON.parse(cachedConfig);
           if (cfg.selection_keys) {
             setSelectionKeys(cfg.selection_keys);
+          }
+          if (typeof cfg.page_count === "number") {
+            setPageCount(cfg.page_count);
           }
           load_bin(cached, cachedConfig);
           setImeReady(true);
@@ -44,12 +48,11 @@ export function useDictLoader() {
     })();
   }, []);
 
-  // 用户上传 txt 码表文件
-  const uploadDict = useCallback(async (file: File, keys: string[]) => {
+  // 用户传入码表文本内容进行加载
+  const uploadDict = useCallback(async (text: string, keys: string[], count: number) => {
     try {
       setStatus({ state: "loading" });
-      const text = await file.text();
-      const config = JSON.stringify({ selection_keys: keys });
+      const config = JSON.stringify({ selection_keys: keys, page_count: count });
       const bin = init_ime(text, config);
       await Promise.all([saveFile(DICT_KEY, bin), saveFile(CONFIG_KEY, config)]);
       setImeReady(true);
@@ -59,5 +62,5 @@ export function useDictLoader() {
     }
   }, []);
 
-  return { status, imeReady, selectionKeys, setSelectionKeys, uploadDict };
+  return { status, imeReady, selectionKeys, setSelectionKeys, pageCount, setPageCount, uploadDict };
 }
