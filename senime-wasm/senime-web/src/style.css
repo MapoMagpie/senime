@@ -1,15 +1,19 @@
 :root {
-  --bg: #1a1b26;
-  --bg-surface: #24283b;
-  --bg-highlight: #292e42;
-  --fg: #c0caf5;
-  --fg-dim: #565f89;
-  --accent: #7aa2f7;
-  --accent-secondary: #2ac3de;
-  --green: #9ece6a;
-  --red: #f7768e;
-  --yellow: #e0af68;
-  --border: #3b4261;
+  --bg: #ececf0;
+  --bg-surface: #ffffff;
+  --bg-highlight: #f4f4f8;
+  --fg: #2a2a3c;
+  --fg-dim: #8e8ea8;
+  --accent: #4a6cf7;
+  --accent-secondary: #0ea5c0;
+  --green: #3d9a3d;
+  --red: #d94a5d;
+  --yellow: #c08020;
+  --border: #1a1a2e;
+  --border-strong: 2px solid var(--border);
+  --shadow-sm: 3px 3px 0 0 rgba(0, 0, 0, 0.12);
+  --shadow-lg: 6px 6px 0 0 rgba(0, 0, 0, 0.12),
+    12px 12px 0 0 rgba(0, 0, 0, 0.06);
   --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 16px;
@@ -28,28 +32,70 @@ body {
   min-height: 100vh;
   display: flex;
   justify-content: center;
+  align-items: center;
 }
 
 #root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   width: 100%;
-  max-width: 640px;
+  max-width: 38em;
   padding: 2rem 1rem;
+}
+
+.app-header {
+  width: 100%;
+  margin-bottom: 1.5rem;
+}
+
+.app-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
 }
 
 .app-title {
   font-size: 1.5rem;
-  font-weight: 600;
-  margin-bottom: 1.5rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.app-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font-size: 0.85rem;
+  color: var(--fg-dim);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.app-github:hover {
   color: var(--accent);
+}
+
+.app-github-icon {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+.app-subtitle {
+  font-size: 0.85rem;
+  color: var(--fg-dim);
+  margin-top: 0.25rem;
 }
 
 /* --- 码表加载 --- */
 .dict-loader {
+  width: 100%;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: var(--border-strong);
+  border-radius: 0;
   padding: 1rem;
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-lg);
 }
 
 .dict-loader h2 {
@@ -149,7 +195,7 @@ body {
   color: var(--fg);
   background: var(--bg-highlight);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 0;
   outline: none;
   transition: border-color 0.15s;
 }
@@ -161,7 +207,7 @@ body {
 /* --- 按钮 --- */
 button {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 0.4em 1em;
   font-size: 0.85rem;
   font-family: inherit;
@@ -183,13 +229,15 @@ button:disabled {
 
 /* --- 输入区 --- */
 .input-area {
-  margin-bottom: 1rem;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: calc(100vh - 14rem);
   position: relative;
 }
 
 .ime-textarea {
   width: 100%;
-  min-height: 20rem;
+  height: 100%;
   padding: 1rem;
   font-family: var(--font-mono);
   font-size: 1.1rem;
@@ -197,12 +245,13 @@ button:disabled {
   color: transparent;
   caret-color: var(--fg);
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: var(--border-strong);
+  border-radius: 0;
   outline: none;
-  resize: vertical;
+  resize: none;
   word-break: break-all;
   overflow: hidden;
+  box-shadow: var(--shadow-lg);
   transition: border-color 0.15s;
 }
 
@@ -269,9 +318,9 @@ button:disabled {
   gap: 0.25rem;
   padding: 0.35rem 0.5rem;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  border: var(--border-strong);
+  border-radius: 0;
+  box-shadow: var(--shadow-sm);
   pointer-events: none;
   white-space: nowrap;
   max-width: max-content;
@@ -296,7 +345,7 @@ button:disabled {
   align-items: center;
   gap: 0.25rem;
   padding: 0.2em 0.6em;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   font-size: 0.95rem;
   transition: background 0.1s;
@@ -322,8 +371,10 @@ button:disabled {
 
 /* --- 操作栏 --- */
 .action-bar {
+  width: 100%;
   display: flex;
   gap: 0.5rem;
+  margin-top: 1.5rem;
   margin-bottom: 1rem;
 }
 
@@ -337,7 +388,7 @@ button:disabled {
   display: inline-block;
   padding: 0.1em 0.4em;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 0;
   font-family: var(--font-mono);
   font-size: 0.8em;
   background: var(--bg-highlight);
