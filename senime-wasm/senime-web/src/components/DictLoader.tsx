@@ -18,9 +18,8 @@ interface Props {
   onCollapse?: () => void;
 }
 
-/** 解析 index.txt 的一行，格式：名称|地址。
- *  地址不含 http → 拼接本地路径；含 http → 直接用作远程 URL。 */
-function parsePresetLine(line: string): { label: string; url: string } | null {
+/** 解析 index.txt 的一行，格式：码表名|文件名。 */
+function parsePresetLine(parent: string ,line: string): { label: string; url: string } | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   const idx = trimmed.indexOf("|");
@@ -28,7 +27,7 @@ function parsePresetLine(line: string): { label: string; url: string } | null {
   const label = trimmed.slice(0, idx).trim();
   const addr = trimmed.slice(idx + 1).trim();
   if (!label || !addr) return null;
-  const url = /^https?:\/\//.test(addr) ? addr : `/assets/tables/${addr}`;
+  const url = parent + addr;
   return { label, url };
 }
 
@@ -90,12 +89,13 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
     }
     setMenuOpen(true);
     try {
-      const resp = await fetch("/assets/tables/index.txt");
+      const path = import.meta.env.VITE_TABLES_BASE;
+      const resp = await fetch(path + "index.txt");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const text = await resp.text();
       const list = text
         .split("\n")
-        .map(parsePresetLine)
+        .map(line => parsePresetLine(path, line))
         .filter((p): p is { label: string; url: string } => p !== null);
       setPresets(list);
     } catch {

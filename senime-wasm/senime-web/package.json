@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && cp -r assets/tables dist/assets/",
+    "build:remote": "tsc && vite build --mode remote",
     "preview": "vite preview"
   },
   "devDependencies": {
