@@ -106,7 +106,7 @@ export function useIme(
           seg.free();
         }
 
-        console.log("completion pending: ", result.pending, " segments:", segments);
+        // console.log("completion pending: ", result.pending, " segments:", segments);
         const cands: CandidateItem[] = [];
         if (result.has_candidates) {
           for (let i = 0; i < result.candidate_count; i++) {
@@ -135,6 +135,7 @@ export function useIme(
         // 无分段：整段提交原始输入
         if (!lastSeg) {
           inputRef.current = "";
+          setCandidates([]);
           return;
         }
         if (pending) {
@@ -142,21 +143,22 @@ export function useIme(
           range.insertNode(preeditSpan);
           range.collapse(true);
           preeditSpan.scrollIntoView()
-          // let rect = preeditSpan.getBoundingClientRect();
-          let rect = range.getBoundingClientRect();
+          let rect = preeditSpan.getBoundingClientRect();
           setCaretPos({ left: rect.left, top: rect.top + rect.height + 2, showAbove: false });
-          setCandidates(cands);
           inputRef.current = lastSeg.origin;
+          setCandidates(cands);
         } else {
           inputRef.current = "";
-          range.insertNode(document.createTextNode(lastSeg.text));
-          range.collapse(false);
+          setCandidates([]);
+          if (lastSeg.text) {
+            range.insertNode(document.createTextNode(lastSeg.text));
+            range.collapse(false);
+          }
           if (range.commonAncestorContainer.nodeType == Node.TEXT_NODE) {
             range.commonAncestorContainer.parentElement?.scrollIntoView();
           } else {
             (range.commonAncestorContainer as HTMLElement).scrollIntoView();
           };
-          setCandidates([]);
         }
       } catch (err) {
         console.error(err);
