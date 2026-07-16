@@ -13,8 +13,7 @@
   --border: #1a1a2e;
   --border-strong: 2px solid var(--border);
   --shadow-sm: 3px 3px 0 0 rgba(0, 0, 0, 0.12);
-  --shadow-lg: 6px 6px 0 0 rgba(0, 0, 0, 0.12),
-    12px 12px 0 0 rgba(0, 0, 0, 0.06);
+  --shadow-lg: 6px 6px 0 0 rgba(0, 0, 0, 0.12), 12px 12px 0 0 rgba(0, 0, 0, 0.06);
   --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 16px;
@@ -490,4 +489,7 @@ button:disabled {
   margin-bottom: 2.5rem;
 }
 
-
+.action-bar button {
+  box-shadow: var(--shadow-lg);
+  border: var(--border-strong);
+}
