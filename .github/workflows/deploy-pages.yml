@@ -1,0 +1,42 @@
+name: Deploy Senime-web
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: 启用 Nix Flakes
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: 构建 WASM
+        run: nix develop .#wasm -c bash -c "cd senime-wasm && wasm-pack build --target web"
+
+      - name: 构建前端
+        run: nix develop .#wasm -c bash -c "cd senime-wasm/senime-web && npm install && npm run build:remote"
+
+      - name: 上传 Pages 产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: senime-wasm/senime-web/dist
+
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

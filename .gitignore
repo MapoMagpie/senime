@@ -6,7 +6,7 @@ senime-fcitx5/build
 .cache
 compile_commands.json
 result
-.github
+.github/copilot-instructions.md
 fcitx5.sh
 CLAUDE.md
 senime-wasm/senime-web/assets/tables
