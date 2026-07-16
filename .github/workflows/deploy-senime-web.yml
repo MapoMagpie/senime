@@ -30,7 +30,14 @@ jobs:
         run: nix develop .#wasm -c bash -c "cd senime-wasm && wasm-pack build --target web"
 
       - name: 构建前端
-        run: nix develop .#wasm -c bash -c "cd senime-wasm/senime-web && npm install && npm run build:remote"
+        env:
+          VITE_BASE: /senime/
+        run: nix develop .#wasm -c bash -c "cd senime-wasm/senime-web && npm install && npm run build"
+
+      - name: 下载码表
+        run: |
+          curl -L -o /tmp/tables.zip https://github.com/MapoMagpie/senime/releases/download/assets/tables.zip
+          unzip -o /tmp/tables.zip -d senime-wasm/senime-web/dist/assets/tables/
 
       - name: 上传 Pages 产物
         uses: actions/upload-pages-artifact@v3

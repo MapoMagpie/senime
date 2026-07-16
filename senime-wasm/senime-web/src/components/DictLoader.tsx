@@ -89,7 +89,7 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
     }
     setMenuOpen(true);
     try {
-      const path = import.meta.env.VITE_TABLES_BASE;
+      const path = import.meta.env.BASE_URL + "assets/tables/";
       const resp = await fetch(path + "index.txt");
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const text = await resp.text();
