@@ -15,6 +15,7 @@ interface Props {
   onSelectionKeysChange: (keys: string[]) => void;
   onPageCountChange: (count: number) => void;
   onUpload: (text: string, keys: string[], count: number) => void;
+  onCollapse?: () => void;
 }
 
 /** 解析 index.txt 的一行，格式：名称|地址。
@@ -31,7 +32,7 @@ function parsePresetLine(line: string): { label: string; url: string } | null {
   return { label, url };
 }
 
-export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelectionKeysChange, onPageCountChange, onUpload }: Props) {
+export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelectionKeysChange, onPageCountChange, onUpload, onCollapse }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -222,7 +223,7 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
             确认加载
           </button>
           {imeReady && (
-            <button onClick={() => setExpanded(false)}>
+            <button onClick={() => { setExpanded(false); onCollapse?.(); }}>
               收起
             </button>
           )}

@@ -9,7 +9,34 @@ interface Props {
   caretPos: CaretPosition;
 }
 
+/** 将光标放到编辑器文本末尾 */
+function placeCaretAtEnd(editor: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  const lastChild = editor.lastChild;
+  if (lastChild) {
+    if (lastChild.nodeType === Node.TEXT_NODE) {
+      range.setStart(lastChild, lastChild.textContent?.length ?? 0);
+    } else {
+      range.setStartAfter(lastChild);
+    }
+  } else {
+    range.setStart(editor, 0);
+  }
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 export function InputArea({ candidates, imeReady, editorRef, onKeyDown, caretPos }: Props) {
+  // 聚焦时将光标放到文本末尾
+  const handleFocus = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    requestAnimationFrame(() => placeCaretAtEnd(editor));
+  }, [editorRef]);
+
   // 粘贴时只保留纯文本
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     e.preventDefault();
@@ -37,6 +64,7 @@ export function InputArea({ candidates, imeReady, editorRef, onKeyDown, caretPos
         suppressContentEditableWarning
         onKeyDown={onKeyDown}
         onPaste={handlePaste}
+        onFocus={handleFocus}
         data-placeholder={imeReady ? "在此输入编码..." : "请先加载码表..."}
       />
 

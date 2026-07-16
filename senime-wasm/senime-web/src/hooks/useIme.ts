@@ -183,7 +183,7 @@ export function useIme(
       }
 
       // Ctrl+C: 有 preedit 时拦截
-      if (e.key === "c" && e.ctrlKey && window.getSelection()?.type == "Caret") {
+      if (e.key === "c" && e.ctrlKey && window.getSelection()?.isCollapsed) {
         e.preventDefault();
         copyTextInner(editor);
         return;

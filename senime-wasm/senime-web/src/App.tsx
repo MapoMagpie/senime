@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
 import { useDictLoader } from "./hooks/useDictLoader";
 import { useIme } from "./hooks/useIme";
 import { DictLoader } from "./components/DictLoader";
@@ -7,6 +7,11 @@ import { ActionBar } from "./components/ActionBar";
 
 export default function App() {
   const editorRef = useRef<HTMLDivElement>(null);
+
+  // 页面加载后自动聚焦编辑器
+  useEffect(() => {
+    editorRef.current?.focus();
+  }, []);
   const { status, imeReady, selectionKeys, setSelectionKeys, pageCount, setPageCount, uploadDict } = useDictLoader();
   const {
     candidates, caretPos, handleKeyDown, clear, copyText, copyAndClear,
@@ -41,6 +46,7 @@ export default function App() {
         onSelectionKeysChange={setSelectionKeys}
         onPageCountChange={setPageCount}
         onUpload={uploadDict}
+        onCollapse={() => editorRef.current?.focus()}
       />
       <InputArea
         candidates={candidates}
