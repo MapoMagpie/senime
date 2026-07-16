@@ -27,6 +27,10 @@
         rust = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" ];
         };
+        rust-wasm = pkgs.rust-bin.stable.latest.default.override {
+          targets = [ "wasm32-unknown-unknown" ];
+          extensions = [ "rust-src" ];
+        };
       in
       {
         packages = {
@@ -155,14 +159,71 @@
             };
         };
 
-        devShells.default = pkgs.mkShell {
-          packages = [
-            rust
-            pkgs.rust-analyzer-unwrapped
-            pkgs.rust-bindgen
-          ];
-          RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
+        devShells = {
+          rust = pkgs.mkShell {
+            name = "senime-rust";
+            packages = [
+              rust
+              pkgs.rust-analyzer-unwrapped
+              pkgs.rust-bindgen
+            ];
+            RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
+          };
+
+          wasm = pkgs.mkShell {
+            name = "senime-wasm";
+            packages = [
+              rust-wasm
+              pkgs.wasm-pack
+              pkgs.wasm-bindgen-cli
+            ];
+          };
+
+          cpp = pkgs.mkShell {
+            name = "senime-cpp";
+            packages = with pkgs; [
+              llvmPackages.clang
+              gcc
+              cmake
+              pkg-config
+              fcitx5
+              kdePackages.extra-cmake-modules
+              gettext
+            ];
+          };
+
+          ts = pkgs.mkShell {
+            name = "senime-ts";
+            packages = with pkgs; [
+              nodejs_24
+              typescript-language-server
+            ];
+          };
+
+          all = pkgs.mkShell {
+            name = "senime-all";
+            packages = with pkgs; [
+              rust
+              rust-analyzer-unwrapped
+              rust-bindgen
+              rust-wasm
+              wasm-pack
+              wasm-bindgen-cli
+              llvmPackages.clang
+              gcc
+              cmake
+              pkg-config
+              fcitx5
+              kdePackages.extra-cmake-modules
+              gettext
+              nodejs_24
+              typescript-language-server
+            ];
+            RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
+          };
         };
+
+        devShells.default = self.devShells.${system}.rust;
       }
     );
 }
