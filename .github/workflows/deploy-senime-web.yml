@@ -37,7 +37,8 @@ jobs:
       - name: 下载码表
         run: |
           curl -L -o /tmp/tables.zip https://github.com/MapoMagpie/senime/releases/download/assets/tables.zip
-          unzip -o /tmp/tables.zip -d senime-wasm/senime-web/dist/assets/tables/
+          rm -rf senime-wasm/senime-web/dist/assets/tables
+          unzip -o /tmp/tables.zip -d senime-wasm/senime-web/dist/assets/
 
       - name: 上传 Pages 产物
         uses: actions/upload-pages-artifact@v3
