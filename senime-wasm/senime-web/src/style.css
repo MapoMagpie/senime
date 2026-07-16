@@ -315,31 +315,7 @@ button:disabled {
   position: relative;
 }
 
-.ime-textarea {
-  width: 100%;
-  height: 100%;
-  padding: 1rem;
-  font-family: var(--font-mono);
-  font-size: 1.1rem;
-  line-height: 1.8;
-  color: transparent;
-  caret-color: var(--fg);
-  background: var(--bg-surface);
-  border: var(--border-strong);
-  border-radius: 0;
-  outline: none;
-  resize: none;
-  word-break: break-all;
-  overflow: hidden;
-  box-shadow: var(--shadow-lg);
-  transition: border-color 0.15s;
-}
-
-/* --- overlay 显示层 --- */
-.ime-display {
-  position: absolute;
-  top: 0;
-  left: 0;
+.ime-editor {
   width: 100%;
   height: 100%;
   padding: 1rem;
@@ -347,16 +323,28 @@ button:disabled {
   font-size: 1.1rem;
   line-height: 1.8;
   color: var(--fg);
-  background: transparent;
+  caret-color: var(--fg);
+  background: var(--bg-surface);
+  border: var(--border-strong);
+  border-radius: 0;
+  outline: none;
   word-break: break-all;
-  overflow: auto;
-  pointer-events: none;
   white-space: pre-wrap;
   overflow-wrap: break-word;
+  overflow: auto;
+  box-shadow: var(--shadow-lg);
 }
 
-.ime-placeholder {
+.ime-editor:empty::before {
+  content: attr(data-placeholder);
   color: var(--fg-dim);
+  pointer-events: none;
+}
+
+/* --- inline preedit span（在编辑器 contenteditable 内） --- */
+.preedit-container {
+  pointer-events: none;
+  user-select: none;
 }
 
 .preedit-text {
@@ -371,23 +359,9 @@ button:disabled {
   color: var(--fg-dim);
 }
 
-.preedit-cursor {
-  display: inline-block;
-  width: 2px;
-  height: 1.1em;
-  background: var(--accent-secondary);
-  vertical-align: text-bottom;
-  animation: preedit-blink 1s step-end infinite;
-}
-
-@keyframes preedit-blink {
-  50% { opacity: 0; }
-}
-
 /* --- IME 浮动弹窗（候选） --- */
 .ime-popup {
-  position: absolute;
-  transform: translateY(1.4em);
+  position: fixed;
   z-index: 10;
   display: flex;
   flex-direction: column;

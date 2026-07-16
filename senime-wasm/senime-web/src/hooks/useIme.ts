@@ -5,30 +5,33 @@ export interface CandidateItem {
   text: string;
   order: number;
   selectKey: string;
-  /** 该候选项对应的完整编码 */
   code: string;
-  /** 用户当前已输入的原始编码 */
   origin: string;
 }
 
-export interface ImeState {
-  /** 当前正在编码但未确认的文本（类似 fcitx5 的 preedit） */
-  preedit: string;
-  /** 最后一段的查询结果文本（高亮显示） */
-  preeditText: string;
-  candidates: CandidateItem[];
+type Segment = { text: string; origin: string; tagName: string };
+
+export interface PreeditState {
+  /** 引擎解析后的文本（高亮显示） */
+  text: string;
+  /** 剩余未确认的原始编码（用于显示） */
+  origin: string;
   /** 最后一段的标签名 */
-  lastTag: string;
+  tag: string;
+  candidates: CandidateItem[];
 }
 
-const EMPTY_STATE: ImeState = {
-  preedit: "",
-  preeditText: "",
-  candidates: [],
-  lastTag: "",
-};
+/** 光标像素位置（相对于编辑器父容器 .input-area） */
+export interface CaretPosition {
+  top: number;
+  left: number;
+  showAbove: boolean;
+}
 
-/** execCommand 回退，用于 navigator.clipboard 不可用时（如 HTTP 环境） */
+// ═══════════════════════════════════════════════════════════════
+// 回退剪贴板
+// ═══════════════════════════════════════════════════════════════
+
 function fallbackCopy(text: string) {
   const el = document.createElement("textarea");
   el.value = text;
@@ -39,216 +42,242 @@ function fallbackCopy(text: string) {
   document.body.removeChild(el);
 }
 
-/**
- * 对 preedit 调用 wasm completion，更新 state。
- * 中间段自动提交到 textarea，最后一段作为 preedit。
- * textarea.setRangeText 不会触发 keydown/input 事件，无循环依赖。
- */
-function runCompletion(
-  preedit: string,
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>,
-  setState: React.Dispatch<React.SetStateAction<ImeState>>,
-  recalc: () => void,
+// ═══════════════════════════════════════════════════════════════
+// Hook
+// ═══════════════════════════════════════════════════════════════
+
+const IME_PREEDIT_SPAN_ID = "ime_preedit_span";
+export function useIme(
+  imeReady: boolean,
+  editorRef: React.RefObject<HTMLElement | null>,
 ) {
-  if (!preedit) {
-    setState((s) => {
-      if (s.candidates.length > 0) return { preedit: "", preeditText: "", candidates: [], lastTag: "" };
-      return s;
-    });
-    return;
-  }
+  const [candidates, setCandidates] = useState<CandidateItem[]>([]);
+  const [caretPos, setCaretPos] = useState<CaretPosition>({
+    top: 0, left: 0, showAbove: false,
+  });
 
-  const result = completion(preedit);
-  const segCount = result.segment_count;
+  const inputRef = useRef("");
 
-  let pending = result.pending;
-  const segments: { text: string; origin: string; tagName: string }[] = [];
-  for (let i = 0; i < segCount; i++) {
-    const seg = result.segment(i);
-    segments.push({ text: seg.text, origin: seg.origin, tagName: seg.tag_name });
-    seg.free();
-  }
+  function createPreeditSpan(seg: Segment): HTMLSpanElement {
+    const span = document.createElement("span");
+    span.id = IME_PREEDIT_SPAN_ID;
+    span.className = "preedit-container";
+    // span.setAttribute("contenteditable", "false");
 
-  const cands: CandidateItem[] = [];
-  if (result.has_candidates) {
-    for (let i = 0; i < result.candidate_count; i++) {
-      const c = result.candidate(i);
-      cands.push({ text: c.text, order: c.order, selectKey: c.select_key, code: c.code, origin: c.origin });
-      c.free();
+    // 内部结构: <span class="preedit-text">text</span> <span class="preedit-code">origin</span>
+    if (seg.text) {
+      const textSpan = document.createElement("span");
+      textSpan.className = "preedit-text";
+      textSpan.textContent = seg.text;
+      span.appendChild(textSpan);
     }
-  }
-
-  // 中间段的文本自动提交到 textarea
-  let autoCommit = "";
-  for (let i = 0; i < segments.length - 1; i++) {
-    autoCommit += segments[i].text;
-  }
-  const ta = textareaRef.current;
-  if (autoCommit && ta) {
-    const pos = ta.selectionStart;
-    ta.setRangeText(autoCommit, pos, pos, "end");
-  }
-  const lastSeg = segments[segments.length - 1];
-
-  // 无分段：整段提交
-  if (!lastSeg) {
-    if (ta) {
-      const pos = ta.selectionStart;
-      ta.setRangeText(preedit, pos, pos, "end");
+    if (seg.tagName === "Code") {
+      const codeSpan = document.createElement("span");
+      codeSpan.className = "preedit-code";
+      codeSpan.textContent = seg.origin;
+      span.appendChild(codeSpan);
     }
-    setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
-    recalc();
-    return;
+    return span;
   }
 
-  // 未决中
-  if (pending) {
-    // 有候选：中间段提交到 textarea，最后一段作为 preedit
-    setState({ preedit: lastSeg.origin, preeditText: lastSeg.text, candidates: cands, lastTag: lastSeg.tagName });
-    recalc();
-  } else {
-    if (ta) {
-      const pos = ta.selectionStart;
-      ta.setRangeText(lastSeg.text, pos, pos, "end");
-    }
-    setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
-    recalc();
+  // ── 核心：运行 completion，管理 preedit span ──
+  const runCompletion = useCallback(
+    () => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      // 1. 删除旧的 preedit span
+      editor.querySelector("#" + IME_PREEDIT_SPAN_ID)?.remove();
+      if (!inputRef.current) {
+        setCandidates([]);
+        return;
+      };
+      const sel = window.getSelection();
+      if (!sel) return;
+      let range = sel.getRangeAt(0);
+      try {
+        const result = completion(inputRef.current);
+        const segCount = result.segment_count;
+        const pending = result.pending;
 
-  }
+        const segments: Segment[] = [];
+        for (let i = 0; i < segCount; i++) {
+          const seg = result.segment(i);
+          segments.push({ text: seg.text, origin: seg.origin, tagName: seg.tag_name });
+          seg.free();
+        }
 
-}
+        console.log("completion pending: ", result.pending, " segments:", segments);
+        const cands: CandidateItem[] = [];
+        if (result.has_candidates) {
+          for (let i = 0; i < result.candidate_count; i++) {
+            const c = result.candidate(i);
+            cands.push({
+              text: c.text,
+              order: c.order,
+              selectKey: c.select_key,
+              code: c.code,
+              origin: c.origin,
+            });
+            c.free();
+          }
+        }
 
-export function useIme(imeReady: boolean, textareaRef: React.RefObject<HTMLTextAreaElement | null>, recalc: () => void) {
-  const [state, setState] = useState<ImeState>(EMPTY_STATE);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+        let pre_text = "";
+        for (let i = 0; i < segments.length - 1; i++) {
+          pre_text += segments[i].text
+        }
+        if (pre_text) {
+          range.insertNode(document.createTextNode(pre_text));
+          range.collapse();
+        }
+        const lastSeg = segments[segments.length - 1];
 
-  /** 清空 textarea 和 IME 状态 */
-  const clear = useCallback(() => {
-    setState(EMPTY_STATE);
-    if (textareaRef.current) textareaRef.current.value = "";
-  }, []);
+        // 无分段：整段提交原始输入
+        if (!lastSeg) {
+          inputRef.current = "";
+          return;
+        }
+        if (pending) {
+          let preeditSpan = createPreeditSpan(lastSeg);
+          range.insertNode(preeditSpan);
+          range.collapse(true);
+          preeditSpan.scrollIntoView()
+          // let rect = preeditSpan.getBoundingClientRect();
+          let rect = range.getBoundingClientRect();
+          setCaretPos({ left: rect.left, top: rect.top + rect.height + 2, showAbove: false });
+          setCandidates(cands);
+          inputRef.current = lastSeg.origin;
+        } else {
+          inputRef.current = "";
+          range.insertNode(document.createTextNode(lastSeg.text));
+          range.collapse(false);
+          if (range.commonAncestorContainer.nodeType == Node.TEXT_NODE) {
+            range.commonAncestorContainer.parentElement?.scrollIntoView();
+          } else {
+            (range.commonAncestorContainer as HTMLElement).scrollIntoView();
+          };
+          setCandidates([]);
+        }
+      } catch (err) {
+        console.error(err);
+      }
 
-  /** 写入剪贴板，兼容 HTTP 等 navigator.clipboard 不可用的环境 */
-  const writeClipboard = useCallback((text: string) => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
-    } else {
-      fallbackCopy(text);
-    }
-  }, []);
+    },
+    [editorRef],
+  );
 
-  /** 复制全部文本到剪贴板 */
-  const copyText = useCallback(() => {
-    const text = textareaRef.current?.value ?? "";
-    if (!text) return;
-    writeClipboard(text);
-  }, [writeClipboard]);
-
-  const copyAndClear = useCallback(() => {
-    const ta = textareaRef.current;
-    const text = ta?.value ?? "";
-    if (!text) return;
-    writeClipboard(text);
-    setState(EMPTY_STATE);
-    if (ta) ta.value = "";
-  }, [writeClipboard]);
-
-  /** 拦截 textarea 的 keydown，IME 相关键 preventDefault */
+  // ── 键盘事件处理 ──
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    (e: React.KeyboardEvent<HTMLElement>) => {
       if (!imeReady) return;
+      const editor = editorRef.current;
+      if (!editor) return;
 
       // Ctrl+Shift+X: 复制并清空
       if (e.key === "X" && e.ctrlKey && e.shiftKey) {
         e.preventDefault();
-        copyAndClear();
+        copyAndClearInner(editor);
         return;
       }
 
-      // Ctrl+C: 有 preedit 时拦截，避免复制到 preedit
-      if (e.key === "c" && e.ctrlKey) {
-        if (stateRef.current.preedit) {
-          e.preventDefault();
-          copyText();
-        }
+      // Ctrl+C: 有 preedit 时拦截
+      if (e.key === "c" && e.ctrlKey && window.getSelection()?.type == "Caret") {
+        e.preventDefault();
+        copyTextInner(editor);
         return;
       }
 
       // Ctrl+X: 清空
       if (e.key === "x" && e.ctrlKey) {
         e.preventDefault();
-        clear();
+        clearInner(editor);
         return;
       }
 
       if (e.ctrlKey || e.metaKey) return;
 
-      const s = stateRef.current;
-
-      // 有 preedit 时的特殊键处理
-      if (s.preedit) {
-        // Enter: 提交 preedit 原始编码
+      // ── 有 preedit 时的处理 ──
+      if (inputRef.current) {
         if (e.key === "Enter") {
           e.preventDefault();
-          const ta = textareaRef.current;
-          if (ta) {
-            const pos = ta.selectionStart;
-            ta.setRangeText(s.preedit, pos, pos, "end");
-          }
-          setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
-          recalc();
+          inputRef.current += " ";
+          console.log("enter key input: ", inputRef);
+          runCompletion();
           return;
         }
 
-        // Backspace: 删除 preedit 最后一个字符
         if (e.key === "Backspace") {
           e.preventDefault();
-          const newPreedit = s.preedit.slice(0, -1);
-          runCompletion(newPreedit, textareaRef, setState, recalc);
+          inputRef.current = inputRef.current.slice(0, -1);
+          runCompletion();
           return;
         }
 
-        // Escape: 清空 preedit
-        if (e.key === "Escape") {
-          e.preventDefault();
-          setState({ preedit: "", preeditText: "", candidates: [], lastTag: "" });
-          return;
-        }
-
-        // PageUp / PageDown: 翻页（追加翻页字符到 preedit）
         if (e.key === "PageUp" || e.key === "PageDown") {
           e.preventDefault();
-          const ch = e.key === "PageUp" ? "\u21DE" : "\u21DF"; // ⇞ / ⇟
-          runCompletion(s.preedit + ch, textareaRef, setState, recalc);
+          const ch = e.key === "PageUp" ? "\u21DE" : "\u21DF";
+          inputRef.current += ch;
+          runCompletion();
           return;
         }
 
-        // 字母/数字/空格/符号等可打印字符：追加到 preedit，由 completion API 处理
-        if (e.key.length === 1) {
-          e.preventDefault();
-          runCompletion(s.preedit + e.key, textareaRef, setState, recalc);
+        if (
+          e.key === "ArrowLeft" || e.key === "ArrowRight" ||
+          e.key === "ArrowUp" || e.key === "ArrowDown" ||
+          e.key === "Home" || e.key === "End"
+        ) {
+          inputRef.current = "";
+          runCompletion();
           return;
         }
-
-        // 其他键（方向键等）：不拦截，让 textarea 原生处理
-        return;
       }
 
-      // 无 preedit 时：可打印字符开始新的编码（字母、数字、标点等）
+      // ── 无 preedit 时：可打印字符开始新的编码 ──
       if (e.key.length === 1) {
         e.preventDefault();
-        runCompletion(e.key, textareaRef, setState, recalc);
+        if (!inputRef.current) {
+          inputRef.current = e.key;
+        } else {
+          inputRef.current += e.key;
+        }
+        runCompletion();
         return;
       }
-
-      // 其他键：不拦截，textarea 原生处理（Backspace、方向键、Enter 等）
     },
-    [imeReady, copyText, copyAndClear, clear, recalc],
+    [imeReady, editorRef, runCompletion],
   );
 
+  // ── 工具函数 ──
+  function clearInner(editor: HTMLElement | null) {
+    if (!editor) return;
+    inputRef.current = "";
+    setCandidates([]);
+    editor.textContent = "";
+  }
+
+  function copyTextInner(editor: HTMLElement | null) {
+    const text = editor?.textContent ?? "";
+    if (!text) return;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  }
+
+  function copyAndClearInner(editor: HTMLElement | null) {
+    if (!editor) return;
+    copyTextInner(editor);
+    clearInner(editor);
+  }
+
+  const clear = useCallback(() => clearInner(editorRef.current), [editorRef]);
+  const copyText = useCallback(() => copyTextInner(editorRef.current), [editorRef]);
+  const copyAndClear = useCallback(() => copyAndClearInner(editorRef.current), [editorRef]);
+
   return {
-    state,
+    candidates,
+    caretPos,
     handleKeyDown,
     clear,
     copyText,

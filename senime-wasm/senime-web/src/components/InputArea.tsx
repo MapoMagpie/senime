@@ -1,92 +1,56 @@
-import { useRef, useCallback, useEffect } from "react";
-import type { ImeState } from "../hooks/useIme.ts";
-import type { CursorPos } from "../hooks/useCursorPos.ts";
+import { useCallback } from "react";
+import type { CaretPosition, CandidateItem } from "../hooks/useIme.ts";
 
 interface Props {
-  state: ImeState;
+  candidates: CandidateItem[];
   imeReady: boolean;
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  cursorPos: CursorPos;
+  editorRef: React.RefObject<HTMLDivElement | null>;
+  onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+  caretPos: CaretPosition;
 }
 
-export function InputArea({ state, imeReady, textareaRef, onKeyDown, cursorPos }: Props) {
-  const displayRef = useRef<HTMLDivElement>(null);
-
-  // 同步 overlay → textarea 滚动
-  const handleDisplayScroll = useCallback(() => {
-    if (textareaRef.current && displayRef.current) {
-      textareaRef.current.scrollTop = displayRef.current.scrollTop;
+export function InputArea({ candidates, imeReady, editorRef, onKeyDown, caretPos }: Props) {
+  // 粘贴时只保留纯文本
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData("text/plain");
+    if (text) {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(document.createTextNode(text));
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
     }
-  }, [textareaRef]);
-
-  // 同步 textarea → overlay 滚动（方向键、Page Up/Down 等触发）
-  useEffect(() => {
-    const ta = textareaRef.current;
-    const display = displayRef.current;
-    if (!ta || !display) return;
-    const sync = () => { display.scrollTop = ta.scrollTop; };
-    ta.addEventListener("scroll", sync);
-    return () => ta.removeEventListener("scroll", sync);
-  }, [textareaRef]);
-
-  const hasPreedit = !!(state.preeditText || state.preedit);
-  const hasCandidates = state.candidates.length > 0;
-  const ta = textareaRef.current;
-  const sel = ta?.selectionStart ?? 0;
-  const value = ta?.value ?? "";
-  const hasContent = value.length > 0 || hasPreedit;
-  const showPlaceholder = !hasContent && !hasPreedit;
+  }, []);
 
   return (
     <section className="input-area">
-      <textarea
-        ref={textareaRef}
-        className="ime-textarea"
-        onKeyDown={onKeyDown}
-        autoComplete="off"
-        autoCorrect="off"
-        autoCapitalize="off"
-        spellCheck={false}
-      />
+      {/* 编辑器：包含已提交文本 + 内联 preedit span（由 useIme 管理 DOM） */}
       <div
-        ref={displayRef}
-        className="ime-display"
-        onScroll={handleDisplayScroll}
-        aria-hidden="true"
-      >
-        {showPlaceholder && (
-          <span className="ime-placeholder">
-            {imeReady ? "在此输入编码..." : "请先加载码表..."}
-          </span>
-        )}
-        {hasContent && (
-          <>
-            {value.substring(0, sel)}
-            {hasPreedit && (
-              <>
-                {state.preeditText && (
-                  <span className="preedit-text">{state.preeditText}</span>
-                )}
-                {state.preedit && state.lastTag === "Code" && (
-                  <span className="preedit-code">{state.preedit}</span>
-                )}
-              </>
-            )}
-            {value.substring(sel)}
-          </>
-        )}
-      </div>
-      {hasCandidates && (
+        ref={editorRef}
+        className="ime-editor"
+        contentEditable="true"
+        suppressContentEditableWarning
+        onKeyDown={onKeyDown}
+        onPaste={handlePaste}
+        data-placeholder={imeReady ? "在此输入编码..." : "请先加载码表..."}
+      />
+
+      {/* 候选弹出框：定位在 preedit span 之后的光标位置 */}
+      {candidates.length > 0 && (
         <div
-          className={`ime-popup${cursorPos.showAbove ? " ime-popup-above" : ""}`}
+          className={`ime-popup${caretPos.showAbove ? " ime-popup-above" : ""}`}
           style={{
-            top: cursorPos.top,
-            left: cursorPos.left,
+            top: caretPos.top,
+            left: caretPos.left,
           }}
         >
           <div className="popup-candidates">
-            {state.candidates.map((c, i) => (
+            {candidates.map((c, i) => (
               <span
                 key={i}
                 className={`candidate ${i === 0 ? "candidate-primary" : ""}`}

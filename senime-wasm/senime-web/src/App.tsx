@@ -1,20 +1,18 @@
 import { useRef } from "react";
 import { useDictLoader } from "./hooks/useDictLoader";
 import { useIme } from "./hooks/useIme";
-import { useCursorPos } from "./hooks/useCursorPos";
 import { DictLoader } from "./components/DictLoader";
 import { InputArea } from "./components/InputArea";
 import { ActionBar } from "./components/ActionBar";
 
 export default function App() {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { pos, recalc } = useCursorPos(textareaRef);
+  const editorRef = useRef<HTMLDivElement>(null);
   const { status, imeReady, selectionKeys, setSelectionKeys, pageCount, setPageCount, uploadDict } = useDictLoader();
   const {
-    state, handleKeyDown, clear, copyText, copyAndClear,
-  } = useIme(imeReady, textareaRef, recalc);
+    candidates, caretPos, handleKeyDown, clear, copyText, copyAndClear,
+  } = useIme(imeReady, editorRef);
 
-  const displayText = textareaRef.current?.value ?? "";
+  const displayText = editorRef.current?.textContent ?? "";
 
   return (
     <div className="app">
@@ -45,11 +43,11 @@ export default function App() {
         onUpload={uploadDict}
       />
       <InputArea
-        state={state}
+        candidates={candidates}
         imeReady={imeReady}
-        textareaRef={textareaRef}
+        editorRef={editorRef}
         onKeyDown={handleKeyDown}
-        cursorPos={pos}
+        caretPos={caretPos}
       />
       <ActionBar
         text={displayText}
