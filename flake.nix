@@ -162,20 +162,22 @@
         devShells = {
           rust = pkgs.mkShell {
             name = "senime-rust";
-            packages = [
+            packages = with pkgs; [
               rust
-              pkgs.rust-analyzer-unwrapped
-              pkgs.rust-bindgen
+              rust-analyzer-unwrapped
+              rust-bindgen
             ];
             RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";
           };
 
           wasm = pkgs.mkShell {
             name = "senime-wasm";
-            packages = [
+            packages = with pkgs; [
               rust-wasm
-              pkgs.wasm-pack
-              pkgs.wasm-bindgen-cli
+              wasm-pack
+              wasm-bindgen-cli
+              nodejs_24
+              typescript-language-server
             ];
           };
 
@@ -189,14 +191,6 @@
               fcitx5
               kdePackages.extra-cmake-modules
               gettext
-            ];
-          };
-
-          ts = pkgs.mkShell {
-            name = "senime-ts";
-            packages = with pkgs; [
-              nodejs_24
-              typescript-language-server
             ];
           };
 
