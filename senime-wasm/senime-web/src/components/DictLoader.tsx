@@ -42,7 +42,8 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
   const [tableUrl, setTableUrl] = useState<string | null>(null);
   const [tableLabel, setTableLabel] = useState<string | null>(null);
 
-  const collapsed = imeReady && !expanded;
+  const contentVisible = !imeReady || expanded;
+  const animated = imeReady; // 码表加载后启用过渡动画，首次渲染不播动画
 
   // 点击外部关闭悬浮菜单
   useEffect(() => {
@@ -124,117 +125,119 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
     onSelectionKeysChange(next);
   };
 
-  if (collapsed) {
-    return (
-      <section className="dict-loader dict-collapsed" onClick={() => setExpanded(true)}>
-        <span className="status-ok">✓ 码表已加载</span>
-        <span className="dict-expand-hint">点击重新配置</span>
-      </section>
-    );
-  }
-
   return (
     <section className="dict-loader">
-      <p className="dict-desc">选择你的码表，自定义候选键(可选)，然后点击确认加载。</p>
+      {/* 收起栏：码表加载后显示，点击展开配置面板 */}
+      {imeReady && (
+        <div className="dict-collapsed-bar" onClick={() => setExpanded(true)}>
+          <span className="status-ok">✓ 码表已加载</span>
+          <span className="dict-expand-hint">展开配置</span>
+        </div>
+      )}
 
-      <div className="selection-keys-section">
-        <h2>码表加载</h2>
-        <div className="dict-controls">
-          <input ref={fileRef} type="file" accept=".txt" onChange={handleFileChange} />
-          <div className="preset-dropdown" ref={menuRef}>
-            <button
-              className="preset-toggle-btn"
-              disabled={status.state === "loading"}
-              onClick={handlePresetBtn}
-            >
-              预设码表 ▾
-            </button>
-            {tableLabel && (
-              <span className="preset-selected">已选择: {tableLabel}</span>
-            )}
-            {menuOpen && (
-              <div className="preset-menu">
-                {presets === null ? (
-                  <span className="preset-menu-loading">加载中...</span>
-                ) : presets.length === 0 ? (
-                  <span className="preset-menu-empty">暂无预设</span>
-                ) : (
-                  presets.map((p) => (
-                    <button
-                      key={p.url}
-                      className="preset-menu-item"
-                      onClick={() => handlePresetSelect(p.url, p.label)}
-                    >
-                      {p.label}
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
+      {/* 可展开/收起的内容区域：通过 max-height + opacity 过渡 */}
+      <div className={`dict-content${animated ? ' dict-content-animated' : ''}${contentVisible ? ' dict-content-open' : ''}`}>
+        <p className="dict-desc">选择你的码表，自定义候选键(可选)，然后点击确认加载。</p>
+
+        <div className="selection-keys-section">
+          <h2>码表加载</h2>
+          <div className="dict-controls">
+            <input ref={fileRef} type="file" accept=".txt" onChange={handleFileChange} />
+            <div className="preset-dropdown" ref={menuRef}>
+              <button
+                className="preset-toggle-btn"
+                disabled={status.state === "loading"}
+                onClick={handlePresetBtn}
+              >
+                预设码表 ▾
+              </button>
+              {tableLabel && (
+                <span className="preset-selected">已选择: {tableLabel}</span>
+              )}
+              {menuOpen && (
+                <div className="preset-menu">
+                  {presets === null ? (
+                    <span className="preset-menu-loading">加载中...</span>
+                  ) : presets.length === 0 ? (
+                    <span className="preset-menu-empty">暂无预设</span>
+                  ) : (
+                    presets.map((p) => (
+                      <button
+                        key={p.url}
+                        className="preset-menu-item"
+                        onClick={() => handlePresetSelect(p.url, p.label)}
+                      >
+                        {p.label}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="selection-keys-section">
-        <h2>候选键配置</h2>
-        <div className="presets">
-          {KEY_PRESETS.map((p) => (
-            <button
-              key={p.label}
-              className="preset-btn"
-              onClick={() => onSelectionKeysChange(p.keys)}
-            >
-              {p.label}
-            </button>
-          ))}
+        <div className="selection-keys-section">
+          <h2>候选键配置</h2>
+          <div className="presets">
+            {KEY_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                className="preset-btn"
+                onClick={() => onSelectionKeysChange(p.keys)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="custom-keys">
+            {selectionKeys.map((k, i) => (
+              <input
+                key={i}
+                type="text"
+                className="key-slot"
+                maxLength={2}
+                value={k}
+                onChange={(e) => handleSlotChange(i, e.target.value)}
+              />
+            ))}
+          </div>
         </div>
-        <div className="custom-keys">
-          {selectionKeys.map((k, i) => (
+
+        <div className="selection-keys-section">
+          <h2>候选数量</h2>
+          <div className="page-count-row">
             <input
-              key={i}
-              type="text"
-              className="key-slot"
-              maxLength={2}
-              value={k}
-              onChange={(e) => handleSlotChange(i, e.target.value)}
+              type="range"
+              className="page-count-slider"
+              min={1}
+              max={9}
+              value={pageCount}
+              onChange={(e) => onPageCountChange(Number(e.target.value))}
             />
-          ))}
+            <span className="page-count-value">{pageCount}</span>
+          </div>
         </div>
-      </div>
 
-      <div className="selection-keys-section">
-        <h2>候选数量</h2>
-        <div className="page-count-row">
-          <input
-            type="range"
-            className="page-count-slider"
-            min={1}
-            max={9}
-            value={pageCount}
-            onChange={(e) => onPageCountChange(Number(e.target.value))}
-          />
-          <span className="page-count-value">{pageCount}</span>
-        </div>
-      </div>
-
-      <div className="selection-keys-section">
-        <div className="dict-bottom">
-          <button onClick={handleConfirm} disabled={status.state === "loading"}>
-            确认加载
-          </button>
-          {imeReady && (
-            <button onClick={() => { setExpanded(false); onCollapse?.(); }}>
-              收起
+        <div className="selection-keys-section">
+          <div className="dict-bottom">
+            <button onClick={handleConfirm} disabled={status.state === "loading"}>
+              确认加载
             </button>
-          )}
-          <div className="dict-status">
-            {localError && <span className="status-error">✗ {localError}</span>}
-            {status.state === "wasm_init" && <span className="status-loading">正在初始化 WASM...</span>}
-            {status.state === "loading" && <span className="status-loading">正在加载码表...</span>}
-            {status.state === "cached" && <span className="status-ok">✓ {status.message}</span>}
-            {status.state === "uploaded" && <span className="status-ok">✓ {status.message}</span>}
-            {status.state === "error" && !localError && <span className="status-error">✗ {status.message}</span>}
-            {status.state === "idle" && !localError && <span className="status-idle">请选择 .txt 码表文件</span>}
+            {imeReady && (
+              <button onClick={() => { setExpanded(false); onCollapse?.(); }}>
+                收起
+              </button>
+            )}
+            <div className="dict-status">
+              {localError && <span className="status-error">✗ {localError}</span>}
+              {status.state === "wasm_init" && <span className="status-loading">正在初始化 WASM...</span>}
+              {status.state === "loading" && <span className="status-loading">正在加载码表...</span>}
+              {status.state === "cached" && <span className="status-ok">✓ {status.message}</span>}
+              {status.state === "uploaded" && <span className="status-ok">✓ {status.message}</span>}
+              {status.state === "error" && !localError && <span className="status-error">✗ {status.message}</span>}
+              {status.state === "idle" && !localError && <span className="status-idle">请选择 .txt 码表文件</span>}
+            </div>
           </div>
         </div>
       </div>

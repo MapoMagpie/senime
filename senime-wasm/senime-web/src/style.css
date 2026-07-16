@@ -96,19 +96,12 @@ body {
   background: var(--bg-surface);
   border: var(--border-strong);
   border-radius: 0;
-  padding: 1rem;
   margin-bottom: 1.5rem;
   box-shadow: var(--shadow-lg);
 }
 
-.dict-loader h2 {
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--fg-dim);
-  margin-bottom: 0.75rem;
-}
-
-.dict-collapsed {
+/* 收起栏：码表加载后显示，点击展开 */
+.dict-collapsed-bar {
   display: flex;
   align-items: center;
   gap: 0.75rem;
@@ -116,8 +109,32 @@ body {
   padding: 0.5rem 1rem;
 }
 
-.dict-collapsed:hover {
+.dict-collapsed-bar:hover {
   border-color: var(--accent);
+}
+
+/* 可折叠内容：默认收起，通过 max-height + opacity 过渡 */
+.dict-content {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.dict-content-animated {
+  transition: max-height 0.35s ease, opacity 0.35s ease;
+}
+
+.dict-content-open {
+  max-height: 800px;
+  opacity: 1;
+  padding: 1rem;
+}
+
+.dict-loader h2 {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--fg-dim);
+  margin-bottom: 0.75rem;
 }
 
 .dict-expand-hint {
