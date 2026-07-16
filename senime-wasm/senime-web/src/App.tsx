@@ -1,12 +1,14 @@
 import { useRef, useEffect } from "react";
 import { useDictLoader } from "./hooks/useDictLoader";
 import { useIme } from "./hooks/useIme";
+import { useTheme } from "./hooks/useTheme";
 import { DictLoader } from "./components/DictLoader";
 import { InputArea } from "./components/InputArea";
 import { ActionBar } from "./components/ActionBar";
 
 export default function App() {
   const editorRef = useRef<HTMLDivElement>(null);
+  const { mode, cycle } = useTheme();
 
   // 页面加载后自动聚焦编辑器
   useEffect(() => {
@@ -35,6 +37,16 @@ export default function App() {
             </svg>
             GitHub
           </a>
+          <button
+            className="theme-toggle"
+            onClick={cycle}
+            title={`主题: ${mode === "auto" ? "跟随系统" : mode === "light" ? "浅色" : "深色"}`}
+            aria-label="切换主题"
+          >
+            <span className="theme-toggle-icon">
+              {mode === "auto" ? "◐" : mode === "light" ? "☀" : "☾"}
+            </span>
+          </button>
         </div>
         <p className="app-subtitle">一个在线码表输入法，高性能、易使用。</p>
       </header>
