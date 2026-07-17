@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import type { DictStatus } from "../hooks/useDictLoader";
+import type { DictConfig, DictStatus } from "../hooks/useDictLoader";
 
 const KEY_PRESETS: { label: string; keys: string[] }[] = [
   { label: "1-9", keys: ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
@@ -9,17 +9,15 @@ const KEY_PRESETS: { label: string; keys: string[] }[] = [
 
 interface Props {
   status: DictStatus;
-  imeReady: boolean;
-  selectionKeys: string[];
-  pageCount: number;
-  onSelectionKeysChange: (keys: string[]) => void;
-  onPageCountChange: (count: number) => void;
-  onUpload: (text: string, keys: string[], count: number) => void;
+  setStatus: (status: DictStatus) => void;
+  config: DictConfig;
+  setConfig: (config: DictConfig) => void;
+  onConfirm: () => void;
   onCollapse?: () => void;
 }
 
 /** 解析 index.txt 的一行，格式：码表名|文件名。 */
-function parsePresetLine(parent: string ,line: string): { label: string; url: string } | null {
+function parsePresetLine(parent: string, line: string): { label: string; url: string } | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   const idx = trimmed.indexOf("|");
@@ -31,18 +29,15 @@ function parsePresetLine(parent: string ,line: string): { label: string; url: st
   return { label, url };
 }
 
-export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelectionKeysChange, onPageCountChange, onUpload, onCollapse }: Props) {
+export function DictLoader({ status, setStatus, config, setConfig, onConfirm, onCollapse }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [localError, setLocalError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [presets, setPresets] = useState<{ label: string; url: string }[] | null>(null);
-  const [tableUrl, setTableUrl] = useState<string | null>(null);
-  const [tableLabel, setTableLabel] = useState<string | null>(null);
 
-  const contentVisible = !imeReady || expanded;
-  const animated = imeReady; // 码表加载后启用过渡动画，首次渲染不播动画
+  const contentVisible = status.state !== "ready" || expanded;
+  const animated = status.state === "ready"; // 码表加载后启用过渡动画，首次渲染不播动画
 
   // 点击外部关闭悬浮菜单
   useEffect(() => {
@@ -56,32 +51,7 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
     return () => document.removeEventListener("mousedown", handleClick);
   }, [menuOpen]);
 
-  const handleConfirm = async () => {
-    setLocalError(null);
-    const files = fileRef.current?.files;
-    if (files && files.length > 0 && files[0].size > 0) {
-      // 用户手动上传了文件
-      try {
-        onUpload(await files[0].text(), selectionKeys, pageCount);
-      } catch (e) {
-        setLocalError(`读取文件失败: ${e}`);
-      }
-    } else if (tableUrl) {
-      // 用户选择了预设码表
-      try {
-        const resp = await fetch(tableUrl);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-        onUpload(await resp.text(), selectionKeys, pageCount);
-      } catch (e) {
-        setLocalError(`加载预设码表失败: ${e}`);
-      }
-    } else {
-      setLocalError("请先选择码表文件或预设码表");
-    }
-  };
-
   const handlePresetBtn = useCallback(async () => {
-    setLocalError(null);
     // 已缓存则直接切换菜单，否则请求 index.txt
     if (presets !== null) {
       setMenuOpen((v) => !v);
@@ -106,32 +76,36 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
 
   const handlePresetSelect = (url: string, label: string) => {
     setMenuOpen(false);
-    setTableUrl(url);
-    setTableLabel(label);
+    setConfig({ ...config, file: url, dict_name: label });
+    setStatus({ state: "file_selected", message: `已选择${label}` });
     // 选择了预设则清除文件选择
     if (fileRef.current) fileRef.current.value = "";
   };
 
   const handleFileChange = () => {
-    // 用户选择了文件则清除预设选择
-    setTableUrl(null);
-    setTableLabel(null);
+    const file = fileRef.current?.files?.[0];
+    let dict_name: string | undefined;
+    if (file) {
+      dict_name = file.name.split(".").shift();
+    }
+    setConfig({ ...config, file, dict_name });
+    setStatus({ state: "file_selected", message: `已选择${dict_name}` });
   };
 
   const handleSlotChange = (index: number, value: string) => {
     const ch = value.slice(-1);
-    const next = [...selectionKeys];
-    next[index] = ch;
-    onSelectionKeysChange(next);
+    const selection_keys = [...config.selection_keys];
+    selection_keys[index] = ch;
+    setConfig({ ...config, selection_keys })
   };
 
   return (
     <section className="dict-loader">
       {/* 收起栏：码表加载后显示，点击展开配置面板 */}
-      {imeReady && (
+      {status.state === "ready" && (
         <div className="dict-collapsed-bar" onClick={() => setExpanded(v => !v)}>
-          <span className="status-ok">✓ 码表已加载</span>
-          <span className="dict-expand-hint">{expanded ? "收起" : "展开配置"}</span>
+          <span className="status-ok">已加载{config.dict_name} ✓</span>
+          <span className="dict-expand-hint">{expanded ? "收起配置" : "展开配置"}</span>
         </div>
       )}
 
@@ -151,8 +125,8 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
               >
                 预设码表 ▾
               </button>
-              {tableLabel && (
-                <span className="preset-selected">已选择: {tableLabel}</span>
+              {config.file && (
+                <span className="preset-selected">已选择:{config.dict_name}</span>
               )}
               {menuOpen && (
                 <div className="preset-menu">
@@ -184,14 +158,14 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
               <button
                 key={p.label}
                 className="preset-btn"
-                onClick={() => onSelectionKeysChange(p.keys)}
+                onClick={() => setConfig({ ...config, selection_keys: p.keys })}
               >
                 {p.label}
               </button>
             ))}
           </div>
           <div className="custom-keys">
-            {selectionKeys.map((k, i) => (
+            {config.selection_keys.map((k, i) => (
               <input
                 key={i}
                 type="text"
@@ -212,31 +186,25 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
               className="page-count-slider"
               min={1}
               max={9}
-              value={pageCount}
-              onChange={(e) => onPageCountChange(Number(e.target.value))}
+              value={config.page_count}
+              onChange={(e) => setConfig({ ...config, page_count: Number(e.target.value) })}
             />
-            <span className="page-count-value">{pageCount}</span>
+            <span className="page-count-value">{config.page_count}</span>
           </div>
         </div>
 
         <div className="selection-keys-section">
           <div className="dict-bottom">
-            <button onClick={handleConfirm} disabled={status.state === "loading"}>
+            <button onClick={onConfirm} disabled={status.state === "loading" || status.state === "file_downloading"}>
               确认加载
             </button>
-            {imeReady && (
+            {status.state === "ready" && (
               <button onClick={() => { setExpanded(false); onCollapse?.(); }}>
                 收起
               </button>
             )}
             <div className="dict-status">
-              {localError && <span className="status-error">✗ {localError}</span>}
-              {status.state === "wasm_init" && <span className="status-loading">正在初始化 WASM...</span>}
-              {status.state === "loading" && <span className="status-loading">正在加载码表...</span>}
-              {status.state === "cached" && <span className="status-ok">✓ {status.message}</span>}
-              {status.state === "uploaded" && <span className="status-ok">✓ {status.message}</span>}
-              {status.state === "error" && !localError && <span className="status-error">✗ {status.message}</span>}
-              {status.state === "idle" && !localError && <span className="status-idle">请选择 .txt 码表文件</span>}
+              <span className="status-none">{status.message}</span>
             </div>
           </div>
         </div>

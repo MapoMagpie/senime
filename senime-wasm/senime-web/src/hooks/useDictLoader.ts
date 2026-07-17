@@ -8,39 +8,40 @@ const CONFIG_KEY = "dict_config";
 const DEFAULT_SELECTION_KEYS: string[] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
 const DEFAULT_PAGE_COUNT = 5;
 
-export type DictStatus =
-  | { state: "loading" }
-  | { state: "wasm_init" }
-  | { state: "cached"; message: string }
-  | { state: "uploaded"; message: string }
-  | { state: "error"; message: string }
-  | { state: "idle" };
+export type DictStatus = {
+  state: "none" | "ready" | "loading" | "file_downloading" | "file_selected" | "error",
+  message: string,
+};
+export type DictConfig = {
+  selection_keys: string[],
+  page_count: number,
+  file?: File | string,
+  dict_name?: string,
+}
+
+const DEFAULT_CONFIG = {
+  selection_keys: DEFAULT_SELECTION_KEYS,
+  page_count: DEFAULT_PAGE_COUNT,
+};
 
 export function useDictLoader() {
-  const [status, setStatus] = useState<DictStatus>({ state: "wasm_init" });
-  const [imeReady, setImeReady] = useState(false);
-  const [selectionKeys, setSelectionKeys] = useState<string[]>(DEFAULT_SELECTION_KEYS);
-  const [pageCount, setPageCount] = useState(DEFAULT_PAGE_COUNT);
+  const [status, setStatus] = useState<DictStatus>({ state: "none", message: "请选择码表文件(.txt)" });
+  const [config, setConfig] = useState<DictConfig>(DEFAULT_CONFIG);
   // 初始化 WASM 并尝试从缓存加载
   useEffect(() => {
     (async () => {
       try {
         await init();
-        setStatus({ state: "loading" });
+        setStatus({ state: "loading", message: "尝试加载缓存数据中..." });
         const [cached, cachedConfig] = await Promise.all([getFile(DICT_KEY), getFile(CONFIG_KEY)]);
         if (cached instanceof Uint8Array && typeof cachedConfig === "string") {
           const cfg = JSON.parse(cachedConfig);
-          if (cfg.selection_keys) {
-            setSelectionKeys(cfg.selection_keys);
-          }
-          if (typeof cfg.page_count === "number") {
-            setPageCount(cfg.page_count);
-          }
+          setConfig(cfg as DictConfig);
+          // 加载引擎
           load_bin(cached, cachedConfig);
-          setImeReady(true);
-          setStatus({ state: "cached", message: "已从缓存加载码表" });
+          setStatus({ state: "ready", message: "已从缓存加载码表" });
         } else {
-          setStatus({ state: "idle" });
+          setStatus({ state: "none", message: "请选择码表文件(.txt)" });
         }
       } catch (e) {
         setStatus({ state: "error", message: String(e) });
@@ -49,18 +50,34 @@ export function useDictLoader() {
   }, []);
 
   // 用户传入码表文本内容进行加载
-  const uploadDict = useCallback(async (text: string, keys: string[], count: number) => {
+  const onConfirm = useCallback(async () => {
     try {
-      setStatus({ state: "loading" });
-      const config = JSON.stringify({ selection_keys: keys, page_count: count });
-      const bin = init_ime(text, config);
-      await Promise.all([saveFile(DICT_KEY, bin), saveFile(CONFIG_KEY, config)]);
-      setImeReady(true);
-      setStatus({ state: "uploaded", message: "码表已加载并缓存" });
+      if (!config.file) throw new Error("请先上传码表文件或选择预设码表");
+      setStatus({ state: "file_downloading", message: "下载码表中..." });
+      const content = await download(config.file);
+      setStatus({ state: "loading", message: "加载码表中..." });
+      const cfg = JSON.stringify({ selection_keys: config.selection_keys, page_count: config.page_count, dict_name: config.dict_name });
+      const bin = init_ime(content, cfg);
+      await Promise.all([saveFile(DICT_KEY, bin), saveFile(CONFIG_KEY, cfg)]);
+      setStatus({ state: "ready", message: "码表已加载并缓存" });
     } catch (e) {
       setStatus({ state: "error", message: `加载失败: ${e}` });
     }
-  }, []);
+  }, [config, setStatus]);
 
-  return { status, imeReady, selectionKeys, setSelectionKeys, pageCount, setPageCount, uploadDict };
+  return { status, setStatus, config, setConfig, onConfirm };
+}
+
+async function download(file: File | string): Promise<string> {
+  if (typeof file === "string") {
+    const text = await fetch(file).then(resp => resp.text()).catch(Error);
+    if (text instanceof Error) {
+      throw new Error(`下载码表文件失败，${text}`, { cause: text.cause })
+    };
+    return text;
+  } else if (file instanceof File) {
+    return await file.text();
+  } else {
+    throw new Error("非有效的文本文件或URL");
+  }
 }

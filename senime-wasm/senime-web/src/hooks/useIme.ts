@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { completion } from "senime-wasm";
+import type { DictStatus } from "./useDictLoader";
 
 export interface CandidateItem {
   text: string;
@@ -48,7 +49,7 @@ function fallbackCopy(text: string) {
 
 const IME_PREEDIT_SPAN_ID = "ime_preedit_span";
 export function useIme(
-  imeReady: boolean,
+  status: DictStatus,
   editorRef: React.RefObject<HTMLElement | null>,
 ) {
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
@@ -171,7 +172,7 @@ export function useIme(
   // ── 键盘事件处理 ──
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
-      if (!imeReady) return;
+      if (status.state !== "ready") return;
       const editor = editorRef.current;
       if (!editor) return;
 
@@ -246,7 +247,7 @@ export function useIme(
         return;
       }
     },
-    [imeReady, editorRef, runCompletion],
+    [status, editorRef, runCompletion],
   );
 
   // ── 工具函数 ──
