@@ -129,9 +129,9 @@ export function DictLoader({ status, imeReady, selectionKeys, pageCount, onSelec
     <section className="dict-loader">
       {/* 收起栏：码表加载后显示，点击展开配置面板 */}
       {imeReady && (
-        <div className="dict-collapsed-bar" onClick={() => setExpanded(true)}>
+        <div className="dict-collapsed-bar" onClick={() => setExpanded(v => !v)}>
           <span className="status-ok">✓ 码表已加载</span>
-          <span className="dict-expand-hint">展开配置</span>
+          <span className="dict-expand-hint">{expanded ? "收起" : "展开配置"}</span>
         </div>
       )}
 
