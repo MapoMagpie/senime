@@ -76,6 +76,7 @@ export function useIme(
     if (!editor) return;
     const sync = () => setIsEmpty(!editor.textContent);
     editor.addEventListener("input", sync);
+    window.addEventListener("focus", () => editor.focus());
     return () => editor.removeEventListener("input", sync);
   }, [editorRef]);
 
