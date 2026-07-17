@@ -113,7 +113,7 @@ export function DictLoader({ status, setStatus, config, setConfig, onConfirm, on
     <section className="dict-loader">
       {/* 收起栏：码表加载后显示，点击展开配置面板 */}
       {status.state === "ready" && (
-        <div className="dict-collapsed-bar" onClick={() => { let v = !expanded; setExpanded(v); v && onCollapse?.(); }}>
+        <div className="dict-collapsed-bar" onClick={() => { let v = !expanded; setExpanded(v); !v && onCollapse?.(); }}>
           <span className="status-ready">已加载{config.dict_name} ✓</span>
           <span className="dict-expand-hint">{expanded ? "收起配置" : "展开配置"}</span>
         </div>
