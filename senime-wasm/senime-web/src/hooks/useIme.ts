@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { completion } from "senime-wasm";
 import type { DictStatus } from "./useDictLoader";
 
@@ -66,8 +66,18 @@ export function useIme(
   const [caretPos, setCaretPos] = useState<CaretPosition>({
     top: 0, left: 0, showAbove: false,
   });
+  const [isEmpty, setIsEmpty] = useState(true);
 
   const inputRef = useRef("");
+
+  // 监听 editor 的 input 事件，同步 textContent 到 React state
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const sync = () => setIsEmpty(!editor.textContent);
+    editor.addEventListener("input", sync);
+    return () => editor.removeEventListener("input", sync);
+  }, [editorRef]);
 
   function createPreeditSpan(seg: Segment): HTMLSpanElement {
     const span = document.createElement("span");
@@ -174,7 +184,7 @@ export function useIme(
       } catch (err) {
         console.error(err);
       }
-
+      setIsEmpty(!editor.textContent);
     },
     [editorRef],
   );
@@ -266,6 +276,7 @@ export function useIme(
     inputRef.current = "";
     setCandidates([]);
     editor.textContent = "";
+    setIsEmpty(true);
   }
 
   function copyTextInner(editor: HTMLElement | null) {
@@ -289,6 +300,7 @@ export function useIme(
   const copyAndClear = useCallback(() => copyAndClearInner(editorRef.current), [editorRef]);
 
   return {
+    isEmpty,
     candidates,
     caretPos,
     handleKeyDown,

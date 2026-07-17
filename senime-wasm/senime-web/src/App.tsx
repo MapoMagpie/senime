@@ -16,10 +16,9 @@ export default function App() {
   }, []);
   const { status, setStatus, config, setConfig, onConfirm } = useDictLoader();
   const {
-    candidates, caretPos, handleKeyDown, clear, copyText, copyAndClear,
+    candidates, caretPos, handleKeyDown, clear, copyText, copyAndClear, isEmpty,
   } = useIme(status, editorRef);
 
-  const displayText = editorRef.current?.textContent ?? "";
 
   return (
     <div className="app">
@@ -66,7 +65,7 @@ export default function App() {
         caretPos={caretPos}
       />
       <ActionBar
-        text={displayText}
+        isEmpty={isEmpty}
         onClear={clear}
         onCopy={copyText}
         onCopyAndClear={copyAndClear}
