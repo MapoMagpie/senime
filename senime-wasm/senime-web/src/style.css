@@ -24,11 +24,11 @@
 
 /* 深色主题变量 */
 [data-theme="dark"] {
-  --bg: #4e4e4e;
-  --bg-surface: #454545;
+  --bg: #666;
+  --bg-surface: #494949;
   --bg-highlight: #474747;
   --fg: #fff;
-  --fg-dim: #c1c1ff;
+  --fg-dim: #000;
   --accent: #7b93ff;
   --accent-secondary: #4ad6c4;
   --green: #afa;
@@ -36,8 +36,7 @@
   --yellow: #d4a840;
   --border: #fff;
   --shadow-sm: 3px 3px 0 0 rgba(0, 0, 0, 0.3);
-  --shadow-lg: 6px 6px 0 0 rgba(0, 0, 0, 0.3), 12px 12px 0 0 rgba(0, 0, 0, 0.15);
-}
+  --shadow-lg: 6px 6px 0 0 rgba(0, 0, 0, 0.3), 12px 12px 0 0 rgba(0, 0, 0, 0.15);}
 
 * {
   box-sizing: border-box;
@@ -172,7 +171,7 @@ body {
 .dict-loader h2 {
   font-size: 0.9rem;
   font-weight: 500;
-  color: var(--fg-dim);
+  color: var(--fg);
   margin-bottom: 0.75rem;
 }
 
@@ -267,9 +266,9 @@ body {
 }
 
 .status-loading { color: var(--yellow); }
-.status-ok { color: var(--green); }
+.status-ready { color: var(--green); }
 .status-error { color: var(--red); }
-.status-idle { color: var(--fg-dim); }
+.status-none { color: var(--fg-dim); }
 
 /* --- 候选键配置 --- */
 .selection-keys-section {

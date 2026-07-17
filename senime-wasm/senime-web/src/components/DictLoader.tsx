@@ -16,6 +16,16 @@ interface Props {
   onCollapse?: () => void;
 }
 
+/** 根据 DictStatus.state 映射到对应的 CSS 类名 */
+function statusToClass(state: DictStatus["state"]): string {
+  switch (state) {
+    case "ready":     return "status-ready";
+    case "error":     return "status-error";
+    case "none":      return "status-none";
+    default:          return "status-loading"; // loading, file_downloading, file_selected
+  }
+}
+
 /** 解析 index.txt 的一行，格式：码表名|文件名。 */
 function parsePresetLine(parent: string, line: string): { label: string; url: string } | null {
   const trimmed = line.trim();
@@ -104,7 +114,7 @@ export function DictLoader({ status, setStatus, config, setConfig, onConfirm, on
       {/* 收起栏：码表加载后显示，点击展开配置面板 */}
       {status.state === "ready" && (
         <div className="dict-collapsed-bar" onClick={() => setExpanded(v => !v)}>
-          <span className="status-ok">已加载{config.dict_name} ✓</span>
+          <span className="status-ready">已加载{config.dict_name} ✓</span>
           <span className="dict-expand-hint">{expanded ? "收起配置" : "展开配置"}</span>
         </div>
       )}
@@ -125,7 +135,7 @@ export function DictLoader({ status, setStatus, config, setConfig, onConfirm, on
               >
                 预设码表 ▾
               </button>
-              {config.file && (
+              {typeof config.file === "string" && (
                 <span className="preset-selected">已选择:{config.dict_name}</span>
               )}
               {menuOpen && (
@@ -204,7 +214,7 @@ export function DictLoader({ status, setStatus, config, setConfig, onConfirm, on
               </button>
             )}
             <div className="dict-status">
-              <span className="status-none">{status.message}</span>
+              <span className={statusToClass(status.state)}>{status.message}</span>
             </div>
           </div>
         </div>
