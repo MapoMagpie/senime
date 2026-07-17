@@ -50,7 +50,7 @@ export function useDictLoader() {
   }, []);
 
   // 用户传入码表文本内容进行加载
-  const onConfirm = useCallback(async () => {
+  const onConfirm = useCallback(async (resolve?: () => void) => {
     try {
       if (!config.file) throw new Error("请先上传码表文件或选择预设码表");
       setStatus({ state: "file_downloading", message: "下载码表中..." });
@@ -60,6 +60,7 @@ export function useDictLoader() {
       const bin = init_ime(content, cfg);
       await Promise.all([saveFile(DICT_KEY, bin), saveFile(CONFIG_KEY, cfg)]);
       setStatus({ state: "ready", message: "码表已加载并缓存" });
+      resolve?.();
     } catch (e) {
       setStatus({ state: "error", message: `加载失败: ${e}` });
     }

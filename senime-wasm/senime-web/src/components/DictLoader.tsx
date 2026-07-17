@@ -12,17 +12,17 @@ interface Props {
   setStatus: (status: DictStatus) => void;
   config: DictConfig;
   setConfig: (config: DictConfig) => void;
-  onConfirm: () => void;
+  onConfirm: (resolved: () => void) => void;
   onCollapse?: () => void;
 }
 
 /** 根据 DictStatus.state 映射到对应的 CSS 类名 */
 function statusToClass(state: DictStatus["state"]): string {
   switch (state) {
-    case "ready":     return "status-ready";
-    case "error":     return "status-error";
-    case "none":      return "status-none";
-    default:          return "status-loading"; // loading, file_downloading, file_selected
+    case "ready": return "status-ready";
+    case "error": return "status-error";
+    case "none": return "status-none";
+    default: return "status-loading"; // loading, file_downloading, file_selected
   }
 }
 
@@ -113,7 +113,7 @@ export function DictLoader({ status, setStatus, config, setConfig, onConfirm, on
     <section className="dict-loader">
       {/* 收起栏：码表加载后显示，点击展开配置面板 */}
       {status.state === "ready" && (
-        <div className="dict-collapsed-bar" onClick={() => setExpanded(v => !v)}>
+        <div className="dict-collapsed-bar" onClick={() => { let v = !expanded; setExpanded(v); v && onCollapse?.(); }}>
           <span className="status-ready">已加载{config.dict_name} ✓</span>
           <span className="dict-expand-hint">{expanded ? "收起配置" : "展开配置"}</span>
         </div>
@@ -205,14 +205,9 @@ export function DictLoader({ status, setStatus, config, setConfig, onConfirm, on
 
         <div className="selection-keys-section">
           <div className="dict-bottom">
-            <button onClick={onConfirm} disabled={status.state === "loading" || status.state === "file_downloading"}>
+            <button onClick={() => onConfirm(() => setExpanded(false))} disabled={status.state === "loading" || status.state === "file_downloading" || !config.file}>
               确认加载
             </button>
-            {status.state === "ready" && (
-              <button onClick={() => { setExpanded(false); onCollapse?.(); }}>
-                收起
-              </button>
-            )}
             <div className="dict-status">
               <span className={statusToClass(status.state)}>{status.message}</span>
             </div>
