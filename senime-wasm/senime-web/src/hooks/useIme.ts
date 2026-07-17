@@ -33,6 +33,16 @@ export interface CaretPosition {
 // 回退剪贴板
 // ═══════════════════════════════════════════════════════════════
 
+/** 仅在 child 不完全可见时，在 parent 内滚动到 child 顶部 */
+function scrollIntoParent(child: HTMLElement, parent: HTMLElement) {
+  const parentRect = parent.getBoundingClientRect();
+  const childRect = child.getBoundingClientRect();
+  // 完全在可视区域内则无需滚动
+  if (childRect.top >= parentRect.top && childRect.bottom <= parentRect.bottom) return;
+  const offsetTop = childRect.top - parentRect.top + parent.scrollTop;
+  parent.scrollTop = offsetTop;
+}
+
 function fallbackCopy(text: string) {
   const el = document.createElement("textarea");
   el.value = text;
@@ -143,7 +153,7 @@ export function useIme(
           let preeditSpan = createPreeditSpan(lastSeg);
           range.insertNode(preeditSpan);
           range.collapse(true);
-          preeditSpan.scrollIntoView()
+          scrollIntoParent(preeditSpan, editor)
           let rect = preeditSpan.getBoundingClientRect();
           setCaretPos({ left: rect.left, top: rect.top + rect.height + 2, showAbove: false });
           inputRef.current = lastSeg.origin;
