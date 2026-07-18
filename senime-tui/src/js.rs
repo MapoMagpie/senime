@@ -144,24 +144,6 @@ pub fn js_get_content(
     Ok((settings, content))
 }
 
-// api:  /Api/User/incrUserRecord
-// encrypt before: {"incrDailyRecord":465,"incrTotalKeystrokes":1228,"incrTotalTime":241.4,"incrTotalWordNum":417,"from":"web","timestamp":1784339915,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-//
-// api:  /Api/Rank/uploadResult
-// encrypt before: {"challengeFlag":0,"textTitle":"消费主义陷阱：理性生活，回归本真","speed":103.65,"keystrokes":5.09,"maChang":2.94,"wordNum":417,"typingTime":"04:01.396","huiGai":48,"huiChe":0,"jianShu":1228,"jianZhun":"79.71%","repeatNum":0,"daCi":"78.18%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":851,"keyMethod":"+100.00%","isFirstSubmit":1,"isGroupText":0,"accuracy":79.71,"from":"web","timestamp":1784339915,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-//
-// api:  /Api/Record/uploadRecord
-// encrypt before: {"content":"当下社会，消费主义无处不在...","textTitle":"消费主义陷阱：理性生活，回归本真","speed":103.65,"keystrokes":5.09,"maChang":2.94,"wordNum":417,"typingTime":"04:01.396","huiGai":48,"huiChe":0,"jianShu":1228,"jianZhun":"79.71%","repeatNum":0,"daCi":"78.18%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":851,"keyMethod":"+100.00%","isSystemText":1,"from":"web","timestamp":1784339915,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-//
-//
-// api:  /Api/User/incrUserRecord
-// encrypt before: {"incrDailyRecord":53,"incrTotalKeystrokes":180,"incrTotalTime":42.55,"incrTotalWordNum":50,"from":"web","timestamp":1784341510,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-//
-// api:  /Api/Rank/uploadResult
-// encrypt before: {"challengeFlag":0,"textTitle":"常用前500 第 4 天","speed":70.51,"keystrokes":4.23,"maChang":3.6,"wordNum":50,"typingTime":"00:42.549","huiGai":3,"huiChe":0,"jianShu":180,"jianZhun":"85.67%","repeatNum":0,"daCi":"4%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":121,"keyMethod":"+100.00%","isFirstSubmit":1,"isGroupText":0,"accuracy":85.67,"from":"web","timestamp":1784341510,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-//
-// api:  /Api/Record/uploadRecord
-// encrypt before: {"content":"解听收前比观石象微知...","textTitle":"常用前500 第 4 天","speed":70.51,"keystrokes":4.23,"maChang":3.6,"wordNum":50,"typingTime":"00:42.549","huiGai":3,"huiChe":0,"jianShu":180,"jianZhun":"85.67%","repeatNum":0,"daCi":"4%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":121,"keyMethod":"+100.00%","isSystemText":1,"from":"web","timestamp":1784341510,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
 #[allow(unused)]
 pub fn js_report(
     settings: &JSSettings,
@@ -175,17 +157,7 @@ pub fn js_report(
     todo!()
 }
 
-// {
-// "incrDailyRecord":53,
-// "incrTotalKeystrokes":180,
-// "incrTotalTime":42.55,
-// "incrTotalWordNum":50,
-// "from":"web",
-// "timestamp":1784341510,
-// "version":"v2.1.6",
-// "subversions":17108,
-// "token":"7d670b541f0b8"
-// }
+// {"incrDailyRecord":300,"incrTotalKeystrokes":805,"incrTotalTime":162.89,"incrTotalWordNum":280,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IncrUserRecord {
@@ -221,90 +193,13 @@ impl IncrUserRecord {
     }
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct JSMeasurement {
-    #[serde(serialize_with = "serialize_f32_2")]
-    speed: f32,
-    #[serde(serialize_with = "serialize_f32_2")]
-    keystrokes: f32,
-    #[serde(serialize_with = "serialize_f32_2")]
-    ma_chang: f32,
-    word_num: usize,
-    typing_time: String,
-    hui_gai: usize,
-    hui_che: usize,
-    jian_shu: usize,
-    jian_zhun: String,
-    repeat_num: usize,
-    da_ci: String,
-    wrong_num: usize,
-    backspace: usize,
-    xuan_chong: usize,
-}
-
-impl JSMeasurement {
-    fn new(mea: &Measurement) -> Self {
-        let typing_time = format!(
-            "{:02}:{:02}.{:03}",
-            mea.duration.as_secs() / 60,
-            mea.duration.as_secs() % 60,
-            mea.duration.subsec_millis()
-        );
-        Self {
-            speed: mea.wpm,
-            keystrokes: mea.kps,
-            ma_chang: mea.avg_len,
-            word_num: mea.text_wc,
-            typing_time,
-            hui_gai: mea.bs_times,
-            hui_che: 0,
-            jian_shu: mea.code_cc,
-            jian_zhun: format!("{:.2}%", mea.accuracy),
-            repeat_num: 0,
-            da_ci: format!("{:.2}%", mea.wg_freq),
-            wrong_num: 0,
-            backspace: mea.bs_times,
-            xuan_chong: mea.se_times,
-        }
-    }
-}
-
-// {
-// "challengeFlag":0,
-// "textTitle":"常用前500 第 4 天",
-// "speed":70.51,
-// "keystrokes":4.23,
-// "maChang":3.6,
-// "wordNum":50,
-// "typingTime":"00:42.549",
-// "huiGai":3,
-// "huiChe":0,
-// "jianShu":180,
-// "jianZhun":"85.67%",
-// "repeatNum":0,
-// "daCi":"4%",
-// "wrongNum":0,
-// "inputMethod":"虎码",
-// "backspace":0,
-// "xuanChong":121,
-// "keyMethod":"+100.00%",
-// "isFirstSubmit":1,
-// "isGroupText":0,
-// "accuracy":85.67,
-// "from":"web",
-// "timestamp":1784341510,
-// "version":"v2.1.6",
-// "subversions":17108,
-// "token":"7d670b541f0b8"
-// }
+// {"challengeFlag":0,"textTitle":"晚安","speed":103.14,"keystrokes":4.94,"maChang":2.88,"wordNum":280,"typingTime":"02:42.890","huiGai":20,"huiChe":0,"jianShu":805,"jianZhun":"85.39%","repeatNum":0,"daCi":"47.86%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":538,"keyMethod":"+100.00%","isFirstSubmit":1,"isGroupText":0,"accuracy":85.39,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadResult {
     challenge_flag: usize,
     text_title: String,
     measure: JSMeasurement,
-    input_method: String,
     key_method: String,
     is_first_submit: usize,
     is_group_text: usize,
@@ -323,13 +218,12 @@ impl UploadResult {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as usize;
-        let measure = JSMeasurement::new(mea);
+        let measure = JSMeasurement::new(mea, &settings.ime);
         Self {
             challenge_flag: 0,
             text_title: content.title.clone(),
             measure,
             key_method: "+100.00%".to_string(),
-            input_method: settings.ime.clone(),
             is_first_submit: 1,
             is_group_text: 0,
             accuracy: mea.accuracy,
@@ -341,32 +235,7 @@ impl UploadResult {
         }
     }
 }
-// {
-// "content":"解听收前比观石象微知...",
-// "textTitle":"常用前500 第 4 天",
-// "speed":70.51,
-// "keystrokes":4.23,
-// "maChang":3.6,
-// "wordNum":50,
-// "typingTime":"00:42.549",
-// "huiGai":3,
-// "huiChe":0,
-// "jianShu":180,
-// "jianZhun":"85.67%",
-// "repeatNum":0,
-// "daCi":"4%",
-// "wrongNum":0,
-// "inputMethod":"虎码",
-// "backspace":0,
-// "xuanChong":121,
-// "keyMethod":"+100.00%",
-// "isSystemText":1,
-// "from":"web",
-// "timestamp":1784341510,
-// "version":"v2.1.6",
-// "subversions":17108,
-// "token":"7d670b541f0b8"
-// }
+// {"content":"我说大概我真的累坏了","textTitle":"晚安","speed":103.14,"keystrokes":4.94,"maChang":2.88,"wordNum":280,"typingTime":"02:42.890","huiGai":20,"huiChe":0,"jianShu":805,"jianZhun":"85.39%","repeatNum":0,"daCi":"47.86%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":538,"keyMethod":"+100.00%","isSystemText":1,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadRecord {
@@ -388,7 +257,7 @@ impl UploadRecord {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as usize;
-        let measure = JSMeasurement::new(mea);
+        let measure = JSMeasurement::new(mea, &settings.ime);
         Self {
             content: content.content.clone(),
             text_title: content.title.clone(),
@@ -400,6 +269,57 @@ impl UploadRecord {
             version: settings.version.clone(),
             subversions: settings.subversions,
             token: settings.token.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JSMeasurement {
+    #[serde(serialize_with = "serialize_f32_2")]
+    speed: f32,
+    #[serde(serialize_with = "serialize_f32_2")]
+    keystrokes: f32,
+    #[serde(serialize_with = "serialize_f32_2")]
+    ma_chang: f32,
+    word_num: usize,
+    typing_time: String,
+    hui_gai: usize,
+    hui_che: usize,
+    jian_shu: usize,
+    jian_zhun: String,
+    repeat_num: usize,
+    da_ci: String,
+    wrong_num: usize,
+    input_method: String,
+    backspace: usize,
+    xuan_chong: usize,
+}
+
+impl JSMeasurement {
+    fn new(mea: &Measurement, ime: &str) -> Self {
+        let typing_time = format!(
+            "{:02}:{:02}.{:03}",
+            mea.duration.as_secs() / 60,
+            mea.duration.as_secs() % 60,
+            mea.duration.subsec_millis()
+        );
+        Self {
+            speed: mea.wpm,
+            keystrokes: mea.kps,
+            ma_chang: mea.avg_len,
+            word_num: mea.text_wc,
+            typing_time,
+            hui_gai: mea.bs_times,
+            hui_che: 0,
+            jian_shu: mea.code_cc,
+            jian_zhun: format!("{:.2}%", mea.accuracy),
+            repeat_num: 0,
+            da_ci: format!("{:.2}%", mea.wg_freq),
+            wrong_num: 0,
+            input_method: ime.to_string(),
+            backspace: mea.bs_times,
+            xuan_chong: mea.se_times,
         }
     }
 }
