@@ -7,6 +7,7 @@ use std::{
 pub struct Record {
     pub len: i32,
     pub origin: Vec<char>,
+    pub has_selection: bool,
     pub start: Instant,
     pub end: Instant,
 }
@@ -37,7 +38,13 @@ pub struct Measurement {
     // 空格次数
     pub sp_times: usize,
     // 候选次数
-    // pub se_times: usize,
+    pub se_times: usize,
+    // 键准，根据`code_cc`与`bs_times`计算
+    pub accuracy: f32,
+    // 打单次数
+    pub si_times: usize,
+    // 打词率，根据`text_wc`与`si_times`计算
+    pub wg_freq: f32,
     pub records: Vec<Record>,
 }
 
@@ -56,15 +63,25 @@ impl Measurement {
             counted: 0,
             bs_times: 0,
             sp_times: 0,
-            // se_times: 0,
+            se_times: 0,
+            accuracy: 100.0,
+            si_times: 0,
+            wg_freq: 0.0,
             records: Default::default(),
         }
     }
 
-    pub fn push_record(&mut self, text_len: i32, origin: Vec<char>, input_start: Instant) {
+    pub fn push_record(
+        &mut self,
+        text_len: i32,
+        origin: Vec<char>,
+        input_start: Instant,
+        has_selection: bool,
+    ) {
         let record = Record {
             len: text_len,
             origin,
+            has_selection,
             start: input_start,
             end: Instant::now(),
         };
@@ -89,6 +106,7 @@ impl Measurement {
     ///   顶字次数?
     ///   空格次数?
     ///   回退次数?
+    ///   候选次数?
     ///   暂停时间?
     pub fn calc(&mut self, text_wc: usize) {
         if self.records.is_empty() {
@@ -120,10 +138,27 @@ impl Measurement {
             if rec.origin.last() == Some(&' ') {
                 self.sp_times += 1;
             }
+            if rec.has_selection {
+                self.se_times += 1;
+            }
+            if rec.len == 1 {
+                self.si_times += 1;
+            }
             end = rec.end;
         }
         self.counted = self.records.len();
         self.text_wc = text_wc;
+        self.accuracy = if self.code_cc == 0 {
+            100.0
+        } else {
+            (self.code_cc - self.bs_times) as f32 / self.code_cc as f32 * 100.0
+        };
+
+        self.wg_freq = if self.text_wc == 0 {
+            0.0
+        } else {
+            (self.text_wc - self.si_times) as f32 / self.text_wc as f32 * 100.0
+        };
 
         self.duration = end.duration_since(start) - self.pause_duration;
         self.wpm = self.text_wc as f32 / (self.duration.as_secs_f32() / 60.0);
@@ -148,6 +183,9 @@ impl Measurement {
         let span_code_cc = format!("键数:[{}]", self.code_cc);
         let span_bs_times = format!("回退:[{}]", self.bs_times);
         let span_sp_times = format!("空格:[{}]", self.sp_times);
+        let span_se_times = format!("候选:[{}]", self.se_times);
+        let span_accuracy = format!("键准:[{:.2}]", self.accuracy);
+        let span_wg_freq = format!("打词:[{:.2}]", self.wg_freq);
         vec![
             span_wpm,
             span_kps,
@@ -158,6 +196,9 @@ impl Measurement {
             span_code_cc,
             span_bs_times,
             span_sp_times,
+            span_se_times,
+            span_accuracy,
+            span_wg_freq,
         ]
     }
 }

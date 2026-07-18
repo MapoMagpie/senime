@@ -193,12 +193,21 @@ impl Context {
     /// 如果存在预设文章（赛文用）
     ///     进行当前输入差异比对.
     ///     进行当前索引之后到下一标点符号为止的分词计算
-    pub fn push(&mut self, text: impl IntoIterator<Item = char>, origin: Vec<char>) {
+    pub fn push(
+        &mut self,
+        text: impl IntoIterator<Item = char>,
+        origin: Vec<char>,
+        has_selection: bool,
+    ) {
         let text: Vec<char> = text.into_iter().collect();
         let txt_len = text.len();
         // let old_sen_len = self.sentence.len();
-        self.measurement
-            .push_record(txt_len as i32, origin.clone(), self.input_start);
+        self.measurement.push_record(
+            txt_len as i32,
+            origin.clone(),
+            self.input_start,
+            has_selection,
+        );
         self.sentence.extend(text);
         self.sentence.clear_pending();
         let start_at = self.sentence.append_end() - txt_len;
@@ -256,8 +265,12 @@ impl Context {
         if !self.sentence.get_pending().is_empty() {
             let pending = self.sentence.get_pending().to_vec();
             let pending_origin = self.sentence.get_pending_origin().to_vec();
-            self.measurement
-                .push_record(pending.len() as i32, pending_origin, self.input_start);
+            self.measurement.push_record(
+                pending.len() as i32,
+                pending_origin,
+                self.input_start,
+                false,
+            );
             self.sentence.extend(pending);
             self.sentence.clear_pending();
         }
@@ -277,7 +290,8 @@ impl Context {
         }
         if self.sentence.len() > 0 {
             self.sentence.pop();
-            self.measurement.push_record(-1, vec![], Instant::now());
+            self.measurement
+                .push_record(-1, vec![], Instant::now(), false);
         }
         // 需要diff
         if self.sentence.get_append_at() != self.sentence.len() {

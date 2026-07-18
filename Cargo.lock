@@ -1840,6 +1840,8 @@ dependencies = [
  "dirs",
  "ratatui",
  "senime-lib",
+ "serde",
+ "serde_json",
  "unicode-width",
 ]
 

@@ -750,6 +750,16 @@ pub enum Tag {
     Unknown,
 }
 
+impl Tag {
+    pub fn has_selection(&self) -> bool {
+        match self {
+            Tag::Code(sel) => sel.has_selection,
+            Tag::Punctuation(sel) => sel.1,
+            _ => false,
+        }
+    }
+}
+
 /// 候选
 /// `code`         编码
 /// `text`         字词(码表查询结果)

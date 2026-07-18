@@ -33,6 +33,7 @@ use crate::context::{Context, WrappedText};
 use crate::popup::Popup;
 
 mod context;
+mod js;
 mod measurement;
 mod popup;
 mod sentence;
@@ -216,7 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Enter => {
                         ctx.confrim_pending();
-                        ctx.push(vec!['\n'], vec!['\n']);
+                        ctx.push(vec!['\n'], vec!['\n'], false);
                     }
                     KeyCode::Backspace => {
                         ctx.backspace();
@@ -246,17 +247,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let poped = segments.pop();
         if !segments.is_empty() {
-            segments.into_iter().for_each(|(text, origin, _)| {
-                ctx.push(text.chars(), origin);
+            segments.into_iter().for_each(|(text, origin, tag)| {
+                ctx.push(text.chars(), origin, tag.has_selection());
             });
         }
-        if let Some((text, chars, _)) = poped {
+        if let Some((text, chars, tag)) = poped {
             // 会出现text为空，而chars为 ' '(空格)
             let text_chars: Vec<char> = text.chars().collect();
             if pending {
                 ctx.set_pending(text_chars, chars);
             } else {
-                ctx.push(text_chars, chars);
+                ctx.push(text_chars, chars, tag.has_selection());
             }
         }
         ctx.calc_measurement();
