@@ -31,7 +31,9 @@ pub struct Context {
     preset_first_code: Option<String>,
     sentence: Sentence,
     styles: Vec<(usize, Option<Style>)>,
+    /// 每个字词输入时的时间
     input_start: Instant,
+    /// `pending`会频繁变动，且有长有短，为了节省计算成本，在设置`pending`前，缓存现有的`style`
     before_pending_style: Vec<(usize, Option<Style>)>,
     enc: Looker,
     pre_render: PreRender,
@@ -152,7 +154,7 @@ impl Context {
                 }
                 code.iter().collect()
             });
-            let mut iter = ret.into_iter().map(|seg| seg.simple()).collect::<Vec<_>>(); //.collect::<Vec<_>>();
+            let mut iter = ret.into_iter().map(|seg| seg.simple()).collect::<Vec<_>>();
             // 从后向前，在patch_style中会根据i扩容，先用最大数避免多次扩容
             iter.reverse();
 
@@ -246,9 +248,11 @@ impl Context {
 
         if range.end <= self.styles.len() {
             if old_pen_end < new_pen_end {
+                // 新的`pending`比上次的`pending`要长，继续保存`style`
                 self.before_pending_style
                     .extend((self.styles[old_pen_end..new_pen_end]).to_vec());
             } else {
+                // 恢复缓存的`style` 以消除上次的`pending`时影响的`style`
                 self.before_pending_style
                     .iter()
                     .enumerate()
@@ -293,6 +297,10 @@ impl Context {
             self.measurement
                 .push_record(-1, vec![], Instant::now(), false);
         }
+        if self.sentence.len() == 0 {
+            self.clear();
+            return;
+        }
         // 需要diff
         if self.sentence.get_append_at() != self.sentence.len() {
             let start = self.sentence.pending_end();
@@ -319,6 +327,14 @@ impl Context {
         self.sentence.get_pending_origin()
     }
 
+    pub fn sentence_len(&self) -> usize {
+        self.sentence.len()
+    }
+
+    pub fn preset_len(&self) -> usize {
+        self.preset.as_ref().map(|p| p.len()).unwrap_or(0)
+    }
+
     pub fn get_sentence<'a>(&'a self) -> SentenceChars<'a> {
         self.sentence.get_chars()
     }
@@ -334,11 +350,7 @@ impl Context {
             line_idx -= 1;
         }
         // 找出当前行在chars中的开始范围
-        let start = self
-            .pre_render
-            .get(line_idx)
-            .map(|line| line[1].sentence_i)
-            .unwrap_or(0);
+        let start = self.pre_render.get_line_start(line_idx).unwrap_or(0);
         // 在当前光标后，有几行位于视图内，如果不在视图内，则停止折行计算
         // self.abs_cursor永远出现在视图内，
         //    当其y值大于area.height时，会在下方留下一行的空间
@@ -388,9 +400,9 @@ impl Context {
         // 根据cursor.y计算切片窗口，cursor.y 从向下1行开始向上倒止t_area.height，并最终修正cursor.y到t_area内
         let mut end = cursor.y + 2;
         let start = end.saturating_sub(height);
-        end = (start + height).min(self.pre_render.len() as u16);
+        end = (start + height).min(self.pre_render.lines_count() as u16);
         cursor.y -= start;
-        let slice = &self.pre_render[start as usize..end as usize];
+        let slice = self.pre_render.slice(start as usize..end as usize);
         (slice, cursor)
     }
 
@@ -441,15 +453,15 @@ where
         v
     };
     let mut cursor: Option<Position> = None;
-    let mut ret: PreRender = vec![];
+    let mut pren: PreRender = PreRender::default();
     let mut first = true;
     for (i, c) in content.into_iter().enumerate() {
         let c = *c.borrow();
         if first {
-            ret.push(init_line(i + idx_offset));
+            pren.push_line(init_line(i + idx_offset));
             first = false;
         }
-        ret[y][x].sentence_i = i + idx_offset;
+        pren.set_sentence_i([y, x], i + idx_offset);
         let char_wid = c.width().unwrap_or(0);
         // if wid == 0 {
         //     eprintln!("zero width: {c} at {i}");
@@ -460,19 +472,19 @@ where
             if let Some(cursor) = cursor
                 && y > lines
             {
-                return (ret, cursor);
+                return (pren, cursor);
             }
             x = 1;
-            ret.push(init_line(i + idx_offset));
+            pren.push_line(init_line(i + idx_offset));
         }
-        ret[y][x].sentence_i = i + idx_offset;
+        pren.set_sentence_i([y, x], i + idx_offset);
         if c != '\n' {
-            ret[y][x].char = Some(c);
-            ret[y][x].sentence_i = i + idx_offset;
+            pren.set_char([y, x], Some(c));
+            pren.set_sentence_i([y, x], i + idx_offset);
             if let Some((palette_idx, patch)) = styles.get(i + idx_offset) {
-                ret[y][x].style = COLOR_PALETTE[*palette_idx];
+                pren.set_style([y, x], COLOR_PALETTE[*palette_idx]);
                 if let Some(patch) = patch {
-                    ret[y][x].style = COLOR_PALETTE[*palette_idx].patch(*patch);
+                    pren.set_style([y, x], COLOR_PALETTE[*palette_idx].patch(*patch));
                 }
             }
             // } else {
@@ -484,10 +496,52 @@ where
         x += char_wid;
     }
     // eprintln!("cursor: {cursor:?}, x: {x}, char wid: {char_wid}");
-    (ret, cursor.unwrap_or(Position::new(x as u16, y as u16)))
+    (pren, cursor.unwrap_or(Position::new(x as u16, y as u16)))
 }
 
-pub type PreRender = Vec<Vec<RenderCell>>;
+#[derive(Default)]
+pub struct PreRender {
+    inner: Vec<Vec<RenderCell>>,
+}
+
+impl PreRender {
+    fn set_sentence_i(&mut self, [y, x]: [usize; 2], idx_offset: usize) {
+        self.inner[y][x].sentence_i = idx_offset;
+    }
+
+    fn push_line(&mut self, line: Vec<RenderCell>) {
+        self.inner.push(line);
+    }
+
+    fn set_char(&mut self, [y, x]: [usize; 2], c: Option<char>) {
+        self.inner[y][x].char = c;
+    }
+
+    fn set_style(&mut self, [y, x]: [usize; 2], s: Style) {
+        self.inner[y][x].style = s;
+    }
+
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    fn get_line_start(&self, line_idx: usize) -> Option<usize> {
+        // 从1开始是因为边框
+        self.inner.get(line_idx).map(|line| line[1].sentence_i)
+    }
+
+    fn splice(&mut self, range: std::ops::RangeFrom<usize>, replace_with: PreRender) {
+        self.inner.splice(range, replace_with.inner);
+    }
+
+    fn slice(&self, range: Range<usize>) -> &[Vec<RenderCell>] {
+        &self.inner[range]
+    }
+
+    fn lines_count(&self) -> usize {
+        self.inner.len()
+    }
+}
 // pub type PreRenderSlice<'a> = &'a [Vec<RenderCell>];
 
 #[derive(Debug, Copy, Clone)]

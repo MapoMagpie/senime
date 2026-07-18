@@ -275,28 +275,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
         if let Some((text, chars, tag)) = poped {
-            // 会出现text为空，而chars为 ' '(空格)
-            let text_chars: Vec<char> = text.chars().collect();
             if pending {
-                ctx.set_pending(text_chars, chars);
+                ctx.set_pending(text.chars(), chars);
             } else {
-                ctx.push(text_chars, chars, tag.has_selection());
+                ctx.push(text.chars(), chars, tag.has_selection());
             }
         }
-        ctx.calc_measurement();
 
-        // 当应用全屏时与frame.area() 一致，目前是默认的全屏
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Fill(1), Constraint::Length(5)])
+            .constraints([Constraint::Fill(1), Constraint::Length(6)])
             .split(area);
 
         let b_area = chunks[0];
         let m_area = chunks[1];
+        // 当应用全屏时与frame.area() 一致，目前是默认的全屏
         let t_area = b_area.inner(Margin::new(1, 1));
 
         // 折行计算
         ctx.calc_pre_render(t_area);
+        ctx.calc_measurement();
 
         let (pre_render, Position { x, y }) = ctx.get_pre_render_lines(t_area.height);
         let cursor = Position::new(t_area.x + x, t_area.y + y);
@@ -334,18 +332,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         terminal.show_cursor()?;
     }
-    if args.stdout {
-        println!("{}", ctx.get_sentence().collect::<String>())
-    }
-    if args.record {
-        record_input_data(&time_id, &ctx)?;
-    }
-    // 向 jsxiaoshi.com 上报输入数据
-    if let (Some((ref settings, ref content)), Some(action)) = (js_bridge, js_action) {
-        eprint!("上传打字数据中...");
-        match js::js_report(settings, action, ctx.measure(), content) {
-            Ok(()) => eprintln!("上传成功"),
-            Err(e) => eprintln!("{e}"),
+    if ctx.sentence_len() > 0 {
+        if args.stdout {
+            println!("{}", ctx.get_sentence().collect::<String>())
+        }
+        if args.record {
+            record_input_data(&time_id, &ctx)?;
+        }
+        // 向 jsxiaoshi.com 上报输入数据
+        if let (Some((ref settings, ref content)), Some(action)) = (js_bridge, js_action) {
+            if ctx.sentence_len() >= ctx.preset_len() {
+                eprint!("上传打字数据中...");
+                match js::js_report(settings, action, ctx.measure(), content) {
+                    Ok(msg) => eprintln!("{msg}"),
+                    Err(e) => eprintln!("{e}"),
+                }
+            }
         }
     }
     Ok(())

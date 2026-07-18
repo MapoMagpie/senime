@@ -202,7 +202,7 @@ pub fn js_report(
     _action: JSAction,
     mea: &Measurement,
     content: &JSContent,
-) -> Result<(), JsError> {
+) -> Result<String, JsError> {
     let ua = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
     let referer = "https://www.52dazi.cn/";
     let ct = "application/x-www-form-urlencoded";
@@ -222,12 +222,16 @@ pub fn js_report(
     let upload_result = UploadResult::new(settings, mea, content);
     let body = serde_json::to_string(&upload_result)?;
     let encrypted = encrypt(body);
-    ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
+    let resp = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
         .header("User-Agent", ua)
         .header("Accept", "application/json, text/plain, */*")
         .header("Content-Type", ct)
         .header("Referer", referer)
         .send(&encrypted)?;
+    let body_str = resp.into_body().read_to_string()?;
+    let json: serde_json::Value = serde_json::from_str(&body_str)?;
+
+    let message = json["msg"].to_string();
 
     // api: /Api/Record/uploadRecord
     let upload_record = UploadRecord::new(settings, mea, content);
@@ -240,7 +244,7 @@ pub fn js_report(
         .header("Referer", referer)
         .send(&encrypted)?;
 
-    Ok(())
+    Ok(message)
 }
 
 // {"incrDailyRecord":300,"incrTotalKeystrokes":805,"incrTotalTime":162.89,"incrTotalWordNum":280,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
@@ -559,3 +563,23 @@ mod tests {
         }
     }
 }
+// 锦标赛
+// api:  /Api/Text/getContent
+// {"competitionType":2,"snumflag":"1","from":"web","timestamp":1784375069,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
+// {
+// 	"error": 0,
+// 	"msg": {
+// 		"a_name": "锦标赛第3255期",
+// 		"a_content": "作为一个社恐患者，我总习惯独处，害怕拥挤的人群，害怕无意义的社交，就连去超市买东西，都要提前在心里想好要说的话，反复练习，生怕和别人产生过多的交集。周末的午后，我总喜欢窝在小小的出租屋里，泡一杯淡淡的绿茶，看一本喜欢的书，听着舒缓的轻音乐，享受属于自己的安静时光，这对我来说，是最放松、最自在的时刻。身边总有人说我孤僻，说我不合群，劝我多出去走走，多认识一些朋友，可只有我自己知道，独处从不是孤独，而是与自己对话的最好方式，是沉淀自己的最佳时机。独处时，我可以静下心来思考人生，梳理自己的情绪，不必迎合别人的喜好，不必伪装自己的模样，不必强迫自己融入不适合的圈子，做最真实的自己。我会在独处时学着做饭，从一开始的手忙脚乱，到后来能做出几样可口的家常菜，看着食材在锅里慢慢变成美味的菜肴，心里满是成就感；我会在独处时打理室内绿植，给绿萝浇水、修剪枝叶，看着绿萝抽出新的枝叶，慢慢爬满窗台，感受生命的力量和美好；我会在独处时写下自己的心情，把那些不敢说的话、藏在心底的情绪，都藏在文字里，让文字成为自己的情绪出口。慢慢的我发现，社恐并不可怕，不必强迫自己去迎合别人，不必勉强自己去做不喜欢的事情。真正的成熟，是学会接纳自己的不完美，学会享受独处的时光，在独处中沉淀自己，在安静中找到内心的力量。那些独处的时光，没有喧嚣，没有纷扰，只有自己和自己的对话，终会让我们成为更从容、更强大、更通透的自己，也会让我们更懂得珍惜那些真正值得的人和事。",
+// 		"a_url": ""
+// 	}
+// }
+//
+// api:  /Api/User/incrUserRecord
+// {"incrDailyRecord":689,"incrTotalKeystrokes":1823,"incrTotalTime":346.04,"incrTotalWordNum":617,"from":"web","timestamp":1784375418,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
+//
+// api:  /Api/Rank/uploadResult
+// {"challengeFlag":0,"textTitle":"锦标赛第3255期","speed":106.98,"keystrokes":5.27,"maChang":2.95,"wordNum":617,"typingTime":"05:46.039","huiGai":72,"huiChe":0,"jianShu":1823,"jianZhun":"80.34%","repeatNum":0,"daCi":"71.15%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":1223,"keyMethod":"+100.00%","isFirstSubmit":1,"isGroupText":0,"accuracy":80.34,"from":"web","timestamp":1784375418,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
+//
+// api:  /Api/Record/uploadRecord
+// {"content":"作为一个社恐患者","textTitle":"锦标赛第3255期","speed":106.98,"keystrokes":5.27,"maChang":2.95,"wordNum":617,"typingTime":"05:46.039","huiGai":72,"huiChe":0,"jianShu":1823,"jianZhun":"80.34%","repeatNum":0,"daCi":"71.15%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":1223,"keyMethod":"+100.00%","isSystemText":1,"from":"web","timestamp":1784375418,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
