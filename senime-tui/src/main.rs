@@ -168,7 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .map(|a| js::JSAction::from_str(a).expect("无效的 --js-action，应为 random 或 daily"));
     let js_bridge: Option<(js::JSSettings, js::JSContent)> = match (&args.js_settings, js_action) {
-        (Some(path), Some(action)) => js::js_get_content(path, action).ok(),
+        (Some(path), Some(action)) => Some(js::js_get_content(path, action)?),
         _ => None,
     };
 
@@ -342,7 +342,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // 向 jsxiaoshi.com 上报输入数据
     if let (Some((ref settings, ref content)), Some(action)) = (js_bridge, js_action) {
-        js::js_report(settings, action, ctx.measure(), content);
+        eprint!("上传打字数据中...");
+        match js::js_report(settings, action, ctx.measure(), content) {
+            Ok(()) => eprintln!("上传成功"),
+            Err(e) => eprintln!("{e}"),
+        }
     }
     Ok(())
 }

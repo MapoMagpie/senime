@@ -2,6 +2,71 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::measurement::Measurement;
 
+#[derive(Debug)]
+pub enum JsError {
+    /// IO 错误（读取配置文件失败等）
+    Io(std::io::Error),
+    /// TOML 解析错误
+    Toml(toml::de::Error),
+    /// HTTP 请求错误
+    Http(ureq::Error),
+    /// JSON 解析错误
+    Json(serde_json::Error),
+    /// API 返回了错误码
+    Api(String),
+    /// 无效的 action
+    NoAction,
+}
+
+impl std::fmt::Display for JsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JsError::Io(e) => write!(f, "JS bridge IO 错误: {e}"),
+            JsError::Toml(e) => write!(f, "JS bridge 配置文件解析错误: {e}"),
+            JsError::Http(e) => write!(f, "JS bridge HTTP 请求错误: {e}"),
+            JsError::Json(e) => write!(f, "JS bridge JSON 解析错误: {e}"),
+            JsError::Api(msg) => write!(f, "JS bridge API 错误: {msg}"),
+            JsError::NoAction => write!(f, "JS bridge: 无效的 action"),
+        }
+    }
+}
+
+impl std::error::Error for JsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            JsError::Io(e) => Some(e),
+            JsError::Toml(e) => Some(e),
+            JsError::Http(e) => Some(e),
+            JsError::Json(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for JsError {
+    fn from(e: std::io::Error) -> Self {
+        JsError::Io(e)
+    }
+}
+
+impl From<toml::de::Error> for JsError {
+    fn from(e: toml::de::Error) -> Self {
+        JsError::Toml(e)
+    }
+}
+
+impl From<ureq::Error> for JsError {
+    fn from(e: ureq::Error) -> Self {
+        JsError::Http(e)
+    }
+}
+
+impl From<serde_json::Error> for JsError {
+    fn from(e: serde_json::Error) -> Self {
+        JsError::Json(e)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(default)]
 pub struct JSSettings {
@@ -51,10 +116,10 @@ pub struct JSContent {
 pub fn js_get_content(
     settings_path: &str,
     action: JSAction,
-) -> Result<(JSSettings, JSContent), String> {
+) -> Result<(JSSettings, JSContent), JsError> {
     // 1. 从`settings_path`读取`JSSettings`
-    let settings_str = std::fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
-    let settings: JSSettings = toml::from_str(&settings_str).map_err(|e| e.to_string())?;
+    let settings_str = std::fs::read_to_string(settings_path)?;
+    let settings: JSSettings = toml::from_str(&settings_str)?;
     // 3. 构建请求体：基础字段来自 settings，timestamp 就地获取
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -87,7 +152,7 @@ pub fn js_get_content(
             .to_string();
             ("/Api/Text/getRandomText", body)
         }
-        JSAction::None => return Err("no action".to_string()),
+        JSAction::None => return Err(JsError::NoAction),
     };
 
     // 4. 加密请求体
@@ -103,16 +168,15 @@ pub fn js_get_content(
         .header("Accept", "application/json, text/plain, */*")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Referer", "https://www.52dazi.cn/")
-        .send(&encrypted)
-        .map_err(|e| e.to_string())?;
+        .send(&encrypted)?;
 
     // 6. 解析响应：a_name → title, a_content → content（Random 用 name/content）
     let mut body = response.into_body();
-    let body_str = body.read_to_string().map_err(|e| e.to_string())?;
-    let json: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
+    let body_str = body.read_to_string()?;
+    let json: serde_json::Value = serde_json::from_str(&body_str)?;
 
     if json["error"] != 0 {
-        return Err("api response error code 1".to_string());
+        return Err(JsError::Api("API 返回非零错误码".to_string()));
     }
 
     let msg = &json["msg"];
@@ -138,43 +202,45 @@ pub fn js_report(
     _action: JSAction,
     mea: &Measurement,
     content: &JSContent,
-) -> () {
+) -> Result<(), JsError> {
     let ua = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
     let referer = "https://www.52dazi.cn/";
     let ct = "application/x-www-form-urlencoded";
 
     // api: /Api/User/incrUserRecord
     let incr_user_record = IncrUserRecord::new(settings, mea);
-    let body = serde_json::to_string(&incr_user_record).unwrap();
+    let body = serde_json::to_string(&incr_user_record)?;
     let encrypted = encrypt(body);
-    let _ = ureq::post("https://www.jsxiaoshi.com/index.php/Api/User/incrUserRecord")
+    ureq::post("https://www.jsxiaoshi.com/index.php/Api/User/incrUserRecord")
         .header("User-Agent", ua)
         .header("Accept", "application/json, text/plain, */*")
         .header("Content-Type", ct)
         .header("Referer", referer)
-        .send(&encrypted);
+        .send(&encrypted)?;
 
     // api: /Api/Rank/uploadResult
     let upload_result = UploadResult::new(settings, mea, content);
-    let body = serde_json::to_string(&upload_result).unwrap();
+    let body = serde_json::to_string(&upload_result)?;
     let encrypted = encrypt(body);
-    let _ = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
+    ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
         .header("User-Agent", ua)
         .header("Accept", "application/json, text/plain, */*")
         .header("Content-Type", ct)
         .header("Referer", referer)
-        .send(&encrypted);
+        .send(&encrypted)?;
 
     // api: /Api/Record/uploadRecord
     let upload_record = UploadRecord::new(settings, mea, content);
-    let body = serde_json::to_string(&upload_record).unwrap();
+    let body = serde_json::to_string(&upload_record)?;
     let encrypted = encrypt(body);
-    let _ = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord")
+    ureq::post("https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord")
         .header("User-Agent", ua)
         .header("Accept", "application/json, text/plain, */*")
         .header("Content-Type", ct)
         .header("Referer", referer)
-        .send(&encrypted);
+        .send(&encrypted)?;
+
+    Ok(())
 }
 
 // {"incrDailyRecord":300,"incrTotalKeystrokes":805,"incrTotalTime":162.89,"incrTotalWordNum":280,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
