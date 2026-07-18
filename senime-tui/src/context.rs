@@ -60,6 +60,8 @@ impl Context {
         self.preset = preset;
         if let Some(preset) = self.preset.as_ref() {
             self.measurement.preset_wc = Some(preset.len());
+            self.measurement.diff_slab = Vec::with_capacity(preset.len());
+            self.measurement.diff_slab.resize(preset.len(), false);
             self.segment(0..preset.len());
         }
     }
@@ -107,24 +109,20 @@ impl Context {
             //     chars.iter().map(|c| c.to_owned()).collect::<String>(),
             //     other.iter().collect::<String>(),
             // );
-            let diff_range = diff_sequence(chars, Some(other.iter()))
-                .into_iter()
-                .enumerate()
-                .map(|(i, d)| {
-                    (
-                        range.start + i,
-                        if d {
-                            style_on_same
-                        } else {
-                            Some((COLOR_DIFF, None))
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            diff_range
-                .into_iter()
-                .for_each(|(i, s)| self.set_style(i, s));
+            // 比较两个char序列间的不同.
+            // 简单比较，也就是直接比较相同索引下的字符
+            // true为字符相同，false为不同
+            let iter = chars.zip(other).map(|(a, b)| a == b).collect::<Vec<_>>();
+            iter.into_iter().enumerate().for_each(|(i, d)| {
+                let idx = range.start + i;
+                let style = if d {
+                    style_on_same
+                } else {
+                    Some((COLOR_DIFF, None))
+                };
+                self.set_style(idx, style);
+                self.measurement.update_diff(idx, !d);
+            });
         }
     }
 
@@ -584,21 +582,4 @@ fn advance_to_word_boundary(slice: &[char], at_least: usize) -> usize {
         }
     });
     re.unwrap_or(slice.len())
-}
-
-/// 比较两个char序列间的不同.
-/// 简单比较，也就是直接比较相同索引下的字符
-/// true为字符相同，false为不同
-fn diff_sequence<'a>(
-    chars: impl IntoIterator<Item = &'a char>,
-    other: Option<impl IntoIterator<Item = &'a char>>,
-) -> Vec<bool> {
-    if other.is_none() {
-        return Vec::default();
-    }
-    chars
-        .into_iter()
-        .zip(other.unwrap())
-        .map(|(a, b)| a == b)
-        .collect()
 }

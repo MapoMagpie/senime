@@ -45,7 +45,10 @@ pub struct Measurement {
     pub si_times: usize,
     // 打词率，根据`text_wc`与`si_times`计算
     pub wg_freq: f32,
+    // 错字数量
+    pub wrong_count: usize,
     pub records: Vec<Record>,
+    pub diff_slab: Vec<bool>,
 }
 
 impl Measurement {
@@ -67,7 +70,9 @@ impl Measurement {
             accuracy: 100.0,
             si_times: 0,
             wg_freq: 0.0,
+            wrong_count: 0,
             records: Default::default(),
+            diff_slab: Default::default(),
         }
     }
 
@@ -97,17 +102,6 @@ impl Measurement {
         *self = new_measurement;
     }
 
-    /// 计量速度.
-    /// 需要的信息:
-    ///   开始时间-结束时间
-    ///   总字数
-    ///   总输入
-    ///   码长
-    ///   顶字次数?
-    ///   空格次数?
-    ///   回退次数?
-    ///   候选次数?
-    ///   暂停时间?
     pub fn calc(&mut self, text_wc: usize) {
         if self.records.is_empty() {
             return;
@@ -160,6 +154,13 @@ impl Measurement {
             (self.text_wc - self.si_times) as f32 / self.text_wc as f32 * 100.0
         };
 
+        self.wrong_count = self
+            .diff_slab
+            .iter()
+            .enumerate()
+            .filter(|(i, d)| *i < text_wc && **d)
+            .count();
+
         self.duration = end.duration_since(start) - self.pause_duration;
         self.wpm = self.text_wc as f32 / (self.duration.as_secs_f32() / 60.0);
         self.kps = self.code_cc as f32 / self.duration.as_secs_f32();
@@ -186,6 +187,7 @@ impl Measurement {
         let span_se_times = format!("候选:[{}]", self.se_times);
         let span_accuracy = format!("键准:[{:.2}]", self.accuracy);
         let span_wg_freq = format!("打词:[{:.2}]", self.wg_freq);
+        let span_wrong_count = format!("打错:[{}]", self.wrong_count);
         vec![
             span_wpm,
             span_kps,
@@ -199,7 +201,14 @@ impl Measurement {
             span_se_times,
             span_accuracy,
             span_wg_freq,
+            span_wrong_count,
         ]
+    }
+
+    pub(crate) fn update_diff(&mut self, idx: usize, d: bool) {
+        if idx < self.diff_slab.len() {
+            self.diff_slab[idx] = d;
+        }
     }
 }
 
