@@ -147,14 +147,46 @@ pub fn js_get_content(
 #[allow(unused)]
 pub fn js_report(
     settings: &JSSettings,
-    action: JSAction,
+    _action: JSAction,
     mea: &Measurement,
     content: &JSContent,
 ) -> () {
-    let _incr_user_record = IncrUserRecord::new(settings, mea);
-    let _upload_record = UploadRecord::new(settings, mea, content);
-    let _upload_result = UploadResult::new(settings, mea, content);
-    todo!()
+    let ua = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
+    let referer = "https://www.52dazi.cn/";
+    let ct = "application/x-www-form-urlencoded";
+
+    // api: /Api/User/incrUserRecord
+    let incr_user_record = IncrUserRecord::new(settings, mea);
+    let body = serde_json::to_string(&incr_user_record).unwrap();
+    let encrypted = encrypt(body);
+    let _ = ureq::post("https://www.jsxiaoshi.com/index.php/Api/User/incrUserRecord")
+        .header("User-Agent", ua)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Content-Type", ct)
+        .header("Referer", referer)
+        .send(&encrypted);
+
+    // api: /Api/Rank/uploadResult
+    let upload_result = UploadResult::new(settings, mea, content);
+    let body = serde_json::to_string(&upload_result).unwrap();
+    let encrypted = encrypt(body);
+    let _ = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
+        .header("User-Agent", ua)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Content-Type", ct)
+        .header("Referer", referer)
+        .send(&encrypted);
+
+    // api: /Api/Record/uploadRecord
+    let upload_record = UploadRecord::new(settings, mea, content);
+    let body = serde_json::to_string(&upload_record).unwrap();
+    let encrypted = encrypt(body);
+    let _ = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord")
+        .header("User-Agent", ua)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Content-Type", ct)
+        .header("Referer", referer)
+        .send(&encrypted);
 }
 
 // {"incrDailyRecord":300,"incrTotalKeystrokes":805,"incrTotalTime":162.89,"incrTotalWordNum":280,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
@@ -199,6 +231,7 @@ impl IncrUserRecord {
 struct UploadResult {
     challenge_flag: usize,
     text_title: String,
+    #[serde(flatten)]
     measure: JSMeasurement,
     key_method: String,
     is_first_submit: usize,
@@ -241,6 +274,7 @@ impl UploadResult {
 struct UploadRecord {
     content: String,
     text_title: String,
+    #[serde(flatten)]
     measure: JSMeasurement,
     key_method: String,
     is_system_text: usize,
@@ -380,6 +414,98 @@ mod tests {
         let expected = "0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrJ6F5AOQcbT/8zcEXRduunS2/PgY6vOFjT/Z7GRJEtrvwLRo8kV6ij8l8U5Uda+0x8/XI2kBUCWyo1oqxPJVGJRVLMVSopKJt5Q/gIxXK65a";
         let result = encrypt(body);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_incr_user_record_serialization() {
+        let record = IncrUserRecord {
+            incr_daily_record: 300,
+            incr_total_keystrokes: 805,
+            incr_total_time: 162.89,
+            incr_total_word_num: 280,
+            from: "web".to_string(),
+            timestamp: 1784354377,
+            version: "v2.1.6".to_string(),
+            subversions: 17108,
+            token: "7d670b541f0b8".to_string(),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let expected = r#"{"incrDailyRecord":300,"incrTotalKeystrokes":805,"incrTotalTime":162.89,"incrTotalWordNum":280,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}"#;
+        assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn test_upload_result_serialization() {
+        let measure = JSMeasurement {
+            speed: 103.14,
+            keystrokes: 4.94,
+            ma_chang: 2.88,
+            word_num: 280,
+            typing_time: "02:42.890".to_string(),
+            hui_gai: 20,
+            hui_che: 0,
+            jian_shu: 805,
+            jian_zhun: "85.39%".to_string(),
+            repeat_num: 0,
+            da_ci: "47.86%".to_string(),
+            wrong_num: 0,
+            input_method: "虎码".to_string(),
+            backspace: 0,
+            xuan_chong: 538,
+        };
+        let result = UploadResult {
+            challenge_flag: 0,
+            text_title: "晚安".to_string(),
+            measure,
+            key_method: "+100.00%".to_string(),
+            is_first_submit: 1,
+            is_group_text: 0,
+            accuracy: 85.39,
+            from: "web".to_string(),
+            timestamp: 1784354377,
+            version: "v2.1.6".to_string(),
+            subversions: 17108,
+            token: "7d670b541f0b8".to_string(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let expected = r#"{"challengeFlag":0,"textTitle":"晚安","speed":103.14,"keystrokes":4.94,"maChang":2.88,"wordNum":280,"typingTime":"02:42.890","huiGai":20,"huiChe":0,"jianShu":805,"jianZhun":"85.39%","repeatNum":0,"daCi":"47.86%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":538,"keyMethod":"+100.00%","isFirstSubmit":1,"isGroupText":0,"accuracy":85.39,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}"#;
+        assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn test_upload_record_serialization() {
+        let measure = JSMeasurement {
+            speed: 103.14,
+            keystrokes: 4.94,
+            ma_chang: 2.88,
+            word_num: 280,
+            typing_time: "02:42.890".to_string(),
+            hui_gai: 20,
+            hui_che: 0,
+            jian_shu: 805,
+            jian_zhun: "85.39%".to_string(),
+            repeat_num: 0,
+            da_ci: "47.86%".to_string(),
+            wrong_num: 0,
+            input_method: "虎码".to_string(),
+            backspace: 0,
+            xuan_chong: 538,
+        };
+        let record = UploadRecord {
+            content: "我说大概我真的累坏了".to_string(),
+            text_title: "晚安".to_string(),
+            measure,
+            key_method: "+100.00%".to_string(),
+            is_system_text: 1,
+            from: "web".to_string(),
+            timestamp: 1784354377,
+            version: "v2.1.6".to_string(),
+            subversions: 17108,
+            token: "7d670b541f0b8".to_string(),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let expected = r#"{"content":"我说大概我真的累坏了","textTitle":"晚安","speed":103.14,"keystrokes":4.94,"maChang":2.88,"wordNum":280,"typingTime":"02:42.890","huiGai":20,"huiChe":0,"jianShu":805,"jianZhun":"85.39%","repeatNum":0,"daCi":"47.86%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":538,"keyMethod":"+100.00%","isSystemText":1,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}"#;
+        assert_eq!(json, expected);
     }
 
     #[test]
