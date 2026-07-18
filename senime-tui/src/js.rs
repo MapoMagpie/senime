@@ -53,12 +53,12 @@ pub struct JSContent {
 // 	"error": 0,
 // 	"msg": {
 // 		"name": "C03",
-// 		"content": "那天班上学习《人民日报》社论《领导干部带头学好》的文章，班主任主持，班长顾养民念报纸。孙少平一句也没听，低着头悄悄在桌子下面看小说。他根本没有发现跛女子给班主任老师示意他的不规行为。直等到老师走到他面前，把书从他手里一把夺过之后，他才猛地惊呆了。全班顿时哄堂大笑。顾养民不念报了，他看来似乎是一副局外人的样子，但孙少平觉得班长分明抱着一种幸灾乐祸的态度，看老师怎样处置他呀。班主任把没收的书放在讲桌上，先没说什么，让顾养民接着往下念。学习完了以后，老师把他叫到宿舍，意外地把书又还给了他，并且说：“《红岩》是一本好书，但以后你不要在课堂上看了。去吧”孙少平怀着感激的心情退出了老师的房子。他从老师的眼睛里没有看出一丝的谴责，反而满含着一种亲切和热情。这一件小小的事，使他对书更加珍爱了。是的，他除过一天几个黑高粱面馍以外，再有什么呢？只有这些书，才使他觉得活着还是十分有意义的，他的精神也才能得到一些安慰，并且唤起对自己未来生活的某种美好的向往----没有这一点，他就无法熬过眼前这艰难而痛苦的每一个日子。"
+// 		"content": "那天班上学习..."
 // 	}
 // }
 pub fn js_bridge(settings_path: &str, action: JSAction) -> Option<(JSSettings, JSContent)> {
     // 1. 从`setting_path`读取到`JSSettings`
-    // 2. 根据`action`请求不同的`api`，
+    // 2. 根据`action`请求不同的`api`，`Random`对应`/Api/Text/getRandomText`，`Daily`对应`/Api/Text/getContent`
     // 3. 以`/Api/Text/getContent`为例，构建请求体，其中`from, version, subversions, token`从`JSSettings`中来，`timestamp`就地获取
     //    请求体 {"competitionType":0,"snumflag":"1","from":"web","timestamp":1784339666,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
     // 4. 将请求体加密
@@ -382,5 +382,34 @@ where
 //     return n.toString()
 // }
 fn encrypt(body: String) -> String {
-    todo!()
+    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::ZeroPadding};
+
+    let key = b"c9ec834c80f77237";
+    let iv = b"db4d6bfde3057dca";
+
+    // ZeroPadding 要求缓冲区预先填充到块大小的整数倍
+    let body_bytes = body.as_bytes();
+    let padded_len = (body_bytes.len() + 15) / 16 * 16;
+    let mut buf = vec![0u8; padded_len];
+    buf[..body_bytes.len()].copy_from_slice(body_bytes);
+
+    let ciphertext = cbc::Encryptor::<aes::Aes128>::new(key.into(), iv.into())
+        .encrypt_padded_mut::<ZeroPadding>(&mut buf, body_bytes.len())
+        .expect("AES-128-CBC 加密应成功");
+
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(ciphertext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encrypt() {
+        let body = r#"{"competitionType":0,"snumflag":"1","from":"web","timestamp":1784350730,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}"#.to_string();
+        let expected = "0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrJ6F5AOQcbT/8zcEXRduunS2/PgY6vOFjT/Z7GRJEtrvwLRo8kV6ij8l8U5Uda+0x8/XI2kBUCWyo1oqxPJVGJRVLMVSopKJt5Q/gIxXK65a";
+        let result = encrypt(body);
+        assert_eq!(result, expected);
+    }
 }
