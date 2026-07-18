@@ -433,7 +433,7 @@ fn encrypt(body: String) -> String {
 
     // ZeroPadding 要求缓冲区预先填充到块大小的整数倍
     let body_bytes = body.as_bytes();
-    let padded_len = (body_bytes.len() + 15) / 16 * 16;
+    let padded_len = body_bytes.len().div_ceil(16) * 16;
     let mut buf = vec![0u8; padded_len];
     buf[..body_bytes.len()].copy_from_slice(body_bytes);
 

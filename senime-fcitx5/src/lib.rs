@@ -631,10 +631,10 @@ impl SenimeState {
             };
             let text = self.make_preedit(last_seg.0, input);
             self.set_preedit(pre_text + &text);
-            if result.pending {
-                if let Some(cands) = result.candidates {
-                    self.set_candidates(cands);
-                }
+            if result.pending
+                && let Some(cands) = result.candidates
+            {
+                self.set_candidates(cands);
             }
         }
     }

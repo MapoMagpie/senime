@@ -180,10 +180,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(read_stdin()?)
     } else if let Some(preset_path) = args.preset {
         Some(read_file(&preset_path)?)
-    } else if let Some(js_text) = js_bridge.as_ref().map(|(_, c)| c.content.clone()) {
-        Some(js_text)
     } else {
-        None
+        js_bridge.as_ref().map(|(_, c)| c.content.clone())
     }
     .map(|str| {
         process_preset(
@@ -340,13 +338,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             record_input_data(&time_id, &ctx)?;
         }
         // 向 jsxiaoshi.com 上报输入数据
-        if let (Some((ref settings, ref content)), Some(action)) = (js_bridge, js_action) {
-            if ctx.sentence_len() >= ctx.preset_len() {
-                eprint!("上传打字数据中...");
-                match js::js_report(settings, action, ctx.measure(), content) {
-                    Ok(msg) => eprintln!("{msg}"),
-                    Err(e) => eprintln!("{e}"),
-                }
+        if let (Some((ref settings, ref content)), Some(action)) = (js_bridge, js_action)
+            && ctx.sentence_len() >= ctx.preset_len()
+        {
+            eprint!("上传打字数据中...");
+            match js::js_report(settings, action, ctx.measure(), content) {
+                Ok(msg) => eprintln!("{msg}"),
+                Err(e) => eprintln!("{e}"),
             }
         }
     }
