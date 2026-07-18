@@ -1,7 +1,9 @@
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::measurement::Measurement;
 
+#[derive(Deserialize)]
+#[serde(default)]
 pub struct JSSettings {
     ime: String,
     token: String,
@@ -29,8 +31,8 @@ pub enum JSAction {
 }
 
 pub struct JSContent {
-    title: String,
-    content: String,
+    pub title: String,
+    pub content: String,
 }
 
 // api:  /Api/Text/getContent
@@ -56,44 +58,90 @@ pub struct JSContent {
 // 		"content": "那天班上学习..."
 // 	}
 // }
-pub fn js_bridge(settings_path: &str, action: JSAction) -> Option<(JSSettings, JSContent)> {
-    // 1. 从`setting_path`读取到`JSSettings`
-    // 2. 根据`action`请求不同的`api`，`Random`对应`/Api/Text/getRandomText`，`Daily`对应`/Api/Text/getContent`
-    // 3. 以`/Api/Text/getContent`为例，构建请求体，其中`from, version, subversions, token`从`JSSettings`中来，`timestamp`就地获取
-    //    请求体 {"competitionType":0,"snumflag":"1","from":"web","timestamp":1784339666,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-    // 4. 将请求体加密
-    //    加密后: 0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrE5WhEugG5b6Sx3XbOoJHKU21BZIge0kE72+lOEqmTWA+tFWxEzpFH4aZVm2D66yQlhhKQn8PEgCgJ/HIgu9TvWErXUdEbDc40pXqRVcBKql
-    // 5. 请求`api`，以下是在`javascript`中进行请求的示例，转成`rust`版本的
-    //    await fetch("https://www.jsxiaoshi.com/index.php/Api/Text/getContent", {
-    //        "credentials": "omit",
-    //        "headers": {
-    //            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
-    //            "Accept": "application/json, text/plain, */*",
-    //            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
-    //            "Content-Type": "application/x-www-form-urlencoded",
-    //            "Sec-Fetch-Dest": "empty",
-    //            "Sec-Fetch-Mode": "cors",
-    //            "Sec-Fetch-Site": "cross-site",
-    //            "Priority": "u=0",
-    //            "Pragma": "no-cache",
-    //            "Cache-Control": "no-cache"
-    //        },
-    //        "referrer": "https://www.52dazi.cn/",
-    //        "body": "0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrE5WhEugG5b6Sx3XbOoJHKU21BZIge0kE72+lOEqmTWA+tFWxEzpFH4aZVm2D66yQlhhKQn8PEgCgJ/HIgu9TvWErXUdEbDc40pXqRVcBKql",
-    //        "method": "POST",
-    //        "mode": "cors"
-    //    });
-    // 6. 得到请求结果，将其中的`a_name`作为`JSContent`的`title`，`a_content`作为`JSContent`的`content`
-    // {
-    // 	"error": 0,
-    // 	"msg": {
-    // 		"a_name": "消费主义陷阱：理性生活，回归本真",
-    // 		"a_content": "当下社会...",
-    // 		"a_url": ""
-    // 	}
-    // }
-    // 7. 返回`JSSettings`和`JSContent`
-    todo!()
+#[allow(unused)]
+pub fn js_get_content(
+    settings_path: &str,
+    action: JSAction,
+) -> Result<(JSSettings, JSContent), String> {
+    // 1. 从`settings_path`读取`JSSettings`
+    let settings_str = std::fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
+    let settings: JSSettings = toml::from_str(&settings_str).map_err(|e| e.to_string())?;
+    // 3. 构建请求体：基础字段来自 settings，timestamp 就地获取
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as usize;
+
+    // 2. 根据`action`选择 API 端点
+    let (endpoint, body) = match action {
+        JSAction::Daily => {
+            let body = serde_json::json!({
+                "competitionType": 0,
+                "snumflag": "1",
+                "from": settings.from,
+                "timestamp": timestamp,
+                "version": settings.version,
+                "subversions": settings.subversions,
+                "token": settings.token,
+            })
+            .to_string();
+            ("/Api/Text/getContent", body)
+        }
+        JSAction::Random => {
+            let body = serde_json::json!({
+                "from": settings.from,
+                "timestamp": timestamp,
+                "version": settings.version,
+                "subversions": settings.subversions,
+                "token": settings.token,
+            })
+            .to_string();
+            ("/Api/Text/getRandomText", body)
+        }
+        JSAction::None => return Err("no action".to_string()),
+    };
+
+    // 4. 加密请求体
+    let encrypted = encrypt(body);
+
+    // 5. 以同步 POST 请求 API
+    let url = format!("https://www.jsxiaoshi.com/index.php{endpoint}");
+    let response = ureq::post(&url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0",
+        )
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Referer", "https://www.52dazi.cn/")
+        .send(&encrypted)
+        .map_err(|e| e.to_string())?;
+
+    // 6. 解析响应：a_name → title, a_content → content（Random 用 name/content）
+    let mut body = response.into_body();
+    let body_str = body.read_to_string().map_err(|e| e.to_string())?;
+    let json: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
+
+    if json["error"] != 0 {
+        return Err("api response error code 1".to_string());
+    }
+
+    let msg = &json["msg"];
+    let content = JSContent {
+        title: msg["a_name"]
+            .as_str()
+            .or_else(|| msg["name"].as_str())
+            .unwrap_or_default()
+            .to_string(),
+        content: msg["a_content"]
+            .as_str()
+            .or_else(|| msg["content"].as_str())
+            .unwrap_or_default()
+            .to_string(),
+    };
+
+    // 7. 返回 settings 和 content
+    Ok((settings, content))
 }
 
 // api:  /Api/User/incrUserRecord
@@ -114,6 +162,7 @@ pub fn js_bridge(settings_path: &str, action: JSAction) -> Option<(JSSettings, J
 //
 // api:  /Api/Record/uploadRecord
 // encrypt before: {"content":"解听收前比观石象微知...","textTitle":"常用前500 第 4 天","speed":70.51,"keystrokes":4.23,"maChang":3.6,"wordNum":50,"typingTime":"00:42.549","huiGai":3,"huiChe":0,"jianShu":180,"jianZhun":"85.67%","repeatNum":0,"daCi":"4%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":121,"keyMethod":"+100.00%","isSystemText":1,"from":"web","timestamp":1784341510,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
+#[allow(unused)]
 pub fn js_report(
     settings: &JSSettings,
     action: JSAction,
@@ -411,5 +460,19 @@ mod tests {
         let expected = "0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrJ6F5AOQcbT/8zcEXRduunS2/PgY6vOFjT/Z7GRJEtrvwLRo8kV6ij8l8U5Uda+0x8/XI2kBUCWyo1oqxPJVGJRVLMVSopKJt5Q/gIxXK65a";
         let result = encrypt(body);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_js_get_content() {
+        let ret = js_get_content("../test/js-settings.toml", JSAction::Daily);
+        match ret {
+            Ok((settings, content)) => {
+                println!("ime: {}, token: {}", settings.ime, settings.token);
+                println!("{}\n{}", content.title, content.content);
+            }
+            Err(err) => {
+                eprintln!("{err}");
+            }
+        }
     }
 }
