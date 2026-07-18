@@ -75,6 +75,16 @@ pub struct Args {
     /// 是否保存输入记录，退出程序后，会将输入内容与额外信息(速度、击键、耗时、码长等)保存到`XDG_DATA_HOME/senitui`中
     #[arg(short = 'r', long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub record: bool,
+
+    /// 极速中文网设置(TOML格式)
+    #[arg(long, verbatim_doc_comment)]
+    pub js_settings: Option<String>,
+
+    /// 极速中文网赛文获取方式
+    /// random: 随机文本
+    /// daily:  每日赛文
+    #[arg(long, verbatim_doc_comment)]
+    pub js_action: Option<String>,
 }
 
 fn read_stdin() -> Result<String, std::io::Error> {
@@ -151,6 +161,17 @@ fn get_default_table() -> Result<String, std::io::Error> {
 // TODO: 实现中间编辑，删除新增
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    // 解析 js_action，调用 js bridge 获取预设文本
+    let js_action: Option<js::JSAction> = args
+        .js_action
+        .as_ref()
+        .map(|a| js::JSAction::from_str(a).expect("无效的 --js-action，应为 random 或 daily"));
+    let js_bridge: Option<(js::JSSettings, js::JSContent)> = match (&args.js_settings, js_action) {
+        (Some(path), Some(action)) => js::js_get_content(path, action).ok(),
+        _ => None,
+    };
+
     let table_path: String = match args.table {
         Some(t) => t,
         None => get_default_table()?,
@@ -159,6 +180,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(read_stdin()?)
     } else if let Some(preset_path) = args.preset {
         Some(read_file(&preset_path)?)
+    } else if let Some(js_text) = js_bridge.as_ref().map(|(_, c)| c.content.clone()) {
+        Some(js_text)
     } else {
         None
     }
@@ -316,6 +339,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.record {
         record_input_data(&time_id, &ctx)?;
+    }
+    // 向 jsxiaoshi.com 上报输入数据
+    if let (Some((ref settings, ref content)), Some(action)) = (js_bridge, js_action) {
+        js::js_report(settings, action, ctx.measure(), content);
     }
     Ok(())
 }

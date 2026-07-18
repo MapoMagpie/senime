@@ -24,10 +24,23 @@ impl Default for JSSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JSAction {
     Random,
     Daily,
+    #[allow(unused)]
     None,
+}
+
+impl std::str::FromStr for JSAction {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "random" => Ok(JSAction::Random),
+            "daily" => Ok(JSAction::Daily),
+            _ => Err(format!("无效的 js-action: {s}，应为 random 或 daily")),
+        }
+    }
 }
 
 pub struct JSContent {
@@ -35,30 +48,6 @@ pub struct JSContent {
     pub content: String,
 }
 
-// api:  /Api/Text/getContent
-// encrypt before: {"competitionType":0,"snumflag":"1","from":"web","timestamp":1784339666,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-// encrypt after: 0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrE5WhEugG5b6Sx3XbOoJHKU21BZIge0kE72+lOEqmTWA+tFWxEzpFH4aZVm2D66yQlhhKQn8PEgCgJ/HIgu9TvWErXUdEbDc40pXqRVcBKql
-// return
-// {
-// 	"error": 0,
-// 	"msg": {
-// 		"a_name": "消费主义陷阱：理性生活，回归本真",
-// 		"a_content": "当下社会...",
-// 		"a_url": ""
-// 	}
-// }
-//
-// api:  /Api/Text/getRandomText
-// encrypt before: {"from":"web","timestamp":1784337875,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-// return
-// {
-// 	"error": 0,
-// 	"msg": {
-// 		"name": "C03",
-// 		"content": "那天班上学习..."
-// 	}
-// }
-#[allow(unused)]
 pub fn js_get_content(
     settings_path: &str,
     action: JSAction,
@@ -144,7 +133,6 @@ pub fn js_get_content(
     Ok((settings, content))
 }
 
-#[allow(unused)]
 pub fn js_report(
     settings: &JSSettings,
     _action: JSAction,
@@ -367,23 +355,6 @@ where
     s.serialize_f32(v)
 }
 
-// encrypt before: {"competitionType":0,"snumflag":"1","from":"web","timestamp":1784339666,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-// encrypt after: 0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrE5WhEugG5b6Sx3XbOoJHKU21BZIge0kE72+lOEqmTWA+tFWxEzpFH4aZVm2D66yQlhhKQn8PEgCgJ/HIgu9TvWErXUdEbDc40pXqRVcBKql
-// s.a 是CryptoJS
-// encrypt: function(t) {
-//     console.log("encrypt before:", t);
-//     var e = "c9ec834c80f77237",
-//         a = "db4d6bfde3057dca",
-//         r = s.a.enc.Latin1.parse(e),
-//         o = s.a.enc.Latin1.parse(a),
-//         n = s.a.AES.encrypt(t, r, {
-//             iv: o,
-//             mode: s.a.mode.CBC,
-//             padding: s.a.pad.ZeroPadding
-//         });
-//     console.log("encrypt after:", n.toString());
-//     return n.toString()
-// }
 fn encrypt(body: String) -> String {
     use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::ZeroPadding};
 
