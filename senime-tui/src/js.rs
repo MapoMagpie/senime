@@ -93,6 +93,7 @@ impl Default for JSSettings {
 pub enum JSAction {
     Random,
     Daily,
+    DailyOnce,
     #[allow(unused)]
     None,
 }
@@ -103,7 +104,10 @@ impl std::str::FromStr for JSAction {
         match s.to_lowercase().as_str() {
             "random" => Ok(JSAction::Random),
             "daily" => Ok(JSAction::Daily),
-            _ => Err(format!("无效的 js-action: {s}，应为 random 或 daily")),
+            "dailyonce" => Ok(JSAction::DailyOnce),
+            _ => Err(format!(
+                "无效的 js-action: {s}，应为 random , daily, dailyonce"
+            )),
         }
     }
 }
@@ -128,9 +132,10 @@ pub fn js_get_content(
 
     // 2. 根据`action`选择 API 端点
     let (endpoint, body) = match action {
-        JSAction::Daily => {
+        JSAction::Daily | JSAction::DailyOnce => {
+            let competition_type = if JSAction::DailyOnce == action { 2 } else { 0 };
             let body = serde_json::json!({
-                "competitionType": 0,
+                "competitionType": competition_type,
                 "snumflag": "1",
                 "from": settings.from,
                 "timestamp": timestamp,

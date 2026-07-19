@@ -81,8 +81,9 @@ pub struct Args {
     pub js_settings: Option<String>,
 
     /// 极速中文网赛文获取方式
-    /// random: 随机文本
-    /// daily:  每日赛文
+    /// random:     随机文本
+    /// daily:      每日赛文
+    /// dailyonce:  每日锦标赛(每天限一次，有时间限制)
     #[arg(long, verbatim_doc_comment)]
     pub js_action: Option<String>,
 }
