@@ -26,10 +26,12 @@ impl<'a> Popup<'a> {
             cand_line.push_span(Span::from(cand.select_key.to_string()).green());
             cand_line.push_span("]: ");
             cand_line.push_span(Span::from(&cand.text));
-            cand_line.push_span(Span::from(&cand.code).red());
+            cand_line.push_span(Span::from(&cand.code).dim());
             cand_max_width = cand_line.width().max(cand_max_width);
             if i == 0 {
                 cand_line = cand_line.style(Style::new().on_dark_gray());
+            } else {
+                cand_line = cand_line.style(Style::new().on_black());
             }
             cand_text.push(cand_line);
         }
@@ -56,14 +58,14 @@ impl<'a> Popup<'a> {
                 cand_text.reverse();
             }
         }
-        let content = Text::from(cand_text).style(Style::new().yellow());
+        let content = Text::from(cand_text).style(Style::reset());
         (Popup { content }, p_area)
     }
 }
 
 impl Widget for Popup<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        Background(Style::reset().on_light_green()).render(area, buf);
+        Background(Style::reset()).render(area, buf);
         let b_area = area.inner(Margin::new(1, 0));
         Block::new()
             .borders(Borders::LEFT | Borders::RIGHT)

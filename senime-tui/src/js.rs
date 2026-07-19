@@ -181,7 +181,11 @@ pub fn js_get_content(
     let json: serde_json::Value = serde_json::from_str(&body_str)?;
 
     if json["error"] != 0 {
-        return Err(JsError::Api("API 返回非零错误码".to_string()));
+        if let Some(msg) = json["msg"].as_str() {
+            return Err(JsError::Api(msg.to_string()));
+        } else {
+            return Err(JsError::Api("API 返回非零错误码".to_string()));
+        }
     }
 
     let msg = &json["msg"];

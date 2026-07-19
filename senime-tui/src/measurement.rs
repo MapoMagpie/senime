@@ -190,16 +190,16 @@ impl Measurement {
         let span_wrong_count = format!("打错:[{}]", self.wrong_count);
         vec![
             span_wpm,
-            span_kps,
-            span_avg_len,
+            span_text_wc,
             span_dur,
             span_pause,
-            span_text_wc,
+            span_avg_len,
+            span_kps,
+            span_accuracy,
             span_code_cc,
             span_bs_times,
             span_sp_times,
             span_se_times,
-            span_accuracy,
             span_wg_freq,
             span_wrong_count,
         ]
