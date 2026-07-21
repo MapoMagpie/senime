@@ -49,8 +49,14 @@ pub struct Args {
     #[arg(short, long, verbatim_doc_comment)]
     pub table: Option<String>,
 
-    /// 将此文件中的内容作为预设文本
-    /// 此功能类似赛码器，将以灰色的文本展示这些预设文本
+    /// 将此文件中的内容作为预设文本，本程序将化身赛码器
+    /// 格式为: <文件名>:[范围]，范围为可选
+    /// 示例:
+    ///   -p test/文章.txt            #选择此文件作为预设文本
+    ///   -p test/文章.txt:10-20      #选择第10行到第20行的内容作为预设文本
+    ///   -p test/文章.txt:10.3-20.1  #从第10行第3个字符到第20行第1个字符结束作为预设文本
+    ///   -p test/文章.txt:10         #从第10行开始到文件结束
+    ///   -p test/文章.txt:10-10      #只选择第10行
     #[arg(short, long, verbatim_doc_comment)]
     pub preset: Option<String>,
 
@@ -58,11 +64,6 @@ pub struct Args {
     /// 不设置此项时，默认移除预设文本中的空格、换行符
     #[arg(long, action = ArgAction::SetTrue, verbatim_doc_comment)]
     pub keep: bool,
-
-    /// 选择预设文本的范围
-    /// 格式为: 1-10 (行一到行十)，1.3-10.6 (行一的第三字到行十的第六字)
-    #[arg(long, verbatim_doc_comment)]
-    pub pick: Option<String>,
 
     /// 将标准输入流中的内容作为预设文本，与--preset功能一样
     #[arg(short = 'i', long, action = ArgAction::SetTrue, verbatim_doc_comment)]
@@ -77,13 +78,18 @@ pub struct Args {
     pub record: bool,
 
     /// 极速中文网设置(TOML格式)
+    /// 用于`API`认证，然后获取预设文本(赛文)，并上传输入数据到极速中文网
+    /// 上传数据含: 计量数据（速度、键速等），所输入的文本内容
+    /// 如果是本地自由发文(未从极速获取预设文本)，上传时将进行脱敏处理，替换为同等字符数量的常用字
     #[arg(long, verbatim_doc_comment)]
     pub js_settings: Option<String>,
 
-    /// 极速中文网赛文获取方式
-    /// random:     随机文本
-    /// daily:      每日赛文
-    /// dailyonce:  每日锦标赛(每天限一次，有时间限制)
+    /// 从极速中文网获取预设文本的方式
+    /// random     随机文本
+    /// daily      每日赛文
+    /// dailyonce  每日锦标赛(每天限一次，有时间限制)
+    /// 参数为空不会阻止`--js-settings`参数上传数据，可用`--js-action none`阻止上传数据
+    /// none       阻止`--js-settings`参数自动上传数据
     #[arg(long, verbatim_doc_comment)]
     pub js_action: Option<String>,
 }
@@ -178,19 +184,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => get_default_table()?,
     };
     let preset: Option<Vec<char>> = if args.stdin {
-        Some(read_stdin()?)
-    } else if let Some(preset_path) = args.preset {
-        Some(read_file(&preset_path)?)
+        let str = read_stdin()?;
+        Some(process_preset(&str, args.keep, None))
+    } else if let Some(preset_arg) = args.preset {
+        let (path, pick) = parse_preset(&preset_arg)?;
+        let str = read_file(&path)?;
+        Some(process_preset(&str, args.keep, Some(pick)))
     } else {
-        js_bridge.as_ref().map(|(_, c)| c.content.clone())
-    }
-    .map(|str| {
-        process_preset(
-            &str,
-            args.keep,
-            args.pick.map(|pi| PickPreset::from_str(&pi).unwrap()),
-        )
-    });
+        js_bridge
+            .as_ref()
+            .map(|(_, c)| process_preset(&c.content, args.keep, None))
+    };
 
     let time_id = generate_time_id();
     // 输入法引擎
@@ -395,6 +399,7 @@ impl Widget for WrappedSpans<'_> {
 }
 
 /// 文本选择范围，左闭右开
+#[derive(Debug, PartialEq)]
 struct PickPreset {
     /// 开始的行
     line_start: usize,
@@ -417,31 +422,34 @@ impl FromStr for PickPreset {
         if split.is_empty() {
             return Err(error);
         }
-        let parse = |str: &str| -> Result<(usize, usize), String> {
+        let parse = |str: &str, end: bool| -> Result<(usize, usize), String> {
+            // println!("parse sp: {}, end: {}", str, end);
+            let defv = if end { usize::MAX } else { 0 };
+            if str.is_empty() {
+                return Ok((defv, defv));
+            };
             let mut sp = str.split('.');
             let line = sp
                 .next()
-                .unwrap()
-                .parse()
-                .map_err(|e| format!("{e}\n{error}"))?;
+                .map_or(Ok(defv), |v| v.parse())
+                .map_err(|e| format!("{e}; {error}"))?;
             let pos = sp
                 .next()
-                .unwrap_or("0")
-                .parse()
-                .map_err(|e| format!("{e}\n{error}"))?;
+                .map_or(Ok(defv), |pos| pos.parse())
+                .map_err(|e| format!("{e}; {error}"))?;
             Ok((line, pos))
         };
 
-        let (start, char_start) = parse(split[0])?;
+        let (line_start, char_start) = parse(split[0], false)?;
         let (line_end, char_end) = split
             .get(1)
-            .map(|sp| parse(sp))
+            .map(|sp| parse(sp, true))
             .unwrap_or(Ok((usize::MAX, usize::MAX)))?;
         Ok(Self {
-            line_start: start.saturating_sub(1),
+            line_start: line_start.saturating_sub(1),
             char_start: char_start.saturating_sub(1),
-            line_end,
-            char_end,
+            line_end: line_end.saturating_sub(1),
+            char_end: char_end.saturating_sub(1),
         })
     }
 }
@@ -457,40 +465,61 @@ impl Default for PickPreset {
     }
 }
 
+/// 解析 preset 参数，分离文件名与可选的选择范围。
+/// 格式:
+///   `<文件名>`               —— 不带范围，使用整篇文件
+///   `<文件名>:<范围>`        —— 按指定范围选取
+/// 范围格式见 [`PickPreset::from_str`]。
+///
+/// 解析规则: 以最后一个冒号 `:` 作为文件名与范围的分隔符。
+/// - 冒号后为空字符串时，等价于不指定范围 (整篇文件)。
+/// - 冒号后能解析为范围时，按范围选取。
+/// - 冒号后无法解析为范围时，视为错误返回 (避免与文件名混淆)。
+fn parse_preset(s: &str) -> Result<(String, PickPreset), String> {
+    if let Some((path, range)) = s.rsplit_once(':') {
+        if range.is_empty() {
+            return Ok((path.to_string(), PickPreset::default()));
+        }
+        PickPreset::from_str(range).map(|pick| (path.to_string(), pick))
+    } else {
+        Ok((s.to_string(), PickPreset::default()))
+    }
+}
+
 fn process_preset(str: &str, keep: bool, pick: Option<PickPreset>) -> Vec<char> {
     let pick = pick.unwrap_or_default();
-    let mut lines = str
-        .lines()
-        .enumerate()
-        .flat_map(|(i, line)| {
-            if i < pick.line_start || i >= pick.line_end {
-                return vec![];
+    let filter = |ch: &char| keep || (!ch.is_whitespace() && !ch.is_control());
+    let mut ret: Vec<char> = vec![];
+    for (i, line) in str.lines().enumerate() {
+        if i < pick.line_start {
+            continue;
+        }
+        if i > pick.line_end {
+            break;
+        }
+        let chars = line.chars();
+        if i == pick.line_start && i == pick.line_end {
+            // 同一行内的字符范围选择，起止均包含(1-indexed 转 0-indexed)
+            if pick.char_end >= pick.char_start {
+                ret.extend(
+                    chars
+                        .skip(pick.char_start)
+                        .take(pick.char_end - pick.char_start + 1)
+                        .filter(filter),
+                );
             }
-            line.chars()
-                .enumerate()
-                .filter_map(|(j, c)| {
-                    if (i == pick.line_start && j < pick.char_start)
-                        || (i == pick.line_end && j >= pick.char_end)
-                           // 当不保持预设文本原样时，则过滤空白和控制字符
-                        || !keep && (c.is_whitespace() || c.is_control())
-                    {
-                        None
-                    } else {
-                        Some(c)
-                    }
-                })
-                .chain(if keep {
-                    vec!['\n'].into_iter()
-                } else {
-                    vec![].into_iter()
-                })
-                .collect()
-        })
-        .collect::<Vec<_>>();
-    if keep {
-        lines.pop();
+        } else if i == pick.line_start {
+            ret.extend(chars.skip(pick.char_start).filter(filter));
+        } else if i == pick.line_end {
+            ret.extend(chars.take(pick.char_end + 1).filter(filter));
+        } else {
+            ret.extend(chars.filter(filter));
+        }
+        if keep && i < pick.line_end {
+            ret.push('\n');
+        }
     }
-    lines
+    ret
 }
 
 /// 写入输入信息，
@@ -590,4 +619,90 @@ fn generate_time_id() -> String {
 fn test_generate_id() {
     let id = generate_time_id();
     println!("Generated ID: {}", id);
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::parse_preset;
+    use super::process_preset;
+    use std::fs::File;
+    use std::io::Write;
+
+    /// 构造临时预设文本文件并断言 `--preset` 解析与选取行为。
+    ///
+    /// 临时文件内容:
+    ///   行1: 你好
+    ///   行2: 世界
+    ///   行3: 测试
+    ///   行4: 赛码
+    #[test]
+    fn test_parse_preset_with_temp_file() {
+        let mut tmp = std::env::temp_dir();
+        tmp.push("senime_preset_test.txt");
+        {
+            let mut f = File::create(&tmp).unwrap();
+            writeln!(f, "你好世界，和平美好。").unwrap();
+            writeln!(f, "携手共进，共享未来。").unwrap();
+            writeln!(f, "美味萝卜干，一块钱两斤，管够。").unwrap();
+            writeln!(f, "打字是一种浪费时间的爱好，收获甚微，我要戒掉").unwrap();
+        }
+        let path_str = tmp.to_string_lossy().to_string();
+
+        let (path, pick) = parse_preset(&format!("{path_str}:2-3")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let chars = process_preset(&content, true, Some(pick));
+        let out: String = chars.iter().collect();
+        assert_eq!(out, "携手共进，共享未来。\n美味萝卜干，一块钱两斤，管够。");
+
+        // 第2行第6个字符到第3行第5个字符结束
+        let (path, pick) = parse_preset(&format!("{path_str}:2.6-3.5")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let chars = process_preset(&content, true, Some(pick));
+        let out: String = chars.iter().collect();
+        assert_eq!(out, "共享未来。\n美味萝卜干");
+
+        // 从头开始到第3行第5个字符结束
+        let (path, pick) = parse_preset(&format!("{path_str}:-3.5")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let chars = process_preset(&content, true, Some(pick));
+        let out: String = chars.iter().collect();
+        assert_eq!(
+            out,
+            "你好世界，和平美好。\n携手共进，共享未来。\n美味萝卜干"
+        );
+        // 从第三行开始文件末尾
+        let (path, pick) = parse_preset(&format!("{path_str}:3-")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let chars = process_preset(&content, true, Some(pick));
+        let out: String = chars.iter().collect();
+        assert_eq!(
+            out,
+            "美味萝卜干，一块钱两斤，管够。\n打字是一种浪费时间的爱好，收获甚微，我要戒掉\n"
+        );
+
+        // 只选择第三行
+        let (path, pick) = parse_preset(&format!("{path_str}:3-3")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let chars = process_preset(&content, true, Some(pick));
+        let out: String = chars.iter().collect();
+        assert_eq!(out, "美味萝卜干，一块钱两斤，管够。");
+
+        // 只选择第三行中的第2个字符到第5个字符
+        let (path, pick) = parse_preset(&format!("{path_str}:3.2-3.5")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let chars = process_preset(&content, true, Some(pick));
+        let out: String = chars.iter().collect();
+        assert_eq!(out, "味萝卜干");
+
+        // 非正常范围，但自动修正，从第一行开始
+        let (path, pick) = parse_preset(&format!("{path_str}:0-3.100")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let chars = process_preset(&content, true, Some(pick));
+        let out: String = chars.iter().collect();
+        assert_eq!(
+            out,
+            "你好世界，和平美好。\n携手共进，共享未来。\n美味萝卜干，一块钱两斤，管够。"
+        );
+    }
 }
