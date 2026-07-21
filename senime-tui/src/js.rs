@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::measurement::Measurement;
@@ -94,7 +96,6 @@ pub enum JSAction {
     Random,
     Daily,
     DailyOnce,
-    #[allow(unused)]
     None,
 }
 
@@ -105,8 +106,9 @@ impl std::str::FromStr for JSAction {
             "random" => Ok(JSAction::Random),
             "daily" => Ok(JSAction::Daily),
             "dailyonce" => Ok(JSAction::DailyOnce),
+            "none" => Ok(JSAction::None),
             _ => Err(format!(
-                "无效的 js-action: {s}，应为 random , daily, dailyonce"
+                "无效的 js-action: {s}，应为 random, daily, dailyonce, none"
             )),
         }
     }
@@ -115,22 +117,41 @@ impl std::str::FromStr for JSAction {
 pub struct JSContent {
     pub title: String,
     pub content: String,
+    pub is_local: bool,
 }
 
-pub fn js_get_content(
-    settings_path: &str,
-    action: JSAction,
-) -> Result<(JSSettings, JSContent), JsError> {
-    // 1. 从`settings_path`读取`JSSettings`
-    let settings_str = std::fs::read_to_string(settings_path)?;
-    let settings: JSSettings = toml::from_str(&settings_str)?;
-    // 3. 构建请求体：基础字段来自 settings，timestamp 就地获取
+/// 根据路径获取JSSettings
+/// 若`path.is_some`，则从其中加载`JSSettings`，若文件不存在或为非法`TOML`内容，则抛出异常
+/// 若`path.is_none`，则从尝试从默认路径加载`JSSettings`，若默认路径不存在`js-settings.toml`，则返回`None`
+/// 若存在默认路径，但是非法`TOML`内容，则抛出异常
+pub fn js_get_settings<P: Into<PathBuf>>(path: Option<P>) -> Result<Option<JSSettings>, JsError> {
+    match path {
+        Some(p) => {
+            let path = p.into();
+            let content = std::fs::read_to_string(&path)?;
+            let settings: JSSettings = toml::from_str(&content)?;
+            Ok(Some(settings))
+        }
+        None => {
+            let path = match dirs::config_dir().map(|d| d.join("senime").join("js-settings.toml")) {
+                Some(p) if p.is_file() => p,
+                _ => return Ok(None),
+            };
+            let content = std::fs::read_to_string(&path)?;
+            let settings: JSSettings = toml::from_str(&content)?;
+            Ok(Some(settings))
+        }
+    }
+}
+
+pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSContent, JsError> {
+    // 构建请求体：基础字段来自 settings，timestamp 就地获取
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as usize;
 
-    // 2. 根据`action`选择 API 端点
+    // 根据`action`选择 API 端点
     let (endpoint, body) = match action {
         JSAction::Daily | JSAction::DailyOnce => {
             let competition_type = if JSAction::DailyOnce == action { 2 } else { 0 };
@@ -160,10 +181,10 @@ pub fn js_get_content(
         JSAction::None => return Err(JsError::NoAction),
     };
 
-    // 4. 加密请求体
+    // 加密请求体
     let encrypted = encrypt(body);
 
-    // 5. 以同步 POST 请求 API
+    // 以同步 POST 请求 API
     let url = format!("https://www.jsxiaoshi.com/index.php{endpoint}");
     let response = ureq::post(&url)
         .header(
@@ -175,7 +196,7 @@ pub fn js_get_content(
         .header("Referer", "https://www.52dazi.cn/")
         .send(&encrypted)?;
 
-    // 6. 解析响应：a_name → title, a_content → content（Random 用 name/content）
+    // 解析响应：a_name → title, a_content → content（Random 用 name/content）
     let mut body = response.into_body();
     let body_str = body.read_to_string()?;
     let json: serde_json::Value = serde_json::from_str(&body_str)?;
@@ -200,15 +221,15 @@ pub fn js_get_content(
             .or_else(|| msg["content"].as_str())
             .unwrap_or_default()
             .to_string(),
+        is_local: false,
     };
 
     // 7. 返回 settings 和 content
-    Ok((settings, content))
+    Ok(content)
 }
 
 pub fn js_report(
     settings: &JSSettings,
-    _action: JSAction,
     mea: &Measurement,
     content: &JSContent,
 ) -> Result<String, JsError> {
@@ -227,31 +248,40 @@ pub fn js_report(
         .header("Referer", referer)
         .send(&encrypted)?;
 
-    // api: /Api/Rank/uploadResult
-    let upload_result = UploadResult::new(settings, mea, content);
-    let body = serde_json::to_string(&upload_result)?;
-    let encrypted = encrypt(body);
-    let resp = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
-        .header("User-Agent", ua)
-        .header("Accept", "application/json, text/plain, */*")
-        .header("Content-Type", ct)
-        .header("Referer", referer)
-        .send(&encrypted)?;
-    let body_str = resp.into_body().read_to_string()?;
-    let json: serde_json::Value = serde_json::from_str(&body_str)?;
+    let mut message = String::new();
+    if !content.is_local {
+        // api: /Api/Rank/uploadResult
+        let upload_result = UploadResult::new(settings, mea, content);
+        let body = serde_json::to_string(&upload_result)?;
+        let encrypted = encrypt(body);
+        let resp = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
+            .header("User-Agent", ua)
+            .header("Accept", "application/json, text/plain, */*")
+            .header("Content-Type", ct)
+            .header("Referer", referer)
+            .send(&encrypted)?;
+        let body_str = resp.into_body().read_to_string()?;
+        let json: serde_json::Value = serde_json::from_str(&body_str)?;
+        message.push('\n');
+        json["msg"].as_str().map(|str| message.push_str(str));
+    }
 
-    let message = json["msg"].to_string();
-
-    // api: /Api/Record/uploadRecord
-    let upload_record = UploadRecord::new(settings, mea, content);
-    let body = serde_json::to_string(&upload_record)?;
-    let encrypted = encrypt(body);
-    ureq::post("https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord")
-        .header("User-Agent", ua)
-        .header("Accept", "application/json, text/plain, */*")
-        .header("Content-Type", ct)
-        .header("Referer", referer)
-        .send(&encrypted)?;
+    {
+        // api: /Api/Record/uploadRecord
+        let upload_record = UploadRecord::new(settings, mea, content);
+        let body = serde_json::to_string(&upload_record)?;
+        let encrypted = encrypt(body);
+        let resp = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord")
+            .header("User-Agent", ua)
+            .header("Accept", "application/json, text/plain, */*")
+            .header("Content-Type", ct)
+            .header("Referer", referer)
+            .send(&encrypted)?;
+        let body_str = resp.into_body().read_to_string()?;
+        let json: serde_json::Value = serde_json::from_str(&body_str)?;
+        message.push('\n');
+        json["msg"].as_str().map(|str| message.push_str(str));
+    }
 
     Ok(message)
 }
@@ -359,12 +389,13 @@ impl UploadRecord {
             .unwrap()
             .as_secs() as usize;
         let measure = JSMeasurement::new(mea, &settings.ime);
+        let is_system_text = if content.is_local { 0 } else { 1 };
         Self {
             content: content.content.clone(),
             text_title: content.title.clone(),
             measure,
             key_method: "+100.00%".to_string(),
-            is_system_text: 1,
+            is_system_text,
             from: settings.from.clone(),
             timestamp,
             version: settings.version.clone(),
@@ -558,19 +589,20 @@ mod tests {
         assert_eq!(json, expected);
     }
 
-    #[test]
-    fn test_js_get_content() {
-        let ret = js_get_content("../test/js-settings.toml", JSAction::Daily);
-        match ret {
-            Ok((settings, content)) => {
-                println!("ime: {}, token: {}", settings.ime, settings.token);
-                println!("{}\n{}", content.title, content.content);
-            }
-            Err(err) => {
-                eprintln!("{err}");
-            }
-        }
-    }
+    // #[test]
+    // fn test_js_get_content() {
+    //     let settings = js_get_settings(Some("../test/js-settings.toml".to_string())).unwrap();
+    //     let ret = js_get_content(&settings, JSAction::Daily);
+    //     match ret {
+    //         Ok(content) => {
+    //             println!("ime: {}, token: {}", settings.ime, settings.token);
+    //             println!("{}\n{}", content.title, content.content);
+    //         }
+    //         Err(err) => {
+    //             eprintln!("{err}");
+    //         }
+    //     }
+    // }
 }
 // 锦标赛
 // api:  /Api/Text/getContent

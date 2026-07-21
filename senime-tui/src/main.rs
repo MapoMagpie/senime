@@ -1,36 +1,33 @@
-use std::fs::DirBuilder;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::Path;
-
-use std::str::FromStr;
-use std::time::Instant;
+use std::{
+    fs::{DirBuilder, OpenOptions},
+    io::Write,
+    path::Path,
+    str::FromStr,
+    time::Instant,
+};
 
 use clap::{ArgAction, Parser};
-use crossterm::cursor::SetCursorStyle;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+use crossterm::{
+    cursor::SetCursorStyle,
+    event::{Event, KeyCode, KeyEventKind, KeyModifiers, read},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use crossterm::{event, execute};
-use ratatui::Terminal;
-use ratatui::layout::Position;
-use ratatui::layout::Size;
-use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
-use ratatui::prelude::CrosstermBackend;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Clear;
-use ratatui::widgets::Widget;
-use ratatui::widgets::{Block, Borders};
+use ratatui::{
+    Terminal,
+    layout::{Constraint, Direction, Layout, Margin, Position, Rect, Size},
+    prelude::CrosstermBackend,
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Widget},
+};
 
-use senime_lib::PAGE_DOWN;
-use senime_lib::PAGE_UP;
-use senime_lib::input_analyzer::load_input_analyzer;
-use senime_lib::{AnalysisResult, Looker};
+use senime_lib::{AnalysisResult, Looker, PAGE_DOWN, PAGE_UP, input_analyzer::load_input_analyzer};
 
-use crate::context::{Context, WrappedText};
-use crate::popup::Popup;
+use crate::{
+    context::{Context, WrappedText},
+    js::{JSAction, JSContent, js_get_content, js_report},
+    popup::Popup,
+};
 
 mod context;
 mod js;
@@ -81,6 +78,7 @@ pub struct Args {
     /// 用于`API`认证，然后获取预设文本(赛文)，并上传输入数据到极速中文网
     /// 上传数据含: 计量数据（速度、键速等），所输入的文本内容
     /// 如果是本地自由发文(未从极速获取预设文本)，上传时将进行脱敏处理，替换为同等字符数量的常用字
+    /// 如果不指定此参数，默认将尝试加载 `XDG_CONFIG_HOME/senime/js-settings.toml`
     #[arg(long, verbatim_doc_comment)]
     pub js_settings: Option<String>,
 
@@ -170,14 +168,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // 解析 js_action，调用 js bridge 获取预设文本
-    let js_action: Option<js::JSAction> = args
+    let js_action = args
         .js_action
         .as_ref()
-        .map(|a| js::JSAction::from_str(a).expect("无效的 --js-action，应为 random 或 daily"));
-    let js_bridge: Option<(js::JSSettings, js::JSContent)> = match (&args.js_settings, js_action) {
-        (Some(path), Some(action)) => Some(js::js_get_content(path, action)?),
-        _ => None,
-    };
+        .map(|a| JSAction::from_str(a))
+        .transpose()?;
+    let js_settings = js::js_get_settings(args.js_settings.as_ref())?;
+    let js_content = js_settings
+        .as_ref()
+        .zip(js_action)
+        .map(|(settings, action)| js_get_content(settings, action))
+        .transpose()?;
 
     let table_path: String = match args.table {
         Some(t) => t,
@@ -191,9 +192,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let str = read_file(&path)?;
         Some(process_preset(&str, args.keep, Some(pick)))
     } else {
-        js_bridge
+        js_content
             .as_ref()
-            .map(|(_, c)| process_preset(&c.content, args.keep, None))
+            .map(|content| process_preset(&content.content, args.keep, None))
     };
 
     let time_id = generate_time_id();
@@ -216,7 +217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if first {
             first = false;
         } else {
-            match event::read()? {
+            match read()? {
                 Event::Resize(w, h) => {
                     area = Size::new(w, h).into();
                     ctx.resize();
@@ -343,11 +344,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             record_input_data(&time_id, &ctx)?;
         }
         // 向 jsxiaoshi.com 上报输入数据
-        if let (Some((ref settings, ref content)), Some(action)) = (js_bridge, js_action)
+        // 若`js-action none`，则不上传数据
+        // 若输入内容少于预设文本，则不上传数据
+        if let Some(ref settings) = js_settings
+            && !matches!(js_action, Some(JSAction::None))
             && ctx.sentence_len() >= ctx.preset_len()
         {
             eprint!("上传打字数据中...");
-            match js::js_report(settings, action, ctx.measure(), content) {
+            let content: &JSContent = if let Some(js_content) = js_content.as_ref() {
+                js_content
+            } else {
+                &JSContent {
+                    title: "自由发文".to_string(),
+                    content: "TODO 生成同等数量的常用字".to_string(),
+                    is_local: true,
+                }
+            };
+            match js_report(settings, ctx.measure(), content) {
                 Ok(msg) => eprintln!("{msg}"),
                 Err(e) => eprintln!("{e}"),
             }
