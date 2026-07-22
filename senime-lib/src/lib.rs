@@ -1,14 +1,17 @@
 pub mod dict;
-// pub mod fuzz_search;
+pub mod fuzz_dict;
 pub mod input_analyzer;
 pub mod lookup_code;
+pub mod prefix_dict;
 pub mod util;
 
-pub use dict::Dict;
+pub use dict::{DictKind, DictKindName, DictMeta};
+pub use fuzz_dict::FuzzDict;
 pub use input_analyzer::{
-    AnalysisResult, CandidateRich, Config, DictMeta, InputAnalyzer, PAGE_DOWN, PAGE_UP,
+    AnalysisResult, CandidateRich, Config, InputAnalyzer, PAGE_DOWN, PAGE_UP,
 };
 pub use lookup_code::Looker;
+pub use prefix_dict::PrefixDict;
 pub use util::resolve_relative_path;
 
 #[cfg(feature = "watcher")]

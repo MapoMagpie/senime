@@ -3,21 +3,10 @@ use std::{collections::HashMap, fs::File, io::Read, iter::Peekable, path::PathBu
 use ahash::AHashMap;
 use serde::Deserialize;
 
-use crate::dict::{Candidate, Dict};
+use crate::dict::{Candidate, DictKind, DictMeta};
+use crate::fuzz_dict::FuzzDict;
+use crate::prefix_dict::PrefixDict;
 use crate::util::resolve_relative_path;
-
-/// 码表元信息，描述一个码表的触发字符、提示文字和路径。
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct DictMeta {
-    /// 触发该码表的前缀字符。主码表为 '\0'，反查码表通常为 '@'。
-    #[serde(default)]
-    pub trigger: char,
-    /// 提示文字，如 "反"。主码表通常为空。
-    #[serde(default)]
-    pub hint: String,
-    /// 码表文件路径（相对于配置文件）
-    pub path: String,
-}
 
 /// 输入法配置。可从 TOML 或 JSON 反序列化。
 #[derive(Debug, Clone, Deserialize)]
@@ -147,27 +136,21 @@ pub fn load_input_analyzer<P: Into<PathBuf>>(path: P) -> Result<InputAnalyzer, S
             // 第一个元素的 trigger_char 设为空字符
             config.dicts[0].trigger = '\0';
             // 加载所有码表
-            let mut dicts: Vec<(DictMeta, Dict)> = Vec::with_capacity(config.dicts.len());
-            for meta in &config.dicts {
-                let dict_path = resolve_relative_path(&path, &meta.path);
-                let dict = Dict::try_load(dict_path)?;
-                dicts.push((meta.clone(), dict));
+            let mut dicts: Vec<(DictMeta, DictKind)> = Vec::with_capacity(config.dicts.len());
+            for meta in &mut config.dicts.iter_mut() {
+                meta.path = resolve_relative_path(&path, &meta.path);
+                let dict_kind = DictKind::try_load(meta)?;
+                dicts.push((meta.clone(), dict_kind));
             }
             Ok(InputAnalyzer::new(config, dicts))
         }
         _ => {
-            let dict = Dict::try_load(&path)?;
-            Ok(InputAnalyzer::new(
-                Config::default(),
-                vec![(
-                    DictMeta {
-                        trigger: '\0',
-                        hint: String::new(),
-                        path: path.to_str().unwrap_or("").to_string(),
-                    },
-                    dict,
-                )],
-            ))
+            let meta = DictMeta {
+                path: path.into_os_string().into_string().unwrap(),
+                ..Default::default()
+            };
+            let dict = DictKind::try_load(&meta)?;
+            Ok(InputAnalyzer::new(Config::default(), vec![(meta, dict)]))
         }
     }
 }
@@ -178,7 +161,7 @@ pub const PAGE_DOWN: char = '⇟';
 
 #[derive(Debug)]
 pub struct InputAnalyzer {
-    dicts: Vec<(DictMeta, Dict)>,
+    dicts: Vec<(DictMeta, DictKind)>,
     main_dict_code_map: AHashMap<char, (u32, u16)>,
     escape_pair: Option<[char; 2]>,
     trim_escape_pair: bool,
@@ -190,7 +173,7 @@ pub struct InputAnalyzer {
 impl Default for InputAnalyzer {
     fn default() -> Self {
         Self {
-            dicts: vec![(DictMeta::default(), Dict::default())],
+            dicts: vec![(DictMeta::default(), DictKind::Prefix(PrefixDict::default()))],
             main_dict_code_map: AHashMap::new(),
             escape_pair: None,
             trim_escape_pair: false,
@@ -206,7 +189,7 @@ impl InputAnalyzer {
     ///
     /// - `config`: 输入法配置（标点、选重键等）
     /// - `dicts`: 码表数组，与 config.dicts 一一对应
-    pub fn new(config: Config, dicts: Vec<(DictMeta, Dict)>) -> Self {
+    pub fn new(config: Config, dicts: Vec<(DictMeta, DictKind)>) -> Self {
         let Config {
             dicts: _,
             selection_keys,
@@ -217,8 +200,9 @@ impl InputAnalyzer {
         } = config;
         let mut main_dict_code_map = AHashMap::<char, (u32, u16)>::new();
         // 如果有副码表（非主码表），从主码表中构建单字→最长编码的映射
-        if dicts.len() > 1 {
-            let main_dict = &dicts[0].1;
+        if dicts.len() > 1
+            && let DictKind::Prefix(main_dict) = &dicts[0].1
+        {
             for cand in main_dict.candidates.iter() {
                 let text_chars = main_dict.get_str(cand.text).chars().collect::<Vec<_>>();
                 if text_chars.len() == 1 {
@@ -245,11 +229,14 @@ impl InputAnalyzer {
         }
     }
 
-    pub fn main_dict(&self) -> &Dict {
-        &self.dicts[0].1
+    pub fn main_dict(&self) -> &PrefixDict {
+        match &self.dicts[0].1 {
+            DictKind::Prefix(dict) => dict,
+            DictKind::Fuzzy(_) => panic!("主码表不能是模糊字典"),
+        }
     }
 
-    pub fn get_dicts(&self) -> &Vec<(DictMeta, Dict)> {
+    pub fn get_dicts(&self) -> &Vec<(DictMeta, DictKind)> {
         &self.dicts
     }
 
@@ -399,7 +386,25 @@ impl InputAnalyzer {
         selection: &CodeSelection,
         no_cands: bool,
     ) -> Option<(Vec<CandidateRich>, bool, usize)> {
-        let dict = &self.dicts[selection.dict_idx].1;
+        let dict_kind = &self.dicts[selection.dict_idx].1;
+        match dict_kind {
+            DictKind::Prefix(dict) => {
+                self.search_candidates_prefix(dict, codes, selection, no_cands)
+            }
+            DictKind::Fuzzy(fuzz_dict) => {
+                self.search_candidates_fuzzy(fuzz_dict, codes, selection, no_cands)
+            }
+        }
+    }
+
+    /// 前缀字典的候选搜索（原有逻辑）
+    fn search_candidates_prefix(
+        &self,
+        dict: &PrefixDict,
+        codes: &[char],
+        selection: &CodeSelection,
+        no_cands: bool,
+    ) -> Option<(Vec<CandidateRich>, bool, usize)> {
         let mut s_codes = codes;
         if selection.dict_idx > 0 {
             s_codes = &s_codes[1..];
@@ -411,7 +416,6 @@ impl InputAnalyzer {
             return None;
         }
         let slice = if selection.has_pagination {
-            // 过滤PAGE_UP和PAGE_DOWN
             dict.search(
                 &s_codes
                     .iter()
@@ -434,9 +438,6 @@ impl InputAnalyzer {
         }
         let rel_page_no = start / self.page_count;
         let slice = &slice[start..(start + self.page_count).min(slice.len())];
-        // 是否唯一，如果实际的查询结果只有一个，或者直接存在selection_key
-        // let unique = slice.len() <= 1 || selection.has_selection;
-        // FIXME: 不知道为什么，临时中文模式出现selection_key后，后面的输入不再触发cands候选框了
         let unique = selection.has_selection;
         let cands = if selection.sel_idx > 0 || no_cands {
             let index = if selection.sel_idx >= slice.len() {
@@ -450,10 +451,7 @@ impl InputAnalyzer {
         };
         if selection.dict_idx > 0 {
             let code_map = &self.main_dict_code_map;
-            let main_dict = &self.dicts[0].1;
-            // 反查时需要从 main_dict_code_map 构建新的 code
-            // self.candidates_remap_code(cands)
-            //     .map(|cands| (cands, unique))
+            let main_dict = self.main_dict();
             let enrich = |(i, cand): (usize, &Candidate)| -> CandidateRich {
                 let select_key = self.selection_keys.get(i).copied().unwrap_or(' ');
                 let text = dict.get_str(cand.text);
@@ -500,6 +498,78 @@ impl InputAnalyzer {
                 rel_page_no,
             ))
         }
+    }
+
+    /// 模糊字典的候选搜索
+    fn search_candidates_fuzzy(
+        &self,
+        fuzz_dict: &FuzzDict,
+        codes: &[char],
+        selection: &CodeSelection,
+        no_cands: bool,
+    ) -> Option<(Vec<CandidateRich>, bool, usize)> {
+        let mut s_codes = codes;
+        // 去掉触发前缀字符
+        if selection.dict_idx > 0 {
+            s_codes = &s_codes[1..];
+        }
+        if selection.has_selection {
+            s_codes = &s_codes[..s_codes.len() - 1];
+        }
+        if s_codes.is_empty() {
+            return None;
+        }
+        // 过滤翻页键
+        let query_chars: Vec<char> = s_codes
+            .iter()
+            .filter(|&&c| c != PAGE_UP && c != PAGE_DOWN)
+            .copied()
+            .collect();
+        let query: String = query_chars.iter().collect();
+        let results = fuzz_dict.search(&query);
+        if results.is_empty() {
+            return None;
+        }
+        // 翻页窗口
+        let mut start = selection.page_no * self.page_count;
+        if start >= results.len() {
+            let m0d = results.len() % self.page_count;
+            if m0d == 0 {
+                start = results.len() - self.page_count;
+            } else {
+                start = results.len() - m0d;
+            }
+        }
+        let rel_page_no = start / self.page_count;
+        let window = &results[start..(start + self.page_count).min(results.len())];
+        let unique = selection.has_selection;
+        let cands = if selection.sel_idx > 0 || no_cands {
+            let index = if selection.sel_idx >= window.len() {
+                window.len() - 1
+            } else {
+                selection.sel_idx
+            };
+            &window[index..index + 1]
+        } else {
+            window
+        };
+        let enrich = |(i, (cand_idx, _score)): (usize, &(usize, u16))| -> CandidateRich {
+            let select_key = self.selection_keys.get(i).copied().unwrap_or(' ');
+            let cand = &fuzz_dict.candidates[*cand_idx];
+            CandidateRich::new(
+                fuzz_dict.get_code(cand).to_owned(),
+                fuzz_dict.get_text(cand).to_owned(),
+                cand.weight,
+                codes.to_vec(),
+                i,
+                select_key,
+            )
+        };
+        Some((
+            cands.iter().enumerate().map(enrich).collect(),
+            unique,
+            rel_page_no,
+        ))
     }
 
     fn segments(&self, input: &[char]) -> Vec<(Vec<char>, Tag)> {
@@ -814,8 +884,9 @@ pub struct AnalysisResult {
 #[cfg(test)]
 mod tests {
 
+    use crate::DictKindName;
+
     use super::*;
-    use std::str::FromStr;
 
     fn gen_entries() -> String {
         r#"
@@ -866,6 +937,20 @@ y 伊5 1
         .replace(' ', "\t")
     }
 
+    fn gen_fuzz_entries() -> String {
+        r#"
+你好 nihao,hello,oi
+世界 shijie,world,sikei
+心 heart,beat
+苹果 apple,fruit,food
+西瓜 watermelon,fruit,food
+梨子 pear,fruit,food
+芒果 mango,fruit,food
+菠萝 pineapple,fruit,food
+"#
+        .replace(' ', "\t")
+    }
+
     fn gen_test_config() -> Config {
         let raw = r#"
 selection_keys = ["U","I","O","P","5","6","7","8","9"]
@@ -883,7 +968,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_analyze() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(gen_test_config(), vec![(DictMeta::default(), dict)]);
         let inputs = vec![
             ("a cIzk", vec!["啊", "", "此啊", "zk"]),
@@ -908,8 +993,8 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_analyze_with_sec_dict() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
-        let dict_sec = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
+        let dict_sec = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config(),
             vec![
@@ -949,18 +1034,12 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_segments_with_sec_dict() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
-        let dict_sec = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
+        let dict_sec = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config(),
             vec![
-                (
-                    DictMeta {
-                        trigger: '\0',
-                        ..Default::default()
-                    },
-                    dict,
-                ),
+                (DictMeta::default(), dict),
                 (
                     DictMeta {
                         trigger: '@',
@@ -1042,7 +1121,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_segments() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(gen_test_config(), vec![(DictMeta::default(), dict)]);
         let samples: Vec<(usize, &str, Vec<&str>, Vec<Tag>)> = vec![
             (
@@ -1149,7 +1228,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_analyze_pending() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(gen_test_config(), vec![(DictMeta::default(), dict)]);
         let samples = vec![
             ("a", true),
@@ -1162,8 +1241,8 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
             let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
             assert_eq!(expected, result.pending, "> No.{} input: {}", i, input);
         }
-        let dict = Dict::from_str(&gen_entries()).unwrap();
-        let dict_sec = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
+        let dict_sec = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config(),
             vec![
@@ -1173,6 +1252,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
                         trigger: '@',
                         hint: "反".to_string(),
                         path: "".to_string(),
+                        ..Default::default()
                     },
                     dict_sec,
                 ),
@@ -1187,7 +1267,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_segments_pagination() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config_page_count(2),
             vec![(DictMeta::default(), dict)],
@@ -1217,6 +1297,34 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
         }
     }
 
+    #[test]
+    fn test_segments_fuzz() {
+        let dict = DictKind::from_str(&gen_fuzz_entries(), DictKindName::Fuzzy).unwrap();
+        let analyzer = InputAnalyzer::new(
+            gen_test_config_page_count(2),
+            vec![(DictMeta::default(), dict)],
+        );
+        // ⇞ (U+21DE) 和 ⇟ (U+21DF)
+        let samples = vec![
+            ("hel", Tag::Code(CodeSelection::n().w_page_no(0))),
+            ("hel⇟⇟", Tag::Code(CodeSelection::n().w_page_no(2).hp())),
+            (
+                "a⇟2",
+                Tag::Code(CodeSelection::n().w_page_no(1).hp().w_sel(1).hs()),
+            ),
+        ];
+        for (i, (input, expected)) in samples.into_iter().enumerate() {
+            let mut segments = analyzer.segments(input.chars().collect::<Vec<_>>().as_slice());
+            assert_eq!(
+                Some(expected),
+                segments.pop().map(|seg| seg.1),
+                "> No.{} input: {}",
+                i,
+                input
+            );
+        }
+    }
+
     fn gen_test_config_page_count(page_count: usize) -> Config {
         Config {
             page_count,
@@ -1225,7 +1333,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
     }
     #[test]
     fn test_analyze_pagination() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config_page_count(2),
             vec![(DictMeta::default(), dict)],
@@ -1242,7 +1350,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
                 input
             );
         }
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config_page_count(3),
             vec![(DictMeta::default(), dict)],
@@ -1285,12 +1393,12 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
     }
     #[test]
     fn test_analyze_trim_escape() {
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer_trim = InputAnalyzer::new(
             gen_test_config_escape_trim(),
             vec![(DictMeta::default(), dict)],
         );
-        let dict = Dict::from_str(&gen_entries()).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
         let analyzer_no_trim = InputAnalyzer::new(
             gen_test_config_escape_no_trim(),
             vec![(DictMeta::default(), dict)],
@@ -1326,6 +1434,31 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
                 i,
                 input
             );
+        }
+    }
+
+    #[test]
+    fn test_analyze_fuzz() {
+        let dict = DictKind::from_str(&gen_fuzz_entries(), DictKindName::Fuzzy).unwrap();
+        let analyzer = InputAnalyzer::new(
+            gen_test_config(),
+            vec![
+                (DictMeta::default(), DictKind::Prefix(PrefixDict::default())),
+                (
+                    DictMeta {
+                        trigger: 'E',
+                        hint: "Emoji".to_string(),
+                        ..Default::default()
+                    },
+                    dict,
+                ),
+            ],
+        );
+        let inputs = vec![("Efruit,apple ", vec!["苹果", ""])];
+        for (i, (input, expect)) in inputs.into_iter().enumerate() {
+            let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
+            let texts: Vec<String> = result.segments.into_iter().map(|seg| seg.0).collect();
+            assert_eq!(texts, expect, "> No.{} input: {}", i, input);
         }
     }
 

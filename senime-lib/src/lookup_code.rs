@@ -11,7 +11,7 @@ use trie::Trie;
 
 use ahash::AHashMap;
 
-use crate::Dict;
+use crate::PrefixDict;
 
 #[derive(Debug, Clone)]
 struct CodePos(Vec<char>, u16);
@@ -25,7 +25,7 @@ pub struct Looker {
 
 const INFINITY: usize = 100000000;
 impl Looker {
-    pub fn new(dict: &Dict) -> Self {
+    pub fn new(dict: &PrefixDict) -> Self {
         let mut map: AHashMap<Vec<char>, Vec<CodePos>> = AHashMap::new();
         let mut code_trie = Trie::new();
         let mut code = "";
@@ -246,10 +246,9 @@ impl<'a> Segment<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::{dict::Dict, lookup_code::Looker};
-    use std::str::FromStr;
+    use crate::{DictKind, DictKindName, lookup_code::Looker};
 
-    fn create_dict() -> Dict {
+    fn create_dict() -> DictKind {
         let entries = r#"
 d	中	0
 jv	华	0
@@ -270,12 +269,14 @@ djv	喻	0
 jdm	人民网	0
 jdma	人民网world	0
         "#;
-        Dict::from_str(entries).unwrap()
+        DictKind::from_str(entries, DictKindName::Prefix).unwrap()
     }
 
     #[test]
     fn test_analyze_segments() {
-        let dict = create_dict();
+        let DictKind::Prefix(dict) = create_dict() else {
+            unreachable!()
+        };
         let looker = Looker::new(&dict);
         let text = "中华人民是中华人民共和国的公民中华人民是中华人民共和国的公民，共和hello国人民网world。"
             .chars()
