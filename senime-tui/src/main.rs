@@ -175,11 +175,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|a| JSAction::from_str(a))
         .transpose()?;
     let js_settings = js::js_get_settings(args.js_settings.as_ref())?;
-    let js_content = js_settings
-        .as_ref()
-        .zip(js_action)
-        .map(|(settings, action)| js_get_content(settings, action))
-        .transpose()?;
+    let js_content = if matches!(js_action, Some(JSAction::None)) {
+        None
+    } else {
+        js_settings
+            .as_ref()
+            .zip(js_action)
+            .map(|(settings, action)| js_get_content(settings, action))
+            .transpose()?
+    };
 
     let table_path: String = match args.table {
         Some(t) => t,
@@ -338,6 +342,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame.set_cursor_position(cursor);
 
             if let Some(cands) = candidates {
+                // TODO: 更好的位置计算
                 let (popup, p_area) = Popup::create(&cands, t_area, cursor);
                 frame.render_widget(popup, p_area);
             }

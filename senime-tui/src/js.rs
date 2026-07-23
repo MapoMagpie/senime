@@ -16,8 +16,6 @@ pub enum JsError {
     Json(serde_json::Error),
     /// API 返回了错误码
     Api(String),
-    /// 无效的 action
-    NoAction,
 }
 
 impl std::fmt::Display for JsError {
@@ -28,7 +26,6 @@ impl std::fmt::Display for JsError {
             JsError::Http(e) => write!(f, "JS bridge HTTP 请求错误: {e}"),
             JsError::Json(e) => write!(f, "JS bridge JSON 解析错误: {e}"),
             JsError::Api(msg) => write!(f, "JS bridge API 错误: {msg}"),
-            JsError::NoAction => write!(f, "JS bridge: 无效的 action"),
         }
     }
 }
@@ -178,7 +175,7 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
             .to_string();
             ("/Api/Text/getRandomText", body)
         }
-        JSAction::None => return Err(JsError::NoAction),
+        JSAction::None => unreachable!(),
     };
 
     // 加密请求体
