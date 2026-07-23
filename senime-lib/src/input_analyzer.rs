@@ -222,8 +222,12 @@ impl InputAnalyzer {
                             }
                             // 当前是最后一段时，若当前所查询的码表不是主码表，则在text前面加上`hint`
                             if at_last && !unique && selection.dict_idx > 0 {
-                                let hint = self.dicts[selection.dict_idx].0.hint.clone();
-                                segments.push((hint + "|" + &cands[0].text, codes, tag, true));
+                                let mut hint = self.dicts[selection.dict_idx].0.hint.clone();
+                                hint.push('|');
+                                hint.push_str(&cands[0].text);
+                                hint.push('|');
+                                hint.extend(&codes[1..]);
+                                segments.push((hint, codes, tag, true));
                             } else {
                                 segments.push((cands[0].text.to_string(), codes, tag, !unique));
                             }
@@ -759,6 +763,15 @@ impl Tag {
             Tag::Code(sel) => sel.has_selection,
             Tag::Punctuation(sel) => sel.1,
             _ => false,
+        }
+    }
+
+    pub fn tag_name(&self) -> &'static str {
+        match self {
+            Tag::Code(_) => "code",
+            Tag::Punctuation(_) => "punctuation",
+            Tag::Escape(_) => "escape",
+            Tag::Unknown => "unknown",
         }
     }
 }
