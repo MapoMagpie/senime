@@ -36,12 +36,24 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            trigger_characters: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ,."
-                .to_string(),
+            trigger_characters: " abcdefghijklmnopqrstuvwxyz,.".to_string(),
             comment_prefixes: vec![],
             coding_mode: true,
             special_prefix: "@@".to_string(),
         }
+    }
+}
+
+impl Config {
+    fn extend_trigger_characters(&mut self, other: Vec<char>) {
+        let mut trigger_characters = self
+            .trigger_characters
+            .chars()
+            .chain(other)
+            .collect::<Vec<_>>();
+        trigger_characters.sort();
+        trigger_characters.dedup();
+        self.trigger_characters = trigger_characters.iter().collect();
     }
 }
 
@@ -89,8 +101,10 @@ impl LanguageServer for Backend {
         log::info!("initialize: {:?}", params.initialization_options);
         if let Some(value) = params.initialization_options {
             match serde_json::from_value::<Config>(value) {
-                Ok(new_config) => {
+                Ok(mut new_config) => {
                     let mut config = self.config.write().await;
+                    let selection_keys = self.engine.read().unwrap().get_selection_keys().to_vec();
+                    new_config.extend_trigger_characters(selection_keys);
                     *config = new_config;
                     log::info!("update config: {:?}", config);
                 }
@@ -121,6 +135,7 @@ impl LanguageServer for Backend {
             let config = self.config.read().await;
             config.trigger_characters.clone()
         };
+        log::info!("trigger characters: {}", trigger_characters);
         return Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "senimels".to_string(),
@@ -163,6 +178,19 @@ impl LanguageServer for Backend {
     //           遇到连续两个空格或非 ASCII 字符即停止。
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         log::info!("completion start");
+        let config = self.config.read().await;
+        let trigger_char = params
+            .context
+            .as_ref()
+            .and_then(|ctx| ctx.trigger_character.as_deref());
+        let trigger = trigger_char
+            .map(|c| config.trigger_characters.contains(c))
+            .unwrap_or(false);
+        if !trigger {
+            log::info!("completion ignored: trigger character not in config");
+            return Ok(None);
+        }
+        // 检查是否是trigger_characters
         // 全局开关
         if !self.state.read().await.completion {
             return Ok(None);
@@ -176,8 +204,7 @@ impl LanguageServer for Backend {
         };
 
         let line_chars: Vec<char> = rope.line(position.line as usize).chars().collect();
-        log::info!("line chars: {:?}", line_chars);
-        let config = self.config.read().await;
+        // log::info!("line chars: {:?}", line_chars);
 
         // 将 LSP position.character 转换为行内字符索引（考虑协商后的编码）
         let encoding = *self.encoding.read().await;
@@ -740,6 +767,7 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let engine = load_input_analyzer(&table_path).expect("failed to load dict");
+    let selection_keys = engine.get_selection_keys().to_vec();
     let mut watch_paths = vec![table_path.clone()];
     for dict_meta in engine.dict_metas() {
         watch_paths.push(resolve_relative_path(
@@ -785,14 +813,13 @@ async fn main() {
     .map_err(|e| log::warn!("[senime] file watcher init failed: {e}"))
     .ok();
 
-    let doc_map = DashMap::default();
-    let state = RwLock::new(State { completion: true });
-    let config = RwLock::new(Config::default());
+    let mut config = Config::default();
+    config.extend_trigger_characters(selection_keys);
     let (service, socket) = LspService::new(|_client| Backend {
         engine,
-        doc_map,
-        state,
-        config,
+        doc_map: DashMap::default(),
+        state: RwLock::new(State { completion: true }),
+        config: RwLock::new(config),
         encoding: RwLock::new(PositionEncoding::Utf16), // 初始默认 UTF-16，initialize 时协商
     });
     Server::new(stdin, stdout, socket).serve(service).await;
