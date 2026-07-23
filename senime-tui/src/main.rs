@@ -1,6 +1,7 @@
 use std::{
     fs::{DirBuilder, OpenOptions},
     io::Write,
+    iter::once,
     path::Path,
     str::FromStr,
     time::Instant,
@@ -212,6 +213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let backend = create_backend()?;
     let mut terminal = Terminal::new(backend)?;
     let mut area: Rect = terminal.size()?.into();
+    let mut copied_last: Option<char> = None;
 
     loop {
         if first {
@@ -232,6 +234,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                         ctx.calc_measurement();
                         let _ = record_input_data(&time_id, &ctx);
+                    }
+                    KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                        copied_last = ctx.get_sentence().last().copied();
+                    }
+                    KeyCode::Char('v') if key.modifiers == KeyModifiers::CONTROL => {
+                        copied_last.inspect(|c| {
+                            ctx.confrim_pending();
+                            ctx.push(once(*c), vec![*c], false)
+                        });
+                    }
+                    KeyCode::Char('v') if key.modifiers == KeyModifiers::ALT => {
+                        // 从系统剪切板中读取内容，将其转成字符序列，然后`ctx.push`
+                        if let Ok(mut clip) = arboard::Clipboard::new() {
+                            if let Ok(text) = clip.get_text() {
+                                ctx.confrim_pending();
+                                ctx.push(text.chars(), text.chars().collect(), false);
+                            }
+                        }
                     }
                     KeyCode::PageUp => {
                         ctx.push_input(PAGE_UP);
