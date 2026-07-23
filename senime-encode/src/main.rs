@@ -146,7 +146,7 @@ fn build_result(
     }
 }
 
-fn map_an_segment(selection_keys: &Vec<char>, page_count: usize, seg: Segment<'_>) -> AnSegment {
+fn map_an_segment(selection_keys: &[char], page_count: usize, seg: Segment<'_>) -> AnSegment {
     let page_num = seg.pos as usize / page_count;
     let idx_modded = seg.pos as usize % page_count;
     // if over selection_keys, use the (idx_modded + 1) as char

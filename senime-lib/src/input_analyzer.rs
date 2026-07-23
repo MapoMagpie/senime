@@ -1037,7 +1037,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
         let inputs = vec![
             ("aaaaaa aaaaa", vec!["啊", "啊", "", "啊", "啊"]),
             ("aaa8 ", vec!["啊", " "]),
-            ("a cI@abc", vec!["啊", "", "此啊", "反|啊波此"]),
+            ("a cI@abc", vec!["啊", "", "此啊", "反|啊波此|abc"]),
             ("a cI@abcaaa", vec!["啊", "", "此啊", "啊波此", "啊"]),
             ("@aaac@cP@@@", vec!["啊", "此", "此", "@", "@", "反"]),
             ("@aaax@xxx", vec!["啊", "x", "@", "xxx"]),
@@ -1492,7 +1492,7 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
         );
         let inputs = vec![
             ("E", vec!["Emoji"]),
-            ("Esi", vec!["Emoji|世界"]),
+            ("Esi", vec!["Emoji|世界|si"]),
             ("Esi ", vec!["世界", ""]),
             ("Exxxxxx", vec!["Exxxxxx"]),
             ("Efruit,appI", vec!["菠萝"]),

@@ -250,11 +250,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     KeyCode::Char('v') if key.modifiers == KeyModifiers::ALT => {
                         // 从系统剪切板中读取内容，将其转成字符序列，然后`ctx.push`
-                        if let Ok(mut clip) = arboard::Clipboard::new() {
-                            if let Ok(text) = clip.get_text() {
-                                ctx.confrim_pending();
-                                ctx.push(text.chars(), text.chars().collect(), false);
-                            }
+                        if let Ok(mut clip) = arboard::Clipboard::new()
+                            && let Ok(text) = clip.get_text()
+                        {
+                            ctx.confrim_pending();
+                            ctx.push(text.chars(), text.chars().collect(), false);
                         }
                     }
                     KeyCode::PageUp => {

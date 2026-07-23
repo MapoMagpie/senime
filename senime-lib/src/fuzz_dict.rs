@@ -90,7 +90,7 @@ impl FuzzDict {
             .collect();
 
         // 按得分降序，得分相同时保持元素在文件中的位置
-        results.sort_by(|le, ri| ri.1.cmp(&le.1));
+        results.sort_by_key(|ri| std::cmp::Reverse(ri.1));
         // println!("search: {}", query);
         // results.iter().for_each(|re| {
         //     println!(

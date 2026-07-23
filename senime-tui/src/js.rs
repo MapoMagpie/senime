@@ -260,7 +260,9 @@ pub fn js_report(
         let body_str = resp.into_body().read_to_string()?;
         let json: serde_json::Value = serde_json::from_str(&body_str)?;
         message.push('\n');
-        json["msg"].as_str().map(|str| message.push_str(str));
+        if let Some(str) = json["msg"].as_str() {
+            message.push_str(str);
+        }
     }
 
     {
@@ -277,7 +279,9 @@ pub fn js_report(
         let body_str = resp.into_body().read_to_string()?;
         let json: serde_json::Value = serde_json::from_str(&body_str)?;
         message.push('\n');
-        json["msg"].as_str().map(|str| message.push_str(str));
+        if let Some(str) = json["msg"].as_str() {
+            message.push_str(str);
+        }
     }
 
     Ok(message)
