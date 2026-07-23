@@ -15,7 +15,7 @@ pub struct Config {
     /// 码表列表。第一个元素为主码表，其余为反查码表等。
     pub dicts: Vec<DictMeta>,
     /// 选重键列表
-    pub selection_keys: [char; 9],
+    pub selection_keys: Vec<char>,
     /// 标点映射
     pub punctuations: HashMap<char, Vec<String>>,
     /// 逃逸符对（开闭字符）
@@ -45,73 +45,6 @@ impl Default for Config {
             page_count: 9,
         }
     }
-}
-
-fn default_selection_keys() -> [char; 9] {
-    ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-}
-
-// ',' : { commit: ， }
-// '.' : { commit: 。 }
-// '<' : [ 《, 〈, «, ‹, ˂, ˱ ]
-// '>' : [ 》, 〉, », ›, ˃, ˲ ]
-// '?' : { commit: ？ }
-// ';' : { commit: ； }
-// ';' : [ ；, ：, ":" ]
-// ':' : { commit: ： }
-// "'": { pair: [ '‘', '’' ] }
-// '"' : { pair: [ '“', '”' ] }
-// '\' : [ 、, '\', ＼ ]
-// '/' : [ ？, 、, '/', ／, ÷ ]
-// '|' : [ '|', ·, '·' , ｜, '§', '¦', '‖', ︴ ]
-// '`' : [ '`', ‵, ‶, ‷, ′, ″, ‴, ⁗ ]
-// '~' : [ '~', ～, ~~~, ˜, ˷, ⸯ, ≈, ≋, ≃, ≅, ≇, ∽, ⋍, ≌, ﹏, ﹋, ﹌, ︴ ]
-// '!' : { commit: ！ }
-// # '@' : [ '@', ©, ®, ℗ ]
-// '#' : [ '#', № ]
-// '%' : [ '%', ％, '°', '℃', ‰, ‱, ℉, ℅, ℆, ℀, ℁, ⅍ ]
-// '$' : [ ￥, '$', '€', '£', '¥', '¢', '¤', ₩ ]
-// '^' : { commit: …… }
-// '&' : '&'
-// '*' : [ '*', ＊, ·, ‧, ・, ･, ×, ※, ❂, ⁂, ☮, ☯, ☣ ]
-// '(' : （
-// ')' : ）
-// '-' : '-'
-// '_' : ——
-// '+' : '+'
-// '=' : [ '=', 々, 〃 ]
-// '[' : [ 「, '“', 【, 〔, ［, 〚, 〘 ]
-// ']' : [ 」, '”', 】, 〕, ］, 〛, 〙 ]
-// '{' : [ "{", 〖, 『 , ｛ ]
-// '}' : [ "}", 〗, 』 , ｝ ]
-fn default_punctuations() -> HashMap<char, Vec<String>> {
-    let punctuations = vec![
-        (',', vec!["，", ",", "……"]),
-        ('.', vec!["。", ".", "……"]),
-        ('!', vec!["！", "!"]),
-        ('/', vec!["？", "/"]),
-        (';', vec!["；", "：", ";"]),
-        ('[', vec!["「", "“", "[", "【"]),
-        (']', vec!["」", "”", "]", "】"]),
-        ('\\', vec!["、", "\\"]),
-        ('|', vec!["·", "|"]),
-        ('_', vec!["——", "_"]),
-        ('<', vec!["《", "<"]),
-        ('>', vec!["》", ">"]),
-        ('\'', vec!["‘", "’"]),
-        ('~', vec!["~", "～", "~~~"]),
-        ('(', vec!["（", "(", "『"]),
-        (')', vec!["）", ")", "』"]),
-    ];
-    let mut map = HashMap::new();
-    punctuations.into_iter().for_each(|(ch, puncs)| {
-        map.insert(ch, puncs.iter().map(|s| s.to_string()).collect());
-    });
-    map
-}
-
-fn default_escape_pair() -> Option<[char; 2]> {
-    Some(['`', '`'])
 }
 
 /// 从配置文件路径构建完整的 `InputAnalyzer`。
@@ -165,7 +98,7 @@ pub struct InputAnalyzer {
     main_dict_code_map: AHashMap<char, (u32, u16)>,
     escape_pair: Option<[char; 2]>,
     trim_escape_pair: bool,
-    selection_keys: [char; 9],
+    selection_keys: Vec<char>,
     punctuations: HashMap<char, Vec<String>>,
     page_count: usize,
 }
@@ -173,11 +106,11 @@ pub struct InputAnalyzer {
 impl Default for InputAnalyzer {
     fn default() -> Self {
         Self {
-            dicts: vec![(DictMeta::default(), DictKind::Prefix(PrefixDict::default()))],
+            dicts: vec![(DictMeta::default(), DictKind::default())],
             main_dict_code_map: AHashMap::new(),
             escape_pair: None,
             trim_escape_pair: false,
-            selection_keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'],
+            selection_keys: vec![],
             punctuations: HashMap::new(),
             page_count: 1,
         }
@@ -244,7 +177,7 @@ impl InputAnalyzer {
         self.dicts.iter().map(|(m, _)| m).collect()
     }
 
-    pub fn get_selection_keys(&self) -> &[char; 9] {
+    pub fn get_selection_keys(&self) -> &Vec<char> {
         &self.selection_keys
     }
 
@@ -288,7 +221,7 @@ impl InputAnalyzer {
                                 }
                             }
                             // 当前是最后一段时，若当前所查询的码表不是主码表，则在text前面加上`hint`
-                            if at_last && selection.dict_idx > 0 {
+                            if at_last && !unique && selection.dict_idx > 0 {
                                 let hint = self.dicts[selection.dict_idx].0.hint.clone();
                                 segments.push((hint + "|" + &cands[0].text, codes, tag, true));
                             } else {
@@ -881,6 +814,73 @@ pub struct AnalysisResult {
     pub candidates: Option<Vec<CandidateRich>>,
 }
 
+fn default_selection_keys() -> Vec<char> {
+    vec!['1', '2', '3', '4', '5', '6', '7', '8', '9']
+}
+
+// ',' : { commit: ， }
+// '.' : { commit: 。 }
+// '<' : [ 《, 〈, «, ‹, ˂, ˱ ]
+// '>' : [ 》, 〉, », ›, ˃, ˲ ]
+// '?' : { commit: ？ }
+// ';' : { commit: ； }
+// ';' : [ ；, ：, ":" ]
+// ':' : { commit: ： }
+// "'": { pair: [ '‘', '’' ] }
+// '"' : { pair: [ '“', '”' ] }
+// '\' : [ 、, '\', ＼ ]
+// '/' : [ ？, 、, '/', ／, ÷ ]
+// '|' : [ '|', ·, '·' , ｜, '§', '¦', '‖', ︴ ]
+// '`' : [ '`', ‵, ‶, ‷, ′, ″, ‴, ⁗ ]
+// '~' : [ '~', ～, ~~~, ˜, ˷, ⸯ, ≈, ≋, ≃, ≅, ≇, ∽, ⋍, ≌, ﹏, ﹋, ﹌, ︴ ]
+// '!' : { commit: ！ }
+// # '@' : [ '@', ©, ®, ℗ ]
+// '#' : [ '#', № ]
+// '%' : [ '%', ％, '°', '℃', ‰, ‱, ℉, ℅, ℆, ℀, ℁, ⅍ ]
+// '$' : [ ￥, '$', '€', '£', '¥', '¢', '¤', ₩ ]
+// '^' : { commit: …… }
+// '&' : '&'
+// '*' : [ '*', ＊, ·, ‧, ・, ･, ×, ※, ❂, ⁂, ☮, ☯, ☣ ]
+// '(' : （
+// ')' : ）
+// '-' : '-'
+// '_' : ——
+// '+' : '+'
+// '=' : [ '=', 々, 〃 ]
+// '[' : [ 「, '“', 【, 〔, ［, 〚, 〘 ]
+// ']' : [ 」, '”', 】, 〕, ］, 〛, 〙 ]
+// '{' : [ "{", 〖, 『 , ｛ ]
+// '}' : [ "}", 〗, 』 , ｝ ]
+fn default_punctuations() -> HashMap<char, Vec<String>> {
+    let punctuations = vec![
+        (',', vec!["，", ",", "……"]),
+        ('.', vec!["。", ".", "……"]),
+        ('!', vec!["！", "!"]),
+        ('/', vec!["？", "/"]),
+        (';', vec!["；", "：", ";"]),
+        ('[', vec!["「", "“", "[", "【"]),
+        (']', vec!["」", "”", "]", "】"]),
+        ('\\', vec!["、", "\\"]),
+        ('|', vec!["·", "|"]),
+        ('_', vec!["——", "_"]),
+        ('<', vec!["《", "<"]),
+        ('>', vec!["》", ">"]),
+        ('\'', vec!["‘", "’"]),
+        ('~', vec!["~", "～", "~~~"]),
+        ('(', vec!["（", "(", "『"]),
+        (')', vec!["）", ")", "』"]),
+    ];
+    let mut map = HashMap::new();
+    punctuations.into_iter().for_each(|(ch, puncs)| {
+        map.insert(ch, puncs.iter().map(|s| s.to_string()).collect());
+    });
+    map
+}
+
+fn default_escape_pair() -> Option<[char; 2]> {
+    Some(['`', '`'])
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -939,16 +939,22 @@ y 伊5 1
 
     fn gen_fuzz_entries() -> String {
         r#"
-你好 nihao,hello,oi
-世界 shijie,world,sikei
-心 heart,beat
-苹果 apple,fruit,food
-西瓜 watermelon,fruit,food
-梨子 pear,fruit,food
-芒果 mango,fruit,food
-菠萝 pineapple,fruit,food
+你好	nihao,hello,oi
+世界	shijie,world,sikei
+心	heart,beat
+苹果	apple,fruit,food
+西瓜	watermelon,fruit,food
+梨子	pear,fruit,food
+芒果	mango,fruit,food
+菠萝	pineapple,fruit,food
+♡	White Heart Suit
+➡️	Right Arrow
+⬅️	Left Arrow
+⬇️	Down Arrow
+⬆️	Up Arrow
+💘	Heart With Arrow
 "#
-        .replace(' ', "\t")
+        .to_string()
     }
 
     fn gen_test_config() -> Config {
@@ -1024,6 +1030,8 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
             ("@aaax@xxx", vec!["啊", "x", "@", "xxx"]),
             ("@aaax@cc@", vec!["啊", "x", "此", "反"]),
             ("@ ", vec!["@", ""]),
+            ("@", vec!["反"]),
+            ("@bI", vec!["波啊"]),
         ];
         for (i, (input, expect)) in inputs.into_iter().enumerate() {
             let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
@@ -1299,18 +1307,32 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_segments_fuzz() {
-        let dict = DictKind::from_str(&gen_fuzz_entries(), DictKindName::Fuzzy).unwrap();
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
+        let dict_fuzz = DictKind::from_str(&gen_fuzz_entries(), DictKindName::Fuzzy).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config_page_count(2),
-            vec![(DictMeta::default(), dict)],
+            vec![
+                (DictMeta::default(), dict),
+                (
+                    DictMeta {
+                        trigger: 'E',
+                        hint: "Emoji".to_string(),
+                        ..Default::default()
+                    },
+                    dict_fuzz,
+                ),
+            ],
         );
         // ⇞ (U+21DE) 和 ⇟ (U+21DF)
         let samples = vec![
-            ("hel", Tag::Code(CodeSelection::n().w_page_no(0))),
-            ("hel⇟⇟", Tag::Code(CodeSelection::n().w_page_no(2).hp())),
+            ("Ehel", Tag::Code(CodeSelection::n().w_dict(1).w_page_no(0))),
             (
-                "a⇟2",
-                Tag::Code(CodeSelection::n().w_page_no(1).hp().w_sel(1).hs()),
+                "Ehel⇟⇟",
+                Tag::Code(CodeSelection::n().w_dict(1).w_page_no(2).hp()),
+            ),
+            (
+                "Ea⇟2",
+                Tag::Code(CodeSelection::n().w_dict(1).w_page_no(1).hp().w_sel(1).hs()),
             ),
         ];
         for (i, (input, expected)) in samples.into_iter().enumerate() {
@@ -1439,22 +1461,31 @@ selection_keys = ["U","I","O","P","5","6","7","8","9"]
 
     #[test]
     fn test_analyze_fuzz() {
-        let dict = DictKind::from_str(&gen_fuzz_entries(), DictKindName::Fuzzy).unwrap();
+        let dict = DictKind::from_str(&&gen_entries(), DictKindName::Prefix).unwrap();
+        let dict_fuzz = DictKind::from_str(&gen_fuzz_entries(), DictKindName::Fuzzy).unwrap();
         let analyzer = InputAnalyzer::new(
             gen_test_config(),
             vec![
-                (DictMeta::default(), DictKind::Prefix(PrefixDict::default())),
+                (DictMeta::default(), dict),
                 (
                     DictMeta {
                         trigger: 'E',
                         hint: "Emoji".to_string(),
                         ..Default::default()
                     },
-                    dict,
+                    dict_fuzz,
                 ),
             ],
         );
-        let inputs = vec![("Efruit,apple ", vec!["苹果", ""])];
+        let inputs = vec![
+            ("E", vec!["Emoji"]),
+            ("Esi", vec!["Emoji|世界"]),
+            ("Esi ", vec!["世界", ""]),
+            ("Exxxxxx", vec!["Exxxxxx"]),
+            ("Efruit,appI", vec!["菠萝"]),
+            ("Ehearsu ", vec!["♡", ""]),
+            ("Earrow,right ", vec!["➡️", ""]),
+        ];
         for (i, (input, expect)) in inputs.into_iter().enumerate() {
             let result = analyzer.analyze(input.chars().collect::<Vec<_>>().as_slice());
             let texts: Vec<String> = result.segments.into_iter().map(|seg| seg.0).collect();

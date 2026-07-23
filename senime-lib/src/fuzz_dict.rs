@@ -9,7 +9,7 @@ use crate::dict::{Candidate, StringArena};
 /// 内部使用 `StringArena` + `Vec<Candidate>` 存储条目（与 Dict 共享格式），
 /// `Candidate.code` 对应标签字符串，`Candidate.text` 对应展示文本（如 emoji）。
 ///
-/// 查询时用 `,` 或 `|` 分隔多个关键词，每个关键词独立做模糊匹配，
+/// 查询时用 `,` 分隔多个关键词，每个关键词独立做模糊匹配，
 /// 最终结果按得分降序排列。
 #[derive(Debug)]
 pub struct FuzzDict {
@@ -42,18 +42,15 @@ impl FuzzDict {
         if input.is_empty() {
             return false;
         }
-        let has_letter = input.iter().any(|c| c.is_ascii_alphabetic());
-        if !has_letter {
+        if input[0] == ',' && input.len() == 1 {
             return false;
         }
-        input
-            .iter()
-            .all(|c| c.is_ascii_alphabetic() || *c == ',' || *c == '|')
+        input.iter().all(|c| c.is_ascii_lowercase() || *c == ',')
     }
 
     /// 模糊搜索，返回 `(candidate_index, score)` 列表，按得分降序排列。
     pub fn search(&self, query: &str) -> Vec<(usize, u16)> {
-        let tokens: Vec<&str> = query.split([',', '|']).filter(|t| !t.is_empty()).collect();
+        let tokens: Vec<&str> = query.split(',').filter(|t| !t.is_empty()).collect();
 
         if tokens.is_empty() {
             return Vec::new();
@@ -81,35 +78,84 @@ impl FuzzDict {
                 let tag_str = self.get_code(cand);
                 let tag_utf32 = Utf32String::from(tag_str);
                 let haystack = tag_utf32.slice(..);
-                let total_score: u16 = atoms
-                    .iter()
-                    .filter_map(|atom| atom.score(haystack, &mut matcher))
-                    .sum();
-                if total_score > 0 {
-                    Some((i, total_score))
-                } else {
-                    None
+                let mut score = 0;
+                for atom in atoms.iter() {
+                    match atom.score(haystack, &mut matcher) {
+                        Some(s) => score += s,
+                        None => return None,
+                    }
                 }
+                Some((i, score))
             })
             .collect();
 
-        // 按得分降序，得分相同时按权重降序，再按 code 长度升序（短标签优先）
-        results.sort_by(|(i1, s1), (i2, s2)| match s2.cmp(s1) {
-            std::cmp::Ordering::Equal => {
-                match self.candidates[*i2]
-                    .weight
-                    .cmp(&self.candidates[*i1].weight)
-                {
-                    std::cmp::Ordering::Equal => {
-                        let len1 = self.get_code(&self.candidates[*i1]).len();
-                        let len2 = self.get_code(&self.candidates[*i2]).len();
-                        len1.cmp(&len2)
-                    }
-                    ord => ord,
-                }
-            }
-            ord => ord,
-        });
+        // 按得分降序，得分相同时保持元素在文件中的位置
+        results.sort_by(|le, ri| ri.1.cmp(&le.1));
+        // println!("search: {}", query);
+        // results.iter().for_each(|re| {
+        //     println!(
+        //         "candidate: {}, text: {}, code: {}, score: {}",
+        //         re.0,
+        //         self.get_text(&self.candidates[re.0]),
+        //         self.get_code(&self.candidates[re.0]),
+        //         re.1
+        //     );
+        // });
         results
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use nucleo_matcher::{
+        Matcher, Utf32String,
+        pattern::{Atom, AtomKind, CaseMatching, Normalization},
+    };
+
+    fn gen_fuzz_entries() -> String {
+        r#"
+你好	nihao,hello,oi
+世界	shijie,world,sikei
+心	heart,beat
+苹果	apple,fruit,food
+西瓜	watermelon,fruit,food
+梨子	pear,fruit,food
+芒果	mango,fruit,food
+菠萝	pineapple,fruit,food
+♡	White Heart Suit
+➡️	Right Arrow
+⬅️	Left Arrow
+⬇️	Down Arrow
+⬆️	Up Arrow
+💘	Heart With Arrow
+"#
+        .to_string()
+    }
+    #[test]
+    fn test_nucleo_base() {
+        let raw = gen_fuzz_entries();
+        let lines = raw.lines();
+        let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+        let patt = Atom::new(
+            "hear arrow",
+            CaseMatching::Smart,
+            Normalization::Never,
+            AtomKind::Fuzzy,
+            false,
+        );
+        let ret = lines
+            .filter_map(|line| {
+                let tag_utf32 = Utf32String::from(line);
+                let haystack = tag_utf32.slice(..);
+                patt.score(haystack, &mut matcher).map(|s| (s, line))
+            })
+            .collect::<Vec<_>>();
+        println!("ret:");
+        if ret.is_empty() {
+            println!("ret is empty");
+        }
+        for ele in ret {
+            println!("{:?}", ele);
+        }
     }
 }

@@ -151,6 +151,12 @@ pub enum DictKind {
     Fuzzy(FuzzDict),
 }
 
+impl Default for DictKind {
+    fn default() -> Self {
+        Self::Prefix(PrefixDict::default())
+    }
+}
+
 impl DictKind {
     /// 判断给定编码是否可达（有候选结果）。
     pub fn reachable(&self, codes: &[char]) -> bool {
@@ -262,6 +268,34 @@ impl DictKind {
             }
         }
         buf
+    }
+
+    pub fn as_prefix(&self) -> &PrefixDict {
+        match self {
+            Self::Prefix(dict) => dict,
+            _ => panic!("不是前缀码表"),
+        }
+    }
+
+    pub fn as_fuzzy(&self) -> &FuzzDict {
+        match self {
+            Self::Fuzzy(dict) => dict,
+            _ => panic!("不是模糊码表"),
+        }
+    }
+
+    pub fn into_prefix(self) -> PrefixDict {
+        match self {
+            Self::Prefix(dict) => dict,
+            _ => panic!("不是前缀码表"),
+        }
+    }
+
+    pub fn into_fuzzy(self) -> FuzzDict {
+        match self {
+            Self::Fuzzy(dict) => dict,
+            _ => panic!("不是模糊码表"),
+        }
     }
 }
 
@@ -504,12 +538,11 @@ dd 弟弟 1"#
     }
 
     #[test]
-    fn test_dict() {
-        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix).unwrap();
+    fn test_prefix_dict() {
+        let dict = DictKind::from_str(&gen_entries(), DictKindName::Prefix)
+            .unwrap()
+            .into_prefix();
         println!("dict loaded: {}", dict.count());
-        let DictKind::Prefix(dict) = dict else {
-            unreachable!()
-        };
         let result = dict.search("ah".chars().collect::<Vec<_>>().as_slice());
         assert_eq!(0, result.map_or(0, |candidates| candidates.len()));
         let result = dict.search("a".chars().collect::<Vec<_>>().as_slice());
@@ -555,10 +588,9 @@ dd 弟弟 1"#
     fn test_load() {
         let (_config_path, dict_path) = gen_test_dict_files();
         let time_start = Instant::now();
-        let dict = DictKind::load_from_txt(&dict_path, DictKindName::Prefix).unwrap();
-        let DictKind::Prefix(dict) = dict else {
-            unreachable!()
-        };
+        let dict = DictKind::load_from_txt(&dict_path, DictKindName::Prefix)
+            .unwrap()
+            .into_prefix();
         let time_dict_loaded = Instant::now();
         println!("loaded {} from {:?}", dict.count(), dict_path);
         let candidates = dict.search("a".chars().collect::<Vec<_>>().as_slice());

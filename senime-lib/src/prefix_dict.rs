@@ -88,6 +88,9 @@ impl Prism {
     }
 
     fn lookup(&self, code: &[char]) -> Option<&(usize, usize)> {
+        if code.is_empty() {
+            return None;
+        }
         // code 都是 ASCII lowercase，直接转为字节比较
         let code_bytes: Vec<u8> = code.iter().map(|c| *c as u8).collect();
         let idx = self
