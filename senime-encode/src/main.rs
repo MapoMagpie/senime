@@ -112,7 +112,7 @@ struct AnResult {
 
 fn build_result(
     segments: Vec<Segment<'_>>,
-    selection_keys: &[char; 9],
+    selection_keys: Vec<char>,
     page_count: usize,
     elapsed: Duration,
     text_len: usize,
@@ -129,7 +129,7 @@ fn build_result(
             } else if seg.pos > 0 {
                 use_candidate_times += 1;
             }
-            map_an_segment(selection_keys, page_count, seg)
+            map_an_segment(&selection_keys, page_count, seg)
         })
         .collect();
     code_len += use_space_times as usize;
@@ -146,15 +146,21 @@ fn build_result(
     }
 }
 
-fn map_an_segment(selection_keys: &[char; 9], page_count: usize, seg: Segment<'_>) -> AnSegment {
+fn map_an_segment(selection_keys: &Vec<char>, page_count: usize, seg: Segment<'_>) -> AnSegment {
     let page_num = seg.pos as usize / page_count;
+    let idx_modded = seg.pos as usize % page_count;
+    // if over selection_keys, use the (idx_modded + 1) as char
+    let select_key = selection_keys
+        .get(idx_modded)
+        .copied()
+        .unwrap_or_else(|| (idx_modded as u8 + b'0') as char);
     AnSegment {
         text: seg.text.iter().collect(),
         code: seg.code.iter().collect(),
         auto_select: seg.auto_select,
         pos: seg.pos,
         page_num,
-        select_key: selection_keys[seg.pos as usize % page_count],
+        select_key,
     }
 }
 
@@ -164,7 +170,7 @@ fn main() {
     let ia = load_input_analyzer(&args.table).expect("读取码表或配置失败");
     let dict = ia.main_dict();
     let looker = Looker::new(dict);
-    let selection_keys = ia.get_selection_keys();
+    let selection_keys = ia.get_selection_keys().to_vec();
     let page_count = ia.get_page_count();
 
     let article = {
@@ -255,7 +261,7 @@ mod test {
 
     #[test]
     fn test_map_an_segment() {
-        let selection_keys = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+        let selection_keys = vec!['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
         let page_count = 4;
         let text: Vec<char> = "abc".chars().collect();
         let code: Vec<char> = "xy".chars().collect();
