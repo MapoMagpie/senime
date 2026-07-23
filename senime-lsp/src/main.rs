@@ -45,6 +45,34 @@ impl Default for Config {
     }
 }
 
+/// LSP position encoding，由客户端在 initialize 时协商确定。
+/// 决定 `Position.character` 的含义：行内 UTF-8 字节偏移 / UTF-16 码元偏移 / UTF-32 码点偏移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PositionEncoding {
+    Utf8,
+    Utf16,
+    Utf32,
+}
+
+impl PositionEncoding {
+    fn from_lsp(encoding: &PositionEncodingKind) -> Option<Self> {
+        match encoding.as_str() {
+            "utf-8" => Some(Self::Utf8),
+            "utf-16" => Some(Self::Utf16),
+            "utf-32" => Some(Self::Utf32),
+            _ => None,
+        }
+    }
+
+    fn to_lsp(self) -> PositionEncodingKind {
+        match self {
+            Self::Utf8 => PositionEncodingKind::UTF8,
+            Self::Utf16 => PositionEncodingKind::UTF16,
+            Self::Utf32 => PositionEncodingKind::UTF32,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Backend {
     // client: Client,
@@ -52,6 +80,7 @@ struct Backend {
     doc_map: DashMap<String, Rope>,
     state: RwLock<State>,
     config: RwLock<Config>,
+    encoding: RwLock<PositionEncoding>,
 }
 
 #[tower_lsp::async_trait]
@@ -70,6 +99,24 @@ impl LanguageServer for Backend {
                 }
             }
         };
+
+        // 协商 position encoding：客户端通过 general.position_encodings 声明支持的编码列表。
+        // 服务器选择一个返回在 capabilities.position_encoding 中。
+        // 我们偏好 UTF-32（与 ropey 的 char 索引原生对应），次选 UTF-8，再次 UTF-16。
+        let client_encodings = params
+            .capabilities
+            .general
+            .as_ref()
+            .and_then(|g| g.position_encodings.as_deref())
+            .unwrap_or(&[]);
+
+        // 设置协商后的编码
+        *self.encoding.write().await = client_encodings
+            .iter()
+            .find_map(PositionEncoding::from_lsp)
+            .unwrap_or(PositionEncoding::Utf16); // 客户端未声明则默认 UTF-16（LSP 规范）
+        let encoding = *self.encoding.read().await;
+
         let trigger_characters = {
             let config = self.config.read().await;
             config.trigger_characters.clone()
@@ -80,6 +127,7 @@ impl LanguageServer for Backend {
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             capabilities: ServerCapabilities {
+                position_encoding: Some(encoding.to_lsp()),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
@@ -119,6 +167,7 @@ impl LanguageServer for Backend {
         if !self.state.read().await.completion {
             return Ok(None);
         }
+        // log::info!("position: {:?}", params.text_document_position.position);
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let rope = match self.doc_map.get(uri.as_str()) {
@@ -127,8 +176,27 @@ impl LanguageServer for Backend {
         };
 
         let line_chars: Vec<char> = rope.line(position.line as usize).chars().collect();
+        log::info!("line chars: {:?}", line_chars);
         let config = self.config.read().await;
-        let end = position.character as usize;
+
+        // 将 LSP position.character 转换为行内字符索引（考虑协商后的编码）
+        let encoding = *self.encoding.read().await;
+        let end = {
+            let line = position.line as usize;
+            let col = position.character as usize;
+            match encoding {
+                PositionEncoding::Utf32 => col,
+                PositionEncoding::Utf8 => rope
+                    .line(line)
+                    .try_byte_to_char(col)
+                    .unwrap_or(line_chars.len()),
+                PositionEncoding::Utf16 => rope
+                    .line(line)
+                    .try_utf16_cu_to_char(col)
+                    .unwrap_or(line_chars.len()),
+            }
+            .min(line_chars.len())
+        };
 
         // 注释行匹配：确定回溯下界 start_at（仅注释前缀之后的内容可参与编码段）
         let comment_boundary = match_comment_prefix(&line_chars, &config.comment_prefixes);
@@ -141,7 +209,7 @@ impl LanguageServer for Backend {
             cjk_before,
         } = locate_code_boundary(&line_chars, end, start_at);
         if start >= end {
-            log::info!("completion empty");
+            // log::info!("completion empty");
             return Ok(None);
         }
 
@@ -165,7 +233,7 @@ impl LanguageServer for Backend {
                 triggered = true;
             }
             if !triggered {
-                log::info!("completion not triggered (coding_mode)");
+                // log::info!("completion not triggered (coding_mode)");
                 return Ok(None);
             }
         }
@@ -186,6 +254,10 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
+        let line_idx = position.line;
+        let start_col = char_to_lsp_col(&rope, line_idx as usize, edit_start, encoding);
+        let end_col = char_to_lsp_col(&rope, line_idx as usize, end, encoding);
+
         let sentence_item = CompletionItem {
             label: sentence.clone(),
             preselect: Some(true),
@@ -193,7 +265,7 @@ impl LanguageServer for Backend {
             filter_text: Some(filter_text.clone()),
             sort_text: Some("0".to_string()),
             text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                make_range(position.line, edit_start, end),
+                make_range(line_idx, start_col, end_col),
                 sentence.clone(),
             ))),
             ..Default::default()
@@ -209,7 +281,7 @@ impl LanguageServer for Backend {
                     filter_text: Some(filter_text.clone()),
                     sort_text: Some((i + 1).to_string()),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                        make_range(position.line, edit_start, end),
+                        make_range(line_idx, start_col, end_col),
                         c.text,
                     ))),
                     ..Default::default()
@@ -236,27 +308,29 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        // log::info!("did_change");
+        log::info!("did_change");
         let url = params.text_document.uri;
         if let Some(mut rope) = self.doc_map.get_mut(url.as_str()) {
+            let encoding = *self.encoding.read().await;
             for change in params.content_changes {
+                // log::info!("did change: {:?}", change);
                 let TextDocumentContentChangeEvent { range, text, .. } = change;
                 match range {
                     // incremental change
                     Some(Range { start, end }) => {
-                        let s = char_index(&rope, start);
-                        let e = char_index(&rope, end);
-                        if let (Some(s), Some(e)) = (s, e) {
-                            rope.remove(s..e);
-                            rope.insert(s, &text);
-                            // log::info!(
-                            //     "did_change now rope: {}-{} {}-{}",
-                            //     start.character,
-                            //     end.character,
-                            //     s,
-                            //     e
-                            // );
-                            // log::info!("\n{}", rope.to_string());
+                        let s = char_index(&rope, start, encoding);
+                        let e = char_index(&rope, end, encoding);
+                        match (s, e) {
+                            (Ok(s), Ok(e)) => {
+                                rope.remove(s..e);
+                                rope.insert(s, &text);
+                                // log::info!("\n{}", rope.line(start.line as usize));
+                            }
+                            (Err(err), _) | (_, Err(err)) => {
+                                log::error!("did change: {err}");
+                                let mut guard = self.state.write().await;
+                                guard.completion = false;
+                            }
                         }
                     }
                     // full content change
@@ -311,17 +385,30 @@ impl LanguageServer for Backend {
     }
 }
 
-pub fn char_index(rope: &Rope, pos: Position) -> Option<usize> {
+/// 将 LSP `Position` 转换为 ropey 的绝对字符索引。
+///
+/// `character` 的语义由 `encoding` 决定：
+/// - UTF-8:  行内字节偏移
+/// - UTF-16: 行内 UTF-16 码元偏移
+/// - UTF-32: 行内 Unicode 码点偏移（与 ropey 的 char 索引一致）
+pub fn char_index(rope: &Rope, pos: Position, encoding: PositionEncoding) -> ropey::Result<usize> {
     let (line, col) = (pos.line as usize, pos.character as usize);
+    let len_lines = rope.len_lines();
     // position is at the end of rope
-    if line == rope.len_lines() && col == 0 {
-        return Some(rope.len_chars());
+    if line == len_lines && col == 0 {
+        return Ok(rope.len_chars());
     }
-    (line < rope.len_lines()).then_some(line).and_then(|line| {
-        let len_chars = rope.line(line).len_chars();
-        let offset = rope.try_line_to_char(line).ok()? + col.min(len_chars);
-        Some(offset)
-    })
+    // line beyond the document, or past-end line with non-zero column
+    if line > len_lines || (line == len_lines && col > 0) {
+        return Err(ropey::Error::CharIndexOutOfBounds(col, 0));
+    }
+    let line_start = rope.try_line_to_char(line)?;
+    let col_in_chars = match encoding {
+        PositionEncoding::Utf32 => col,
+        PositionEncoding::Utf8 => rope.line(line).try_byte_to_char(col)?,
+        PositionEncoding::Utf16 => rope.line(line).try_utf16_cu_to_char(col)?,
+    };
+    Ok(line_start + col_in_chars)
 }
 
 /// 回溯定位编码词边界的结果。
@@ -418,15 +505,24 @@ fn locate_filter_start(line_chars: &[char], start: usize) -> usize {
     filter_text_start
 }
 
-fn make_range(line: u32, start: usize, end: usize) -> Range {
+/// 将行内字符索引转换为 LSP `character` 列值（按协商后的编码）。
+fn char_to_lsp_col(rope: &Rope, line: usize, char_idx: usize, encoding: PositionEncoding) -> u32 {
+    match encoding {
+        PositionEncoding::Utf32 => char_idx as u32,
+        PositionEncoding::Utf8 => rope.line(line).char_to_byte(char_idx) as u32,
+        PositionEncoding::Utf16 => rope.line(line).char_to_utf16_cu(char_idx) as u32,
+    }
+}
+
+fn make_range(line: u32, start_col: u32, end_col: u32) -> Range {
     Range {
         start: Position {
             line,
-            character: start as u32,
+            character: start_col,
         },
         end: Position {
             line,
-            character: end as u32,
+            character: end_col,
         },
     }
 }
@@ -436,25 +532,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_position_to_offset() {
+    fn test_position_to_offset_utf32() {
         let rope = Rope::from("Hello\nWorld");
         assert_eq!(2, rope.len_lines());
-        assert_eq!(char_index(&rope, Position::new(0, 0)), Some(0));
-        assert_eq!(char_index(&rope, Position::new(0, 5)), Some(5));
-        assert_eq!(char_index(&rope, Position::new(0, 6)), Some(6)); // over
-        assert_eq!(char_index(&rope, Position::new(0, 8)), Some(6)); // over
-        assert_eq!(char_index(&rope, Position::new(1, 0)), Some(6));
-        assert_eq!(char_index(&rope, Position::new(1, 5)), Some(11));
-        assert_eq!(char_index(&rope, Position::new(2, 0)), Some(11));
-        assert_eq!(char_index(&rope, Position::new(2, 1)), None);
+        let enc = PositionEncoding::Utf32;
+        assert!(matches!(char_index(&rope, Position::new(0, 0), enc), Ok(0)));
+        assert!(matches!(char_index(&rope, Position::new(0, 5), enc), Ok(5)));
+        assert!(matches!(char_index(&rope, Position::new(0, 6), enc), Ok(6))); // '\n'
+        assert!(matches!(char_index(&rope, Position::new(1, 0), enc), Ok(6)));
+        assert!(matches!(
+            char_index(&rope, Position::new(1, 5), enc),
+            Ok(11)
+        ));
+        assert!(matches!(
+            char_index(&rope, Position::new(2, 0), enc),
+            Ok(11)
+        ));
+        assert!(matches!(
+            char_index(&rope, Position::new(2, 1), enc),
+            Err(_)
+        ));
         let rope = Rope::from("你好\na世界");
-        // let c_index = rope.line(0).char_to_byte(1);
-        // println!("c_index: {}", c_index);
-        assert_eq!(char_index(&rope, Position::new(0, 0)), Some(0));
-        assert_eq!(char_index(&rope, Position::new(0, 2)), Some(2));
-        assert_eq!(char_index(&rope, Position::new(1, 0)), Some(3));
-        assert_eq!(char_index(&rope, Position::new(1, 1)), Some(4));
-        assert_eq!(char_index(&rope, Position::new(1, 3)), Some(6));
+        assert!(matches!(char_index(&rope, Position::new(0, 0), enc), Ok(0)));
+        assert!(matches!(char_index(&rope, Position::new(0, 2), enc), Ok(2)));
+        assert!(matches!(char_index(&rope, Position::new(1, 0), enc), Ok(3)));
+        assert!(matches!(char_index(&rope, Position::new(1, 1), enc), Ok(4)));
+        assert!(matches!(char_index(&rope, Position::new(1, 3), enc), Ok(6)));
+    }
+
+    #[test]
+    fn test_position_to_offset_utf16() {
+        // "你好吗💘" 中 💘(U+1F498) 占 2 个 UTF-16 码元
+        let rope = Rope::from("你好吗💘");
+        let enc = PositionEncoding::Utf16;
+        // 4 个字符: 你(U+4F60)=1CU, 好(U+597D)=1CU, 吗(U+5417)=1CU, 💘(U+1F498)=2CU
+        // 行内 UTF-16 偏移: 0→'你', 1→'好', 2→'吗', 3→'💘'(高位), 4→'💘'(低位), 5→EOL
+        assert!(matches!(char_index(&rope, Position::new(0, 0), enc), Ok(0)));
+        assert!(matches!(char_index(&rope, Position::new(0, 1), enc), Ok(1)));
+        assert!(matches!(char_index(&rope, Position::new(0, 2), enc), Ok(2)));
+        // UTF-16 offset 3 和 4 都在 💘 内部，应映射到 char index 3
+        assert!(matches!(char_index(&rope, Position::new(0, 3), enc), Ok(3)));
+        assert!(matches!(char_index(&rope, Position::new(0, 4), enc), Ok(3)));
+        // UTF-16 offset 5 = 行尾，映射到 char index 4 (end of line)
+        assert!(matches!(char_index(&rope, Position::new(0, 5), enc), Ok(4)));
+    }
+
+    #[test]
+    fn test_position_to_offset_utf8() {
+        // "你好吗💘" 中 💘 占 4 个 UTF-8 字节
+        let rope = Rope::from("你好吗💘");
+        let enc = PositionEncoding::Utf8;
+        // 字节偏移: 你[0..3], 好[3..6], 吗[6..9], 💘[9..13]
+        assert!(matches!(char_index(&rope, Position::new(0, 0), enc), Ok(0)));
+        assert!(matches!(char_index(&rope, Position::new(0, 3), enc), Ok(1)));
+        assert!(matches!(char_index(&rope, Position::new(0, 6), enc), Ok(2)));
+        assert!(matches!(char_index(&rope, Position::new(0, 9), enc), Ok(3)));
+        // byte offset 10,11,12 在 💘 内部，映射到 char index 3
+        assert!(matches!(
+            char_index(&rope, Position::new(0, 10), enc),
+            Ok(3)
+        ));
+        // byte offset 13 = 行尾，映射到 char index 4
+        assert!(matches!(
+            char_index(&rope, Position::new(0, 13), enc),
+            Ok(4)
+        ));
     }
 
     #[test]
@@ -651,6 +793,7 @@ async fn main() {
         doc_map,
         state,
         config,
+        encoding: RwLock::new(PositionEncoding::Utf16), // 初始默认 UTF-16，initialize 时协商
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
