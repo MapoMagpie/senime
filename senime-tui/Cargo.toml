@@ -10,6 +10,9 @@ include = ["src/**/*", "README.md"]
 name = "senitui"
 path = "src/main.rs"
 
+[dev-dependencies]
+rand = "0.10.2"
+
 [dependencies]
 senime-lib = { path = "../senime-lib" }
 clap = { version = "4.5.35", features = ["derive"] }

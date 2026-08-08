@@ -225,66 +225,72 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
     Ok(content)
 }
 
-pub fn js_report(
-    settings: &JSSettings,
-    mea: &Measurement,
-    content: &JSContent,
-) -> Result<String, JsError> {
-    let ua = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
-    let referer = "https://www.52dazi.cn/";
-    let ct = "application/x-www-form-urlencoded";
-
-    // api: /Api/User/incrUserRecord
-    let incr_user_record = IncrUserRecord::new(settings, mea);
-    let body = serde_json::to_string(&incr_user_record)?;
-    let encrypted = encrypt(body);
-    ureq::post("https://www.jsxiaoshi.com/index.php/Api/User/incrUserRecord")
-        .header("User-Agent", ua)
+/// 请求上报 API 并返回 (返回信息, 异常信息)
+///
+/// 任何错误（HTTP 状态码异常如 404、网络错误、响应体读取失败、JSON 解析失败、
+/// API 返回非零错误码）都会被捕获到“异常信息”中返回，不会向上抛出。
+fn report_api(url: &str, body: String) -> (String, String) {
+    const UA: &'static str =
+        "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0";
+    const REFERER: &'static str = "https://www.52dazi.cn/";
+    const CT: &'static str = "application/x-www-form-urlencoded";
+    let resp = match ureq::post(url)
+        .header("User-Agent", UA)
         .header("Accept", "application/json, text/plain, */*")
-        .header("Content-Type", ct)
-        .header("Referer", referer)
-        .send(&encrypted)?;
-
-    let mut message = String::new();
-    if !content.is_local {
-        // api: /Api/Rank/uploadResult
-        let upload_result = UploadResult::new(settings, mea, content);
-        let body = serde_json::to_string(&upload_result)?;
-        let encrypted = encrypt(body);
-        let resp = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult")
-            .header("User-Agent", ua)
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Content-Type", ct)
-            .header("Referer", referer)
-            .send(&encrypted)?;
-        let body_str = resp.into_body().read_to_string()?;
-        let json: serde_json::Value = serde_json::from_str(&body_str)?;
-        message.push('\n');
-        if let Some(str) = json["msg"].as_str() {
-            message.push_str(str);
-        }
+        .header("Content-Type", CT)
+        .header("Referer", REFERER)
+        .send(body)
+    {
+        Ok(resp) => resp,
+        Err(e) => return (String::new(), format!("{e}")),
+    };
+    let body_str = match resp.into_body().read_to_string() {
+        Ok(s) => s,
+        Err(e) => return (String::new(), format!("{e}")),
+    };
+    let json: serde_json::Value = match serde_json::from_str(&body_str) {
+        Ok(json) => json,
+        Err(e) => return (body_str, format!("{e}")),
+    };
+    // API 返回非零错误码时，将错误信息记入“异常信息”
+    if json["error"].as_i64().is_some_and(|e| e != 0) {
+        let msg = json["msg"]
+            .as_str()
+            .unwrap_or("API 返回非零错误码")
+            .to_string();
+        return (String::new(), msg);
     }
+    let msg = json["msg"].as_str().unwrap_or_default().to_string();
+    (msg, String::new())
+}
+
+pub fn js_report(settings: &JSSettings, mea: &Measurement, content: &JSContent) -> String {
+    let mut lines = Vec::new();
+    {
+        let incr_user_record = IncrUserRecord::new(settings, mea);
+        let body = encrypt(serde_json::to_string(&incr_user_record).unwrap_or_default());
+        let api = "https://www.jsxiaoshi.com/index.php/Api/User/incrUserRecord";
+        let (ret, err) = report_api(api, body);
+        lines.push(format!("{:<14} : {ret}{err}", "incrUserRecord"));
+    }
+
+    if !content.is_local {
+        let upload_result = UploadResult::new(settings, mea, content);
+        let body = encrypt(serde_json::to_string(&upload_result).unwrap_or_default());
+        let api = "https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult";
+        let (ret, err) = report_api(api, body);
+        lines.push(format!("{:<14} : {ret}{err}", "uploadResult"));
+    };
 
     {
-        // api: /Api/Record/uploadRecord
         let upload_record = UploadRecord::new(settings, mea, content);
-        let body = serde_json::to_string(&upload_record)?;
-        let encrypted = encrypt(body);
-        let resp = ureq::post("https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord")
-            .header("User-Agent", ua)
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Content-Type", ct)
-            .header("Referer", referer)
-            .send(&encrypted)?;
-        let body_str = resp.into_body().read_to_string()?;
-        let json: serde_json::Value = serde_json::from_str(&body_str)?;
-        message.push('\n');
-        if let Some(str) = json["msg"].as_str() {
-            message.push_str(str);
-        }
+        let body = encrypt(serde_json::to_string(&upload_record).unwrap_or_default());
+        let api = "https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord";
+        let (ret, err) = report_api(api, body);
+        lines.push(format!("{:<14} : {ret}{err}", "uploadRecord"));
     }
 
-    Ok(message)
+    lines.join("\n")
 }
 
 // {"incrDailyRecord":300,"incrTotalKeystrokes":805,"incrTotalTime":162.89,"incrTotalWordNum":280,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
@@ -488,6 +494,7 @@ fn encrypt(body: String) -> String {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -590,38 +597,73 @@ mod tests {
         assert_eq!(json, expected);
     }
 
+    // fn gen_random(low: f32, hight: f32) -> f32 {
+    //     rand::random_range(low..=hight)
+    // }
+
     // #[test]
-    // fn test_js_get_content() {
-    //     let settings = js_get_settings(Some("../test/js-settings.toml".to_string())).unwrap();
-    //     let ret = js_get_content(&settings, JSAction::Daily);
-    //     match ret {
-    //         Ok(content) => {
-    //             println!("ime: {}, token: {}", settings.ime, settings.token);
-    //             println!("{}\n{}", content.title, content.content);
-    //         }
-    //         Err(err) => {
-    //             eprintln!("{err}");
-    //         }
-    //     }
+    // fn test_js_report() {
+    //     let text_wc = gen_random(9000., 10000.) as usize;
+    //     // 随机1-3 作为文章的后缀
+    //     let article_no = gen_random(1., 3.) as usize;
+    //     // 生成9000-11000 字符数量的文本
+    //     let content = gen_article_by_file(text_wc, &format!("article_{article_no}.txt"));
+    //     // 随机码长 2.9-3.2
+    //     let avg_len = gen_random(2.0, 2.8);
+    //     // 随机回退次数
+    //     let bs_times = (gen_random(3., 3.9) / 100. * text_wc as f32) as usize;
+    //     // 随机空格次数
+    //     let sp_times = (gen_random(4., 4.9) / 100. * text_wc as f32) as usize;
+    //     // 随机候选次数
+    //     let se_times = (gen_random(2., 2.9) / 100. * text_wc as f32) as usize;
+    //     // 根据码长和字符数量计算对应的键数，并且增加2。0%-2.9%的数量
+    //     let code_cc = (text_wc as f32 * avg_len) as usize + bs_times + sp_times;
+    //     // 随机每秒击键数 3.9 - 4.6
+    //     let kps = gen_random(4.2, 4.8);
+    //     // 根据键数和每秒击键数计算需要花费的秒数
+    //     let duration_secs = (code_cc as f32 / kps) as u64;
+    //     // 根据花费的秒数和字符数量计算每分钟的字符数
+    //     let wpm = (text_wc as f32 / duration_secs as f32) * 60.0;
+    //     // 随机打词率
+    //     let wg_freq = gen_random(66., 75.);
+    //     // 根据打词率计算打单次数
+    //     let si_times = ((wg_freq / 100.) * text_wc as f32) as usize;
+    //     // 根据回退次数和总键数计算键准
+    //     let accuracy = ((code_cc - bs_times) as f32 / code_cc as f32) * 100.0;
+
+    //     let settings = js_get_settings::<String>(None).unwrap().unwrap();
+    //     let mea = Measurement {
+    //         duration: Duration::from_secs(duration_secs),
+    //         pause_duration: Duration::from_secs(0),
+    //         text_wc,
+    //         code_cc,
+    //         preset_wc: None,
+    //         preset_avg_len: None,
+    //         kps,
+    //         wpm,
+    //         avg_len,
+    //         counted: 0,
+    //         bs_times,
+    //         sp_times,
+    //         se_times,
+    //         accuracy,
+    //         si_times,
+    //         wg_freq: wg_freq,
+    //         wrong_count: bs_times,
+    //         records: vec![],
+    //         diff_slab: vec![],
+    //     };
+    //     let content = JSContent {
+    //         title: "自由发文".to_string(),
+    //         content,
+    //         is_local: true,
+    //     };
+    //     // let incr_user_record = IncrUserRecord::new(&settings, &mea);
+    //     // let incr_user_record_body = serde_json::to_string(&incr_user_record).unwrap();
+    //     // println!("{incr_user_record_body}");
+    //     // let upload_record = UploadRecord::new(&settings, &mea, &content);
+    //     // let upload_record_body = serde_json::to_string(&upload_record).unwrap();
+    //     // println!("{upload_record_body}");
+    //     println!("{}", js_report(&settings, &mea, &content));
     // }
 }
-// 锦标赛
-// api:  /Api/Text/getContent
-// {"competitionType":2,"snumflag":"1","from":"web","timestamp":1784375069,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-// {
-// 	"error": 0,
-// 	"msg": {
-// 		"a_name": "锦标赛第3255期",
-// 		"a_content": "作为一个社恐患者，我总习惯独处，害怕拥挤的人群，害怕无意义的社交，就连去超市买东西，都要提前在心里想好要说的话，反复练习，生怕和别人产生过多的交集。周末的午后，我总喜欢窝在小小的出租屋里，泡一杯淡淡的绿茶，看一本喜欢的书，听着舒缓的轻音乐，享受属于自己的安静时光，这对我来说，是最放松、最自在的时刻。身边总有人说我孤僻，说我不合群，劝我多出去走走，多认识一些朋友，可只有我自己知道，独处从不是孤独，而是与自己对话的最好方式，是沉淀自己的最佳时机。独处时，我可以静下心来思考人生，梳理自己的情绪，不必迎合别人的喜好，不必伪装自己的模样，不必强迫自己融入不适合的圈子，做最真实的自己。我会在独处时学着做饭，从一开始的手忙脚乱，到后来能做出几样可口的家常菜，看着食材在锅里慢慢变成美味的菜肴，心里满是成就感；我会在独处时打理室内绿植，给绿萝浇水、修剪枝叶，看着绿萝抽出新的枝叶，慢慢爬满窗台，感受生命的力量和美好；我会在独处时写下自己的心情，把那些不敢说的话、藏在心底的情绪，都藏在文字里，让文字成为自己的情绪出口。慢慢的我发现，社恐并不可怕，不必强迫自己去迎合别人，不必勉强自己去做不喜欢的事情。真正的成熟，是学会接纳自己的不完美，学会享受独处的时光，在独处中沉淀自己，在安静中找到内心的力量。那些独处的时光，没有喧嚣，没有纷扰，只有自己和自己的对话，终会让我们成为更从容、更强大、更通透的自己，也会让我们更懂得珍惜那些真正值得的人和事。",
-// 		"a_url": ""
-// 	}
-// }
-//
-// api:  /Api/User/incrUserRecord
-// {"incrDailyRecord":689,"incrTotalKeystrokes":1823,"incrTotalTime":346.04,"incrTotalWordNum":617,"from":"web","timestamp":1784375418,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-//
-// api:  /Api/Rank/uploadResult
-// {"challengeFlag":0,"textTitle":"锦标赛第3255期","speed":106.98,"keystrokes":5.27,"maChang":2.95,"wordNum":617,"typingTime":"05:46.039","huiGai":72,"huiChe":0,"jianShu":1823,"jianZhun":"80.34%","repeatNum":0,"daCi":"71.15%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":1223,"keyMethod":"+100.00%","isFirstSubmit":1,"isGroupText":0,"accuracy":80.34,"from":"web","timestamp":1784375418,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-//
-// api:  /Api/Record/uploadRecord
-// {"content":"作为一个社恐患者","textTitle":"锦标赛第3255期","speed":106.98,"keystrokes":5.27,"maChang":2.95,"wordNum":617,"typingTime":"05:46.039","huiGai":72,"huiChe":0,"jianShu":1823,"jianZhun":"80.34%","repeatNum":0,"daCi":"71.15%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":1223,"keyMethod":"+100.00%","isSystemText":1,"from":"web","timestamp":1784375418,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
