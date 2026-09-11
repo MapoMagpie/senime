@@ -88,9 +88,10 @@ pub struct Args {
     /// 从极速中文网获取预设文本的方式
     /// random     随机文本
     /// daily      每日赛文
+    /// battle     极速战场
     /// dailyonce  每日锦标赛(每天限一次，有时间限制)
     /// 参数为空不会阻止`--js-settings`参数上传数据，可用`--js-action none`阻止上传数据
-    /// none       阻止`--js-settings`参数自动上传数据
+    /// none        阻止`--js-settings`参数自动上传数据
     #[arg(long, verbatim_doc_comment)]
     pub js_action: Option<String>,
 }
@@ -385,6 +386,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     title: "自由发文".to_string(),
                     content: gen_article(ctx.preset_len().max(ctx.sentence_len())),
                     is_local: true,
+                    battle_info: None,
                 }
             };
             eprintln!("{}", js_report(settings, ctx.measure(), content));

@@ -93,6 +93,7 @@ pub enum JSAction {
     Random,
     Daily,
     DailyOnce,
+    Battle,
     None,
 }
 
@@ -101,20 +102,28 @@ impl std::str::FromStr for JSAction {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "random" => Ok(JSAction::Random),
+            "battle" => Ok(JSAction::Battle),
             "daily" => Ok(JSAction::Daily),
             "dailyonce" => Ok(JSAction::DailyOnce),
             "none" => Ok(JSAction::None),
             _ => Err(format!(
-                "无效的 js-action: {s}，应为 random, daily, dailyonce, none"
+                "无效的 js-action: {s}，应为 random, battle, daily, dailyonce, none"
             )),
         }
     }
+}
+
+pub struct BattleInfo {
+    room_id: String,
+    room_token: String,
+    room_username: String,
 }
 
 pub struct JSContent {
     pub title: String,
     pub content: String,
     pub is_local: bool,
+    pub battle_info: Option<BattleInfo>,
 }
 
 /// 根据路径获取JSSettings
@@ -175,13 +184,52 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
             .to_string();
             ("/Api/Text/getRandomText", body)
         }
+        JSAction::Battle => {
+            let body = serde_json::json!({
+                "from": settings.from,
+                "timestamp": timestamp,
+                "version": settings.version,
+                "subversions": settings.subversions,
+                "token": settings.token,
+            })
+            .to_string();
+            ("/Api/Battle/battleMatch", body)
+        }
         JSAction::None => unreachable!(),
     };
 
+    let msg = js_request(endpoint, body)?;
+    let content = if action == JSAction::Battle {
+        let room_token = msg.as_str().unwrap_or_default();
+        if room_token.is_empty() {
+            return Err(JsError::Api("获取 Battle 房间 token 失败".to_string()));
+        }
+        js_get_battle_room_info(room_token, settings)?
+    } else {
+        JSContent {
+            title: msg["a_name"]
+                .as_str()
+                .or_else(|| msg["name"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+            content: msg["a_content"]
+                .as_str()
+                .or_else(|| msg["content"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+            is_local: false,
+            battle_info: None,
+        }
+    };
+
+    // 7. 返回 settings 和 content
+    Ok(content)
+}
+
+fn js_request(endpoint: &str, body: String) -> Result<serde_json::Value, JsError> {
     // 加密请求体
     let encrypted = encrypt(body);
 
-    // 以同步 POST 请求 API
     let url = format!("https://www.jsxiaoshi.com/index.php{endpoint}");
     let response = ureq::post(&url)
         .header(
@@ -205,24 +253,71 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
             return Err(JsError::Api("API 返回非零错误码".to_string()));
         }
     }
+    Ok(json["msg"].clone())
+}
 
-    let msg = &json["msg"];
-    let content = JSContent {
-        title: msg["a_name"]
+pub fn js_get_battle_room_info(
+    room_token: &str,
+    settings: &JSSettings,
+) -> Result<JSContent, JsError> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as usize;
+    let body = serde_json::json!({
+        "from": settings.from,
+        "roomToken": room_token,
+        "subversions": settings.subversions,
+        "timestamp": timestamp,
+        "token": settings.token,
+        "version": settings.version,
+    })
+    .to_string();
+    let msg = js_request("/Api/Battle/getBattleRoomInfo", body)?;
+    // let user_info_token = msg["userInfoToken"];
+    let room_info = msg
+        .get("roomInfo")
+        .ok_or(JsError::Api("msg缺失roomInfo字段".to_string()))?;
+    let room_id = room_info
+        .get("roomId")
+        .ok_or(JsError::Api("msg缺失roomInfo.roomId字段".to_string()))?;
+    let username = room_info
+        .get("roomUserName")
+        .ok_or(JsError::Api("msg缺失roomInfo.roomUserName字段".to_string()))?;
+    let battle_info = BattleInfo {
+        room_token: room_token.to_string(),
+        room_id: room_id.as_str().unwrap().to_string(),
+        room_username: username.as_str().unwrap().to_string(),
+    };
+    // sleep 5 秒
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as usize;
+    let body = serde_json::json!({
+        "from": settings.from,
+        "roomToken": room_token,
+        "subversions": settings.subversions,
+        "timestamp": timestamp,
+        "token": settings.token,
+        "version": settings.version,
+    })
+    .to_string();
+    let msg = js_request("/Api/Battle/getRoomTextByRoomToken", body)?;
+    Ok(JSContent {
+        title: msg["title"]
             .as_str()
-            .or_else(|| msg["name"].as_str())
-            .unwrap_or_default()
+            .ok_or(JsError::Api("msg缺失title字段".to_string()))?
             .to_string(),
-        content: msg["a_content"]
+        content: msg["content"]
             .as_str()
-            .or_else(|| msg["content"].as_str())
-            .unwrap_or_default()
+            .ok_or(JsError::Api("msg缺失content字段".to_string()))?
             .to_string(),
         is_local: false,
-    };
-
-    // 7. 返回 settings 和 content
-    Ok(content)
+        battle_info: Some(battle_info),
+    })
 }
 
 /// 请求上报 API 并返回 (返回信息, 异常信息)
@@ -274,8 +369,8 @@ pub fn js_report(settings: &JSSettings, mea: &Measurement, content: &JSContent) 
         lines.push(format!("{:<14} : {ret}{err}", "incrUserRecord"));
     }
 
+    let upload_result = UploadResult::new(settings, mea, content);
     if !content.is_local {
-        let upload_result = UploadResult::new(settings, mea, content);
         let body = encrypt(serde_json::to_string(&upload_result).unwrap_or_default());
         let api = "https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult";
         let (ret, err) = report_api(api, body);
@@ -290,6 +385,35 @@ pub fn js_report(settings: &JSSettings, mea: &Measurement, content: &JSContent) 
         lines.push(format!("{:<14} : {ret}{err}", "uploadRecord"));
     }
 
+    if let Some(battle_info) = content.battle_info.as_ref() {
+        let room_token = battle_info.room_token.clone();
+        let room_id = battle_info.room_id.clone();
+        let username = &battle_info.room_username;
+        lines.push(format!(
+            "room_token: {room_token}; room_id: {room_id}; username: {username}"
+        ));
+        let upload_battle_result = UploadBattleResult::new(room_token, upload_result);
+        // lines.push(serde_json::to_string(&upload_battle_result).unwrap_or_default());
+        let body = encrypt(serde_json::to_string(&upload_battle_result).unwrap_or_default());
+        let api = "https://www.jsxiaoshi.com/index.php/Api/Battle/uploadBattleResult";
+        let (ret, err) = report_api(api, body);
+        let msg: serde_json::Value = serde_json::from_str(&ret).unwrap_or_default();
+        lines.push(format!(
+            "{:<14} : {}{err}",
+            "battleResult",
+            msg["rankTips"].as_str().unwrap_or_default()
+        ));
+
+        if let Some(ranking) = msg["ranking"].as_u64() {
+            let measure = JSMeasurement::new(mea, &settings.ime);
+            let add_battle_message =
+                BattleMessage::new(settings, room_id, username, ranking as usize, &measure);
+            let body = encrypt(serde_json::to_string(&add_battle_message).unwrap_or_default());
+            let api = "https://www.jsxiaoshi.com/index.php/Api/Battle/addBattleMessage";
+            let (ret, err) = report_api(api, body);
+            lines.push(format!("{:<14} : {ret}{err}", "battleMessage"));
+        }
+    }
     lines.join("\n")
 }
 
@@ -412,6 +536,66 @@ impl UploadRecord {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadBattleResult {
+    room_token: String,
+    #[serde(flatten)]
+    upload_result: UploadResult,
+}
+
+impl UploadBattleResult {
+    fn new(room_token: String, upload_result: UploadResult) -> Self {
+        Self {
+            room_token,
+            upload_result,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BattleMessage {
+    from: String,
+    message: String,
+    message_user_id: usize,
+    message_username: String,
+    room_id: String,
+    subversions: usize,
+    timestamp: usize,
+    token: String,
+    version: String,
+}
+
+impl BattleMessage {
+    fn new(
+        settings: &JSSettings,
+        room_id: String,
+        username: &str,
+        ranking: usize,
+        measure: &JSMeasurement,
+    ) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as usize;
+        let message = format!(
+            "{}sanakan比赛结束，排行第{}名，速度{:.2} 击键：{:.2} 码长：{:.2}",
+            username, ranking, measure.speed, measure.keystrokes, measure.ma_chang
+        );
+        Self {
+            from: settings.from.clone(),
+            message: message,
+            message_user_id: 3,
+            message_username: "系统消息".to_string(),
+            room_id: room_id,
+            subversions: settings.subversions,
+            timestamp,
+            token: settings.token.clone(),
+            version: settings.version.clone(),
+        }
+    }
+}
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JSMeasurement {
