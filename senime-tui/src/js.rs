@@ -289,9 +289,8 @@ pub fn js_get_battle_room_info(
         room_id: room_id.as_str().unwrap().to_string(),
         room_username: username.as_str().unwrap().to_string(),
     };
-    // sleep 5 秒
+    // 等待战场在服务端就绪（网页端有约 5 秒缓冲，这里压缩为 1 秒）
     std::thread::sleep(std::time::Duration::from_secs(1));
-
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -322,13 +321,15 @@ pub fn js_get_battle_room_info(
 
 /// 请求上报 API 并返回 (返回信息, 异常信息)
 ///
+/// “返回信息”是响应体里的 `msg` 字段本身：可能是字符串（如 uploadResult），
+/// 也可能是对象（如 uploadBattleResult 的 `{ranking, rankTips}`）。
+///
 /// 任何错误（HTTP 状态码异常如 404、网络错误、响应体读取失败、JSON 解析失败、
 /// API 返回非零错误码）都会被捕获到“异常信息”中返回，不会向上抛出。
-fn report_api(url: &str, body: String) -> (String, String) {
-    const UA: &'static str =
-        "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0";
-    const REFERER: &'static str = "https://www.52dazi.cn/";
-    const CT: &'static str = "application/x-www-form-urlencoded";
+fn report_api(url: &str, body: String) -> (serde_json::Value, String) {
+    const UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0";
+    const REFERER: &str = "https://www.52dazi.cn/";
+    const CT: &str = "application/x-www-form-urlencoded";
     let resp = match ureq::post(url)
         .header("User-Agent", UA)
         .header("Accept", "application/json, text/plain, */*")
@@ -337,54 +338,44 @@ fn report_api(url: &str, body: String) -> (String, String) {
         .send(body)
     {
         Ok(resp) => resp,
-        Err(e) => return (String::new(), format!("{e}")),
+        Err(e) => return (serde_json::Value::Null, format!("{e}")),
     };
     let body_str = match resp.into_body().read_to_string() {
         Ok(s) => s,
-        Err(e) => return (String::new(), format!("{e}")),
+        Err(e) => return (serde_json::Value::Null, format!("{e}")),
     };
     let json: serde_json::Value = match serde_json::from_str(&body_str) {
         Ok(json) => json,
-        Err(e) => return (body_str, format!("{e}")),
+        Err(e) => return (serde_json::Value::String(body_str), format!("{e}")),
     };
     // API 返回非零错误码时，将错误信息记入“异常信息”
     if json["error"].as_i64().is_some_and(|e| e != 0) {
-        let msg = json["msg"]
-            .as_str()
-            .unwrap_or("API 返回非零错误码")
-            .to_string();
-        return (String::new(), msg);
+        let msg = display_msg(&json["msg"]);
+        let msg = if msg.is_empty() {
+            "API 返回非零错误码".to_string()
+        } else {
+            msg
+        };
+        return (serde_json::Value::Null, msg);
     }
-    let msg = json["msg"].as_str().unwrap_or_default().to_string();
-    (msg, String::new())
+    (json["msg"].clone(), String::new())
+}
+
+/// `msg` 字段可能是字符串或对象，统一转成可展示的文本
+fn display_msg(msg: &serde_json::Value) -> String {
+    match msg {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
 }
 
 pub fn js_report(settings: &JSSettings, mea: &Measurement, content: &JSContent) -> String {
     let mut lines = Vec::new();
-    {
-        let incr_user_record = IncrUserRecord::new(settings, mea);
-        let body = encrypt(serde_json::to_string(&incr_user_record).unwrap_or_default());
-        let api = "https://www.jsxiaoshi.com/index.php/Api/User/incrUserRecord";
-        let (ret, err) = report_api(api, body);
-        lines.push(format!("{:<14} : {ret}{err}", "incrUserRecord"));
-    }
 
+    // 战场模式：网页端打字结束后会立即上传战场结果，成功后再用返回的 ranking
+    // 调用 addBattleMessage；因此战场上报放最前，其余上报保持原有顺序。
     let upload_result = UploadResult::new(settings, mea, content);
-    if !content.is_local {
-        let body = encrypt(serde_json::to_string(&upload_result).unwrap_or_default());
-        let api = "https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult";
-        let (ret, err) = report_api(api, body);
-        lines.push(format!("{:<14} : {ret}{err}", "uploadResult"));
-    };
-
-    {
-        let upload_record = UploadRecord::new(settings, mea, content);
-        let body = encrypt(serde_json::to_string(&upload_record).unwrap_or_default());
-        let api = "https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord";
-        let (ret, err) = report_api(api, body);
-        lines.push(format!("{:<14} : {ret}{err}", "uploadRecord"));
-    }
-
     if let Some(battle_info) = content.battle_info.as_ref() {
         let room_token = battle_info.room_token.clone();
         let room_id = battle_info.room_id.clone();
@@ -392,28 +383,68 @@ pub fn js_report(settings: &JSSettings, mea: &Measurement, content: &JSContent) 
         lines.push(format!(
             "room_token: {room_token}; room_id: {room_id}; username: {username}"
         ));
-        let upload_battle_result = UploadBattleResult::new(room_token, upload_result);
+        let upload_battle_result = UploadBattleResult::new(room_token, upload_result.clone());
         // lines.push(serde_json::to_string(&upload_battle_result).unwrap_or_default());
         let body = encrypt(serde_json::to_string(&upload_battle_result).unwrap_or_default());
         let api = "https://www.jsxiaoshi.com/index.php/Api/Battle/uploadBattleResult";
+        // 注意：uploadBattleResult 的 msg 是对象 {ranking, rankTips}，不是字符串
         let (ret, err) = report_api(api, body);
-        let msg: serde_json::Value = serde_json::from_str(&ret).unwrap_or_default();
         lines.push(format!(
             "{:<14} : {}{err}",
             "battleResult",
-            msg["rankTips"].as_str().unwrap_or_default()
+            ret["rankTips"].as_str().unwrap_or_default()
         ));
 
-        if let Some(ranking) = msg["ranking"].as_u64() {
+        if let Some(ranking) = ret["ranking"].as_u64() {
             let measure = JSMeasurement::new(mea, &settings.ime);
             let add_battle_message =
                 BattleMessage::new(settings, room_id, username, ranking as usize, &measure);
             let body = encrypt(serde_json::to_string(&add_battle_message).unwrap_or_default());
             let api = "https://www.jsxiaoshi.com/index.php/Api/Battle/addBattleMessage";
             let (ret, err) = report_api(api, body);
-            lines.push(format!("{:<14} : {ret}{err}", "battleMessage"));
+            lines.push(format!(
+                "{:<14} : {}{err}",
+                "battleMessage",
+                display_msg(&ret)
+            ));
         }
     }
+
+    {
+        let incr_user_record = IncrUserRecord::new(settings, mea);
+        let body = encrypt(serde_json::to_string(&incr_user_record).unwrap_or_default());
+        let api = "https://www.jsxiaoshi.com/index.php/Api/User/incrUserRecord";
+        let (ret, err) = report_api(api, body);
+        lines.push(format!(
+            "{:<14} : {}{err}",
+            "incrUserRecord",
+            display_msg(&ret)
+        ));
+    }
+
+    if !content.is_local {
+        let body = encrypt(serde_json::to_string(&upload_result).unwrap_or_default());
+        let api = "https://www.jsxiaoshi.com/index.php/Api/Rank/uploadResult";
+        let (ret, err) = report_api(api, body);
+        lines.push(format!(
+            "{:<14} : {}{err}",
+            "uploadResult",
+            display_msg(&ret)
+        ));
+    };
+
+    {
+        let upload_record = UploadRecord::new(settings, mea, content);
+        let body = encrypt(serde_json::to_string(&upload_record).unwrap_or_default());
+        let api = "https://www.jsxiaoshi.com/index.php/Api/Record/uploadRecord";
+        let (ret, err) = report_api(api, body);
+        lines.push(format!(
+            "{:<14} : {}{err}",
+            "uploadRecord",
+            display_msg(&ret)
+        ));
+    }
+
     lines.join("\n")
 }
 
@@ -454,7 +485,7 @@ impl IncrUserRecord {
 }
 
 // {"challengeFlag":0,"textTitle":"晚安","speed":103.14,"keystrokes":4.94,"maChang":2.88,"wordNum":280,"typingTime":"02:42.890","huiGai":20,"huiChe":0,"jianShu":805,"jianZhun":"85.39%","repeatNum":0,"daCi":"47.86%","wrongNum":0,"inputMethod":"虎码","backspace":0,"xuanChong":538,"keyMethod":"+100.00%","isFirstSubmit":1,"isGroupText":0,"accuracy":85.39,"from":"web","timestamp":1784354377,"version":"v2.1.6","subversions":17108,"token":"7d670b541f0b8"}
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadResult {
     challenge_flag: usize,
@@ -585,10 +616,10 @@ impl BattleMessage {
         );
         Self {
             from: settings.from.clone(),
-            message: message,
+            message,
             message_user_id: 3,
             message_username: "系统消息".to_string(),
-            room_id: room_id,
+            room_id,
             subversions: settings.subversions,
             timestamp,
             token: settings.token.clone(),
@@ -596,7 +627,7 @@ impl BattleMessage {
         }
     }
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JSMeasurement {
     #[serde(serialize_with = "serialize_f32_2")]
@@ -687,6 +718,19 @@ mod tests {
         let expected = "0hv2w3UU00zcNMoK7Ic7oMTP9yGUa1M0Ng7JcNzRli0vJv9BOa8WoM7qMYZhXVs1QsP+zpK/qO5zsQWUulXhrJ6F5AOQcbT/8zcEXRduunS2/PgY6vOFjT/Z7GRJEtrvwLRo8kV6ij8l8U5Uda+0x8/XI2kBUCWyo1oqxPJVGJRVLMVSopKJt5Q/gIxXK65a";
         let result = encrypt(body);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_battle_result_msg_parsing() {
+        // uploadBattleResult 的响应：msg 是对象 {ranking, rankTips}，而非字符串
+        let resp = r#"{"error":0,"msg":{"ranking":3,"rankTips":"排行第3名"}}"#;
+        let json: serde_json::Value = serde_json::from_str(resp).unwrap();
+        let msg = json["msg"].clone();
+        assert_eq!(msg["ranking"].as_u64(), Some(3));
+        assert_eq!(msg["rankTips"].as_str(), Some("排行第3名"));
+        // 对象 msg 按 JSON 展示（serde_json 默认按键名排序），字符串 msg 原样展示
+        assert_eq!(display_msg(&msg), r#"{"rankTips":"排行第3名","ranking":3}"#);
+        assert_eq!(display_msg(&serde_json::json!("上传成功")), "上传成功");
     }
 
     #[test]
