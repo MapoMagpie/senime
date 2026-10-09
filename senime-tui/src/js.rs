@@ -896,7 +896,8 @@ mod tests {
         // 随机打词率
         let wg_freq = gen_random(66., 75.);
         // 根据打词率计算打单次数
-        let si_times = ((wg_freq / 100.) * text_wc as f32) as usize;
+        let mi_times = ((wg_freq / 100.) * text_wc as f32) as usize;
+        let si_times = text_wc - mi_times;
         // 根据回退次数和总键数计算键准
         let accuracy = ((code_cc - bs_times) as f32 / code_cc as f32) * 100.0;
 
@@ -917,6 +918,7 @@ mod tests {
             se_times,
             accuracy,
             si_times,
+            mi_times,
             wg_freq: wg_freq,
             wrong_count: bs_times,
             records: vec![],

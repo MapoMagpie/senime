@@ -43,6 +43,8 @@ pub struct Measurement {
     pub accuracy: f32,
     // 打单次数
     pub si_times: usize,
+    // 打词次数
+    pub mi_times: usize,
     // 打词率，根据`text_wc`与`si_times`计算
     pub wg_freq: f32,
     // 错字数量
@@ -69,6 +71,7 @@ impl Measurement {
             se_times: 0,
             accuracy: 100.0,
             si_times: 0,
+            mi_times: 0,
             wg_freq: 0.0,
             wrong_count: 0,
             records: Default::default(),
@@ -137,6 +140,8 @@ impl Measurement {
             }
             if rec.len == 1 {
                 self.si_times += 1;
+            } else if rec.len > 1 {
+                self.mi_times += rec.len as usize;
             }
             end = rec.end;
         }
@@ -148,10 +153,10 @@ impl Measurement {
             (self.code_cc - self.bs_times) as f32 / self.code_cc as f32 * 100.0
         };
 
-        self.wg_freq = if self.text_wc == 0 {
+        self.wg_freq = if self.si_times + self.mi_times == 0 {
             0.0
         } else {
-            (self.text_wc - self.si_times) as f32 / self.text_wc as f32 * 100.0
+            self.mi_times as f32 / (self.si_times + self.mi_times) as f32 * 100.0
         };
 
         self.wrong_count = self
