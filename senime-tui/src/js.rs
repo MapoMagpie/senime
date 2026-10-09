@@ -92,8 +92,12 @@ impl Default for JSSettings {
 pub enum JSAction {
     Random,
     Daily,
+    DailyDanzi,
     DailyOnce,
     Battle,
+    Common5001,
+    Common5002,
+    Common5003,
     None,
 }
 
@@ -104,7 +108,11 @@ impl std::str::FromStr for JSAction {
             "random" => Ok(JSAction::Random),
             "battle" => Ok(JSAction::Battle),
             "daily" => Ok(JSAction::Daily),
-            "dailyonce" => Ok(JSAction::DailyOnce),
+            "daily-danzi" => Ok(JSAction::DailyDanzi),
+            "daily-once" => Ok(JSAction::DailyOnce),
+            "common-500-1" => Ok(JSAction::Common5001),
+            "common-500-2" => Ok(JSAction::Common5002),
+            "common-500-3" => Ok(JSAction::Common5003),
             "none" => Ok(JSAction::None),
             _ => Err(format!(
                 "无效的 js-action: {s}，应为 random, battle, daily, dailyonce, none"
@@ -159,8 +167,13 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
 
     // 根据`action`选择 API 端点
     let (endpoint, body) = match action {
-        JSAction::Daily | JSAction::DailyOnce => {
-            let competition_type = if JSAction::DailyOnce == action { 2 } else { 0 };
+        JSAction::Daily | JSAction::DailyDanzi | JSAction::DailyOnce => {
+            let competition_type = match action {
+                JSAction::Daily => 1,
+                JSAction::DailyDanzi => 4,
+                JSAction::DailyOnce => 2,
+                _ => unreachable!(),
+            };
             let body = serde_json::json!({
                 "competitionType": competition_type,
                 "snumflag": "1",
@@ -194,6 +207,30 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
             })
             .to_string();
             ("/Api/Battle/battleMatch", body)
+        }
+        JSAction::Common5001 => {
+            return Ok(JSContent {
+                title: "常用单字前五百".to_string(),
+                content: include_str!("../assets/common-500-1.txt").to_string(),
+                is_local: true,
+                battle_info: None,
+            });
+        }
+        JSAction::Common5002 => {
+            return Ok(JSContent {
+                title: "常用单字中五百".to_string(),
+                content: include_str!("../assets/common-500-2.txt").to_string(),
+                is_local: true,
+                battle_info: None,
+            });
+        }
+        JSAction::Common5003 => {
+            return Ok(JSContent {
+                title: "常用单字后五百".to_string(),
+                content: include_str!("../assets/common-500-3.txt").to_string(),
+                is_local: true,
+                battle_info: None,
+            });
         }
         JSAction::None => unreachable!(),
     };
@@ -710,6 +747,10 @@ fn encrypt(body: String) -> String {
 #[cfg(test)]
 mod tests {
 
+    use std::time::Duration;
+
+    use crate::utils::gen_article_by_file;
+
     use super::*;
 
     #[test]
@@ -825,73 +866,76 @@ mod tests {
         assert_eq!(json, expected);
     }
 
-    // fn gen_random(low: f32, hight: f32) -> f32 {
-    //     rand::random_range(low..=hight)
-    // }
+    fn gen_random(low: f32, hight: f32) -> f32 {
+        rand::random_range(low..=hight)
+    }
 
-    // #[test]
-    // fn test_js_report() {
-    //     let text_wc = gen_random(9000., 10000.) as usize;
-    //     // 随机1-3 作为文章的后缀
-    //     let article_no = gen_random(1., 3.) as usize;
-    //     // 生成9000-11000 字符数量的文本
-    //     let content = gen_article_by_file(text_wc, &format!("article_{article_no}.txt"));
-    //     // 随机码长 2.9-3.2
-    //     let avg_len = gen_random(2.0, 2.8);
-    //     // 随机回退次数
-    //     let bs_times = (gen_random(3., 3.9) / 100. * text_wc as f32) as usize;
-    //     // 随机空格次数
-    //     let sp_times = (gen_random(4., 4.9) / 100. * text_wc as f32) as usize;
-    //     // 随机候选次数
-    //     let se_times = (gen_random(2., 2.9) / 100. * text_wc as f32) as usize;
-    //     // 根据码长和字符数量计算对应的键数，并且增加2。0%-2.9%的数量
-    //     let code_cc = (text_wc as f32 * avg_len) as usize + bs_times + sp_times;
-    //     // 随机每秒击键数 3.9 - 4.6
-    //     let kps = gen_random(4.2, 4.8);
-    //     // 根据键数和每秒击键数计算需要花费的秒数
-    //     let duration_secs = (code_cc as f32 / kps) as u64;
-    //     // 根据花费的秒数和字符数量计算每分钟的字符数
-    //     let wpm = (text_wc as f32 / duration_secs as f32) * 60.0;
-    //     // 随机打词率
-    //     let wg_freq = gen_random(66., 75.);
-    //     // 根据打词率计算打单次数
-    //     let si_times = ((wg_freq / 100.) * text_wc as f32) as usize;
-    //     // 根据回退次数和总键数计算键准
-    //     let accuracy = ((code_cc - bs_times) as f32 / code_cc as f32) * 100.0;
+    #[test]
+    fn test_js_report() {
+        let text_wc = gen_random(9000., 10000.) as usize;
+        // 随机1-3 作为文章的后缀
+        let article_no = gen_random(1., 3.) as usize;
+        // 生成9000-11000 字符数量的文本
+        let content = gen_article_by_file(text_wc, &format!("article_{article_no}.txt"));
+        // 随机码长 2.9-3.2
+        let avg_len = gen_random(2.0, 2.8);
+        // 随机回退次数
+        let bs_times = (gen_random(3., 3.9) / 100. * text_wc as f32) as usize;
+        // 随机空格次数
+        let sp_times = (gen_random(4., 4.9) / 100. * text_wc as f32) as usize;
+        // 随机候选次数
+        let se_times = (gen_random(2., 2.9) / 100. * text_wc as f32) as usize;
+        // 根据码长和字符数量计算对应的键数，并且增加2。0%-2.9%的数量
+        let code_cc = (text_wc as f32 * avg_len) as usize + bs_times + sp_times;
+        // 随机每秒击键数 3.9 - 4.6
+        let kps = gen_random(4.2, 4.8);
+        // 根据键数和每秒击键数计算需要花费的秒数
+        let duration_secs = (code_cc as f32 / kps) as u64;
+        // 根据花费的秒数和字符数量计算每分钟的字符数
+        let wpm = (text_wc as f32 / duration_secs as f32) * 60.0;
+        // 随机打词率
+        let wg_freq = gen_random(66., 75.);
+        // 根据打词率计算打单次数
+        let si_times = ((wg_freq / 100.) * text_wc as f32) as usize;
+        // 根据回退次数和总键数计算键准
+        let accuracy = ((code_cc - bs_times) as f32 / code_cc as f32) * 100.0;
 
-    //     let settings = js_get_settings::<String>(None).unwrap().unwrap();
-    //     let mea = Measurement {
-    //         duration: Duration::from_secs(duration_secs),
-    //         pause_duration: Duration::from_secs(0),
-    //         text_wc,
-    //         code_cc,
-    //         preset_wc: None,
-    //         preset_avg_len: None,
-    //         kps,
-    //         wpm,
-    //         avg_len,
-    //         counted: 0,
-    //         bs_times,
-    //         sp_times,
-    //         se_times,
-    //         accuracy,
-    //         si_times,
-    //         wg_freq: wg_freq,
-    //         wrong_count: bs_times,
-    //         records: vec![],
-    //         diff_slab: vec![],
-    //     };
-    //     let content = JSContent {
-    //         title: "自由发文".to_string(),
-    //         content,
-    //         is_local: true,
-    //     };
-    //     // let incr_user_record = IncrUserRecord::new(&settings, &mea);
-    //     // let incr_user_record_body = serde_json::to_string(&incr_user_record).unwrap();
-    //     // println!("{incr_user_record_body}");
-    //     // let upload_record = UploadRecord::new(&settings, &mea, &content);
-    //     // let upload_record_body = serde_json::to_string(&upload_record).unwrap();
-    //     // println!("{upload_record_body}");
-    //     println!("{}", js_report(&settings, &mea, &content));
-    // }
+        let settings = js_get_settings::<String>(None).unwrap().unwrap();
+        let mea = Measurement {
+            duration: Duration::from_secs(duration_secs),
+            pause_duration: Duration::from_secs(0),
+            text_wc,
+            code_cc,
+            preset_wc: None,
+            preset_avg_len: None,
+            kps,
+            wpm,
+            avg_len,
+            counted: 0,
+            bs_times,
+            sp_times,
+            se_times,
+            accuracy,
+            si_times,
+            wg_freq: wg_freq,
+            wrong_count: bs_times,
+            records: vec![],
+            diff_slab: vec![],
+        };
+        let content = JSContent {
+            title: "自由发文".to_string(),
+            content,
+            is_local: true,
+            battle_info: None,
+        };
+        // let incr_user_record = IncrUserRecord::new(&settings, &mea);
+        // let incr_user_record_body = serde_json::to_string(&incr_user_record).unwrap();
+        // println!("{incr_user_record_body}");
+        // let upload_record = UploadRecord::new(&settings, &mea, &content);
+        // let upload_record_body = serde_json::to_string(&upload_record).unwrap();
+        // println!("{upload_record_body}");
+        if true {
+            println!("{}", js_report(&settings, &mea, &content));
+        }
+    }
 }
