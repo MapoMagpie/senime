@@ -169,7 +169,7 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
     let (endpoint, body) = match action {
         JSAction::Daily | JSAction::DailyDanzi | JSAction::DailyOnce => {
             let competition_type = match action {
-                JSAction::Daily => 1,
+                JSAction::Daily => 0,
                 JSAction::DailyDanzi => 4,
                 JSAction::DailyOnce => 2,
                 _ => unreachable!(),
