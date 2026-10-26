@@ -212,7 +212,7 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
             return Ok(JSContent {
                 title: "常用单字前五百".to_string(),
                 content: include_str!("../assets/common-500-1.txt").to_string(),
-                is_local: true,
+                is_local: false,
                 battle_info: None,
             });
         }
@@ -220,7 +220,7 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
             return Ok(JSContent {
                 title: "常用单字中五百".to_string(),
                 content: include_str!("../assets/common-500-2.txt").to_string(),
-                is_local: true,
+                is_local: false,
                 battle_info: None,
             });
         }
@@ -228,7 +228,7 @@ pub fn js_get_content(settings: &JSSettings, action: JSAction) -> Result<JSConte
             return Ok(JSContent {
                 title: "常用单字后五百".to_string(),
                 content: include_str!("../assets/common-500-3.txt").to_string(),
-                is_local: true,
+                is_local: false,
                 battle_info: None,
             });
         }
